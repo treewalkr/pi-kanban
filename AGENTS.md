@@ -16,7 +16,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 - **Elysia built-in `t`** for validation; consult the `/elysiajs` skill when unsure
 - SQL lives in `src/db.ts` only; the API and CLI are thin layers over its query functions
 - Ports: API `4600`, web dev `5174`; server binds `127.0.0.1` only — never expose off localhost
-- After plan approval, attach the plan to its card before implementing: write it to a file, run `kanban attach <id> <plan-file>`; re-attaching a revised plan versions it
+- After plan approval, attach the plan to its card before implementing: write it to a file, run `kanban attach <id> <plan-file>`; re-attaching a revised plan versions it. The human records the verdict with `kanban approve <id>` (arms the plan-build agent) or `kanban reject <id> --message <feedback>` (planner re-plans) — agents never run the gate themselves
 
 ## Commits
 

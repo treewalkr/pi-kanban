@@ -42,6 +42,20 @@ For every non-trivial unit of work:
 - **If work is abandoned or superseded**: delete the card (`rm`). Never leave
   stale cards behind — the board must reflect reality.
 
+## Auto-plan loop
+
+With `kanban serve --auto-review`, a pi planner also watches the Plan lane: every card there
+gets a planning session that explores the repo and attaches a versioned plan, then comments
+to disarm. **The human owns the gate** — never run `kanban approve`/`reject` as an agent.
+
+- **Planning**: don't hand-write plans for Plan-lane cards in auto mode — the planner does it.
+  To re-plan, `kanban reject <id> --message <what to change>` (or any human comment re-arms it);
+  the next version lands as plan v2, v1 stays on the card.
+- **Approving** (`kanban approve <id>`, or ✓ in the web card): approval comment + move to
+  Implement; a `pi-builder` session builds the attached plan, runs tests, and hands off to
+  Review, where the reviewer loop takes over.
+- **Each planner cycle needs a human action** — no rejections, no planner runs.
+
 ## Auto-review loop
 
 When the board runs with `kanban serve --auto-review`, a separate pi reviewer
@@ -73,6 +87,8 @@ kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff>
 kanban comments <id>                                                  # read the thread, oldest first
 kanban handoff <id> <lane> --message <text> [--author <name>]         # atomic move + thread record (the baton pass)
 kanban review <id> (--approve | --block --message <text> [--finding <text>]…)  # approve → Done; block → Implement + findings
+kanban approve <id>                       # plan gate: approve the attached plan → Implement (arms plan-build)
+kanban reject <id> --message <feedback>   # plan gate: reject with feedback → planner re-plans
 kanban brief <id>                                                     # full pickup context: note, latest plan, thread
 kanban mv <id> <lane> [--pos <1-based>]                               # move / reorder
 kanban mv <id> --next | --prev                                        # advance / pull back one lane
@@ -81,7 +97,7 @@ kanban done <id>                                                      # shortcut
 kanban archive <id>                                                   # shortcut → Archive (undo: mv <id> <lane>)
 kanban rm <id> [--force]                                              # delete card (a parent needs --force; cascades)
 kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force]  # manage lanes
-kanban serve [--port <n>] [--open] [--auto-review]                # start web UI (default 127.0.0.1:4600); --auto-review: pi auto-reviews Review-lane cards
+kanban serve [--port <n>] [--open] [--auto-review]            # start web UI (default 127.0.0.1:4600); --auto-review: pi plans Plan-lane cards and reviews Review-lane cards
 kanban help | version                                                 # CLI help / version
 ```
 

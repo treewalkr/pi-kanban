@@ -58,21 +58,25 @@ The skill in `skills/kanban/SKILL.md` (installed to `~/.pi/agent/skills/kanban/`
 through lanes, never leave stale cards. The CLI writes the DB directly; the server watches the
 database and pushes changes to the web UI over SSE, so the board updates live.
 
-### Auto-review agents
+### Auto agents (plan + review)
 
-`kanban serve --auto-review` turns the Review lane into an automatic loop: a headless `pi`
-reviewer (`pi-reviewer`) reviews every card that lands there — approve → Done, block → findings
-land as a `- [ ]` checklist and a `pi-builder` session works them and hands the card back
-(stops after 3 block cycles and leaves a comment for you). Every step is a thread comment, and
-each spawn is logged in the serve terminal under `[autoreview]`.
+`kanban serve --auto-review` runs three headless `pi` agents over the board. **Auto-plan**: a
+`pi-planner` picks up every card in the Plan lane, explores the repo, and attaches a versioned
+implementation plan; the human owns the gate — `kanban approve <id>` (or ✓ in the web card) arms
+a `pi-builder` session that builds the plan, `kanban reject <id> --message <feedback>` (or ✗)
+sends the feedback back to the planner for plan v2. **Auto-review**: a `pi-reviewer` reviews
+every card that lands in Review — approve → Done, block → findings land as a `- [ ]` checklist
+and a `pi-builder` session works them and hands the card back (stops after 3 block cycles and
+leaves a comment for you). Every step is a thread comment, and each spawn is logged in the serve
+terminal under `[autoreview]`.
 
-Configure both agents in the web UI (⚙ in the topbar) — settings apply to the next session
+Configure all three agents in the web UI (⚙ in the topbar) — settings apply to the next session
 without restarting serve:
 
 | field | becomes | notes |
 | --- | --- | --- |
 | provider / model | `--provider` / `--model` | selects fed by pi's catalog (`pi --list-models`); empty = pi's default |
-| thinking | `--thinking` | reviewer defaults to `max`, builder to pi's default |
+| thinking | `--thinking` | reviewer and planner default to `max`, builder to pi's default |
 | skills | `--skill` per line | e.g. `~/.pi/agent/skills/scrutinize` |
 | context | `--append-system-prompt` | standing instructions, your review lens |
 | tools | `--tools` | pi allow/deny syntax |
