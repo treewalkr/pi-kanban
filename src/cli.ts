@@ -19,6 +19,8 @@ usage:
   kanban comments <id>
   kanban handoff <id> <lane> --message <text> [--author <name>]   (atomic move + thread record)
   kanban review <id> (--approve | --block --message <text> [--finding <text>]…)
+  kanban approve <id>                       (plan gate: approve the attached plan → Implement)
+  kanban reject <id> --message <feedback>   (plan gate: reject with feedback; planner re-plans)
   kanban brief <id>                         (pickup context: note, plan, thread)
   kanban mv <id> <lane> [--pos <1-based>]     kanban mv <id> --next | --prev
   kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>]
@@ -268,6 +270,27 @@ async function main(): Promise<number> {
           : db.handoff(idRef, laneById(db, "implement"), { message: message!, author: str(flags, "author"), kind: "review", findings });
         if (json) jsonOut(result);
         else console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+        return 0;
+      }
+
+      case "approve": {
+        const idRef = positional[0];
+        if (!idRef) throw new KanbanError("usage: kanban approve <id> [--message <text>]", "invalid");
+        const result = db.approveTask(idRef, { author: str(flags, "author"), message: str(flags, "message") });
+        if (json) jsonOut(result);
+        else console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+        return 0;
+      }
+
+      case "reject": {
+        const [idRef, ...feedback] = positional;
+        const message = str(flags, "message") ?? feedback.join(" ");
+        if (!idRef || !message) {
+          throw new KanbanError("usage: kanban reject <id> --message <feedback>", "invalid");
+        }
+        const comment = db.rejectTask(idRef, message, { author: str(flags, "author") });
+        if (json) jsonOut(comment);
+        else console.log(commentLine(comment));
         return 0;
       }
 
