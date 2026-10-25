@@ -5,10 +5,13 @@ import { join } from "node:path";
 import { KanbanDb } from "../src/db";
 import {
   BUILDER_AUTHOR,
+  PLANNER_AUTHOR,
   REVIEWER_AUTHOR,
   activitySnapshot,
   agentFlags,
+  builderPlanPrompt,
   formatPiEvent,
+  plannerPrompt,
   reviewerPrompt,
   startAutoReview,
   type AgentJob,
@@ -426,5 +429,104 @@ describe("auto-review", () => {
     expect(activitySnapshot().length).toBe(1);
     handle.stop();
     expect(activitySnapshot().length).toBe(0);
+  });
+});
+
+describe("auto-plan", () => {
+  /** A card in the plan lane with a plan attached — one human action from the gate. */
+  function cardInPlan(w: KanbanDb, title = "plan me") {
+    const card = w.createTask({ title, lane: "plan" });
+    w.attach(card.id, "plan", "# plan v1\nstep one");
+    return card;
+  }
+
+  test("planner spawns for a bare card in the plan lane; its own comment disarms it", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "fresh idea", lane: "plan" });
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("planner");
+    expect(calls[0].job.prompt).toContain(`kanban brief ${card.id}`);
+    expect(calls[0].job.prompt).toContain("kanban attach");
+
+    // planner finishes: attaches a plan and comments → disarmed
+    w.attach(card.id, "plan", "# v2");
+    await w.createComment(card.id, { author: PLANNER_AUTHOR, body: "plan v2 attached" });
+    calls[0].finish(0);
+    await sleep(20);
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(1); // no re-spawn
+  });
+
+  test("rejection re-arms the planner; the prompt points at the feedback", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInPlan(w);
+    await w.createComment(card.id, { author: PLANNER_AUTHOR, body: "plan v1 attached" });
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(0); // disarmed by the planner's comment
+
+    await w.rejectTask(card.id, "use SSE, not polling");
+    await sleep(200);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("planner");
+    expect(calls[0].job.prompt).toContain("rejection");
+    expect(db!.resolveTask(card.id).laneId).toBe("plan");
+  });
+
+  test("approval arms the plan-build builder; its handoff re-arms the reviewer", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInPlan(w);
+    await w.approveTask(card.id); // approval comment + move to implement
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("builder");
+    expect(calls[0].job.mode).toBe("plan");
+    expect(calls[0].job.prompt).toContain("had its plan approved");
+
+    // builder builds and hands off to review → reviewer takes over
+    await w.handoff(card.id, "review", { author: BUILDER_AUTHOR, message: "built, tests green" });
+    calls[0].finish(0);
+    await sleep(20);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("reviewer");
+  });
+
+  test("agent-authored approval never arms the builder", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInPlan(w);
+    await w.approveTask(card.id, { author: "pi-planner" }); // a rogue agent approving its own plan
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+    expect(calls.length).toBe(0);
+  });
+
+  test("planner crash posts a failure comment and does not hot-loop", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "doomed", lane: "plan" });
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    calls[0].finish(1);
+    await sleep(20);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(PLANNER_AUTHOR);
+    expect(last.body).toContain("auto-plan failed");
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(1);
+  });
+
+  test("planner defaults to thinking max; prompt forbids moving the card or touching the gate", () => {
+    const task = { id: "abc12", title: "plan me", laneId: "plan" } as never;
+    withAgentEnv({}, () => {
+      expect(agentFlags("planner", null)).toEqual(["--thinking", "max"]);
+    });
+    expect(plannerPrompt(task)).toContain("Never move the card");
+    expect(plannerPrompt(task)).toContain("never run kanban approve/reject");
+    expect(builderPlanPrompt(task)).toContain("never run kanban approve/reject");
   });
 });

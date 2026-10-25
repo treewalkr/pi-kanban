@@ -3,25 +3,35 @@ import { KanbanDb, type AgentConfig, type AgentRole, type Task } from "./db";
 export type { AgentRole };
 
 /**
- * Auto-review loop, hosted by the serve process (`KANBAN_AUTO_REVIEW=1`).
+ * Auto-agents loop, hosted by the serve process (`KANBAN_AUTO_REVIEW=1`).
  *
- * A card in the review lane whose thread's last comment is not from the
- * reviewer gets a headless `pi` review session; the session records its
- * verdict with the normal `kanban review` commands, which moves the card
- * (approve → done, block → implement + findings checklist). A block arms the
- * builder side: a card in implement whose last comment is a reviewer verdict
- * gets a `pi` builder session that works the findings and hands off to review
- * again. All state is derived from the board — nothing survives a restart,
- * and nothing needs to: a verdict comment disarms the card it answered.
+ * Three agents over the lanes, all state derived from the board: a card in the
+ * plan lane whose thread's last comment is not from the planner gets a
+ * headless `pi` planning session that writes and attaches a plan, then posts a
+ * disarm comment; the human owns the gate (`kanban approve` / `reject`). An
+ * approval (comment kind "approval", never agent-authored) moves the card to
+ * implement and arms a builder session that builds the attached plan. A card
+ * in the review lane whose last comment is not from the reviewer gets a review
+ * session; a block arms the findings builder, max 3 cycles. Nothing survives a
+ * restart, and nothing needs to: each agent's own last comment disarms it.
  */
 
+export const PLANNER_AUTHOR = "pi-planner";
 export const REVIEWER_AUTHOR = "pi-reviewer";
 export const BUILDER_AUTHOR = "pi-builder";
+
+export const AUTHOR_BY_ROLE: Record<AgentRole, string> = {
+  planner: PLANNER_AUTHOR,
+  reviewer: REVIEWER_AUTHOR,
+  builder: BUILDER_AUTHOR,
+};
 
 export interface AgentJob {
   task: Task;
   role: AgentRole;
   prompt: string;
+  /** Builder jobs come in two flavors: working review findings or building an approved plan. */
+  mode?: "findings" | "plan";
 }
 
 export interface SpawnContext {
@@ -107,6 +117,31 @@ export function formatPiEvent(line: string): string | null {
   }
 }
 
+export function plannerPrompt(task: Task): string {
+  return `You are pi-planner. Kanban card ${task.id} "${task.title}" is in the Plan lane in this repo — write its implementation plan.
+
+1. Run: kanban brief ${task.id} — the note (intent, acceptance criteria), any earlier plan version, and the full thread. If the last comment is a rejection, its feedback is direction for this revision: address every point in v-next.
+2. Ground the plan in the repo: read AGENTS.md, then the files and tests the work touches. Cite real file paths; no invented APIs.
+3. Write the plan to a markdown file (e.g. /tmp/plan-${task.id}.md): goal, approach, numbered steps with target files, test plan, risks/rollback.
+4. Attach it: kanban attach ${task.id} <plan-file>
+5. Disarm with exactly: kanban comment ${task.id} "plan v<N> attached — review it, then kanban approve ${task.id} or kanban reject ${task.id} --message <feedback>" --author pi-planner
+
+Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate. If the card cannot be planned from the repo alone, attach the questions instead and say so in the comment.
+Your last line: one sentence on the plan's shape.`;
+}
+
+export function builderPlanPrompt(task: Task): string {
+  return `You are pi-builder. Kanban card ${task.id} "${task.title}" had its plan approved; build it in this repo.
+
+1. Run: kanban brief ${task.id} — the note, the approved plan, and the full thread. Follow the plan; older rejections in the thread are already addressed by it.
+2. Implement the plan exactly: numbered steps, target files. Test as you go; add or adjust the tests the plan calls for.
+3. Run the full test suite (e.g. bun test) — everything green before handoff.
+4. Hand off: kanban handoff ${task.id} review --message "<what you built · test status>" --author pi-builder
+
+Never move the card with mv and never run kanban approve/reject. If a plan step turns out wrong, stop and comment instead of improvising: kanban comment ${task.id} "<the problem>" --author pi-builder.
+Your last line: one-sentence build summary.`;
+}
+
 export function reviewerPrompt(task: Task): string {
   return `You are pi-reviewer, an expert code reviewer. Kanban card ${task.id} "${task.title}" was just handed off to Review in this repo.
 
@@ -142,7 +177,7 @@ Never move the card with mv. If a finding looks wrong, say so in the handoff mes
 export function agentFlags(role: AgentRole, cfg: AgentConfig | null): string[] {
   const envModel = process.env.KANBAN_AUTOREVIEW_MODEL?.trim();
   const envThinking = process.env.KANBAN_AUTOREVIEW_THINKING;
-  let thinking = envThinking?.trim() || cfg?.thinking || (role === "reviewer" ? "max" : "");
+  let thinking = envThinking?.trim() || cfg?.thinking || (role === "reviewer" || role === "planner" ? "max" : "");
   if (envThinking === "") thinking = ""; // explicitly disabled via env
   const args: string[] = [];
   if (cfg?.provider) args.push("--provider", cfg.provider);
@@ -221,14 +256,19 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   let draining = false;
   let stopped = false;
 
-  /** What the card needs right now: a reviewer, a builder, or nothing. */
+  /** What the card needs right now: a planner, a reviewer, a builder (two flavors), or nothing. */
   const roleFor = (task: Task): AgentRole | "capped" | null => {
     const thread = db.comments(task.id);
     const last = thread.at(-1);
+    if (task.laneId === "plan" && last?.author !== PLANNER_AUTHOR) return "planner";
     if (task.laneId === "review" && last?.author !== REVIEWER_AUTHOR) return "reviewer";
-    if (task.laneId === "implement" && last?.kind === "review" && last?.author === REVIEWER_AUTHOR) {
-      const blocks = thread.filter((c) => c.kind === "review" && c.author === REVIEWER_AUTHOR).length;
-      return blocks < maxBlocks ? "builder" : "capped";
+    if (task.laneId === "implement") {
+      if (last?.kind === "review" && last?.author === REVIEWER_AUTHOR) {
+        const blocks = thread.filter((c) => c.kind === "review" && c.author === REVIEWER_AUTHOR).length;
+        return blocks < maxBlocks ? "builder" : "capped";
+      }
+      // a human approval (never agent-authored) arms the plan-build builder
+      if (last?.kind === "approval" && !last.author.startsWith("pi-")) return "builder";
     }
     return null;
   };
@@ -244,9 +284,12 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     if (!lanes.has("review") || !lanes.has("implement")) return;
     for (const task of db.tasks()) {
       const role = roleFor(task);
-      if (role === "reviewer") enqueue({ task, role, prompt: reviewerPrompt(task) });
-      else if (role === "builder") enqueue({ task, role, prompt: builderPrompt(task) });
-      else if (role === "capped") {
+      if (role === "planner") enqueue({ task, role, prompt: plannerPrompt(task) });
+      else if (role === "reviewer") enqueue({ task, role, prompt: reviewerPrompt(task) });
+      else if (role === "builder") {
+        const plan = db.comments(task.id).at(-1)?.kind === "approval";
+        enqueue({ task, role, mode: plan ? "plan" : "findings", prompt: plan ? builderPlanPrompt(task) : builderPrompt(task) });
+      } else if (role === "capped") {
         // posting flips the last comment away from the verdict, so this fires once
         db.createComment(task.id, {
           author: REVIEWER_AUTHOR,
@@ -291,7 +334,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           // keep the transcript on the card — the live view evaporates when the session ends
           if (session.log.length > 0) {
             const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
-            const header = `${job.role === "reviewer" ? REVIEWER_AUTHOR : BUILDER_AUTHOR} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
+            const header = `${AUTHOR_BY_ROLE[job.role]} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
             try {
               db.attach(job.task.id, "session", `${header}\n${session.log.join("\n")}`, "autoreview");
             } catch (err) {
@@ -318,7 +361,16 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     const task = db.tasks().find((t) => t.id === job.task.id);
     if (!task) return;
     const last = db.comments(task.id).at(-1);
-    if (job.role === "reviewer") {
+    if (job.role === "planner") {
+      if (last?.author === PLANNER_AUTHOR) log(`planner ${task.id}: plan attached — waiting on the gate`);
+      else {
+        db.createComment(task.id, {
+          author: PLANNER_AUTHOR,
+          kind: "comment",
+          body: `auto-plan ${code !== 0 ? `failed (exit ${code})` : "ended without attaching a plan"} — comment on this card to re-trigger.`,
+        });
+      }
+    } else if (job.role === "reviewer") {
       if (task.laneId === "done") log(`reviewer ${task.id}: approved → done`);
       else if (task.laneId === "implement") log(`reviewer ${task.id}: blocked → implement`);
       else if (last?.author === REVIEWER_AUTHOR) log(`reviewer ${task.id}: left a comment, no verdict`);
@@ -330,7 +382,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         });
       }
     } else {
-      if (task.laneId === "review") log(`builder ${task.id}: fixed → back to review`);
+      if (task.laneId === "review") log(`builder ${task.id}: ${job.mode === "plan" ? "built the plan → review" : "fixed → back to review"}`);
       else if (last?.author === BUILDER_AUTHOR) log(`builder ${task.id}: left a comment, no handoff`);
       else {
         db.createComment(task.id, {
