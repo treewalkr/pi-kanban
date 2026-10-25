@@ -45,6 +45,42 @@ test("agentConfig: null → set → roundtrip → replace; unknown role rejected
   expect(() => db.setAgentConfig("worker", {})).toThrow(KanbanError);
 });
 
+test("approveTask: approval comment + move to implement; guards lane and plan", () => {
+  const task = db.createTask({ title: "feature" });
+  db.moveTask(task.id, "plan");
+  expect(() => db.approveTask(task.id)).toThrow(/no attached plan/);
+
+  db.attach(task.id, "plan", "# plan v1\ndo the thing");
+  const { task: moved, comment } = db.approveTask(task.id, { author: "user" });
+  expect(moved.laneId).toBe("implement");
+  expect(comment.kind).toBe("approval");
+  expect(comment.author).toBe("user");
+  expect(comment.body).toBe("plan v1 approved — build it");
+
+  // card no longer in plan → guard fires
+  expect(() => db.approveTask(task.id)).toThrow(/not in the plan lane/);
+});
+
+test("rejectTask: feedback comment, card stays in plan; empty feedback rejected", () => {
+  const task = db.createTask({ title: "feature" });
+  db.moveTask(task.id, "plan");
+  db.attach(task.id, "plan", "# plan v1");
+  const comment = db.rejectTask(task.id, "  use SSE, not polling  ");
+  expect(comment.kind).toBe("rejection");
+  expect(comment.body).toBe("plan rejected: use SSE, not polling");
+  expect(db.resolveTask(task.id).laneId).toBe("plan"); // stays put — re-plan expected
+  expect(() => db.rejectTask(task.id, "   ")).toThrow(/must not be empty/);
+  expect(() => db.rejectTask(db.createTask({ title: "x" }).id, "why")).toThrow(/not in the plan lane/);
+});
+
+test("comment kinds include the plan-gate pair", () => {
+  const task = db.createTask({ title: "kinds" });
+  for (const kind of ["comment", "review", "handoff", "approval", "rejection"]) {
+    expect(db.createComment(task.id, { kind, body: `as ${kind}` }).kind).toBe(kind);
+  }
+  expect(() => db.createComment(task.id, { kind: "verdict", body: "nope" })).toThrow(KanbanError);
+});
+
 test("attachments(kind) returns every version oldest-first", () => {
   const task = db.createTask({ title: "one" });
   db.attach(task.id, "session", "first session", "autoreview");

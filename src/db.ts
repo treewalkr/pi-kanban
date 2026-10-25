@@ -33,9 +33,9 @@ export interface Attachment {
   createdAt: number;
 }
 
-export type CommentKind = "comment" | "review" | "handoff";
+export type CommentKind = "comment" | "review" | "handoff" | "approval" | "rejection";
 
-export type AgentRole = "reviewer" | "builder";
+export type AgentRole = "reviewer" | "builder" | "planner";
 
 export type AgentThinking = "" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -95,8 +95,8 @@ export class KanbanError extends Error {
 const GAP = 100;
 const MIN_GAP = 0.01;
 
-const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "review", "handoff"]);
-const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder"]);
+const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "review", "handoff", "approval", "rejection"]);
+const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder", "planner"]);
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lanes (
@@ -589,7 +589,7 @@ export class KanbanDb {
     if (!body) throw new KanbanError("comment body must not be empty", "invalid");
     const kind = input.kind ?? "comment";
     if (!COMMENT_KINDS.has(kind)) {
-      throw new KanbanError(`unknown comment kind '${kind}' (comment | review | handoff)`, "invalid");
+      throw new KanbanError(`unknown comment kind '${kind}' (comment | review | handoff | approval | rejection)`, "invalid");
     }
     const author = input.author?.trim() || "user";
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -639,6 +639,36 @@ export class KanbanDb {
     })();
   }
 
+  /** The plan gate: approve the card's attached plan — comment + move to Implement, atomically. */
+  approveTask(taskRef: string, input: { author?: string; message?: string } = {}): { task: Task; comment: Comment } {
+    const task = this.resolveTask(taskRef);
+    if (task.laneId !== "plan") {
+      throw new KanbanError(`card '${task.id}' is not in the plan lane (it is in '${task.laneId}')`, "conflict");
+    }
+    const plan = this.attachment(task.id, "plan");
+    if (!plan) throw new KanbanError(`card '${task.id}' has no attached plan to approve`, "conflict");
+    return this.db.transaction((): { task: Task; comment: Comment } => {
+      const task2 = this.updateTask(task.id, { lane: "implement" });
+      const comment = this.createComment(task.id, {
+        author: input.author,
+        kind: "approval",
+        body: input.message?.trim() || `plan v${plan.version} approved — build it`,
+      });
+      return { task: task2, comment };
+    })();
+  }
+
+  /** The other gate arm: reject with feedback — comment stays, card stays in Plan; the feedback steers the next plan. */
+  rejectTask(taskRef: string, message: string, input: { author?: string } = {}): Comment {
+    const task = this.resolveTask(taskRef);
+    if (task.laneId !== "plan") {
+      throw new KanbanError(`card '${task.id}' is not in the plan lane (it is in '${task.laneId}')`, "conflict");
+    }
+    const body = message.trim();
+    if (!body) throw new KanbanError("rejection feedback must not be empty — it steers the next plan", "invalid");
+    return this.createComment(task.id, { author: input.author, kind: "rejection", body: `plan rejected: ${body}` });
+  }
+
   // ---------- agent configs ----------
 
   /** The stored agent config for a role, or null when never set. */
@@ -650,7 +680,7 @@ export class KanbanDb {
   /** Full replace of a role's config; empty strings/arrays drop out. */
   setAgentConfig(role: string, config: AgentConfig): AgentConfig {
     if (!AGENT_ROLES.has(role)) {
-      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder)`, "invalid");
+      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder | planner)`, "invalid");
     }
     const clean: AgentConfig = {};
     if (config.provider?.trim()) clean.provider = config.provider.trim();
