@@ -1629,6 +1629,35 @@ button.id-copy {
   color: #bc8cff;
 }
 
+.comment-meta .kind.approval {
+  color: #3fb950;
+}
+
+.comment-meta .kind.rejection {
+  color: #f85149;
+}
+
+.editor-actions .approve {
+  color: #3fb950;
+}
+
+.editor-actions .reject {
+  color: #f85149;
+}
+
+.reject-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.reject-form input {
+  flex: 1;
+  min-width: 0;
+}
+
 .comment-meta .when {
   margin-left: auto;
 }

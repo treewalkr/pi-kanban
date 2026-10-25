@@ -130,12 +130,52 @@ test("GET/POST /tasks/:id/comments thread a card; unknown task 404s, bad body 4x
   expect(badKind.status).toBe(422);
 });
 
+test("POST /tasks/:id/approve and /reject: the plan gate over HTTP", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "gate me", lane: "plan" });
+  db.attach(task.id, "plan", "# plan v1");
+
+  const noFeedback = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}/reject`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "" }),
+    }),
+  );
+  expect(noFeedback.status).toBe(422); // validation: feedback required
+
+  const rejected = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}/reject`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "use SSE, not polling" }),
+    }),
+  );
+  expect(rejected.status).toBe(201);
+  expect(await rejected.json()).toMatchObject({ kind: "rejection", author: "user" });
+  expect(db.resolveTask(task.id).laneId).toBe("plan"); // rejection stays in plan
+
+  const approved = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}/approve`, { method: "POST" }),
+  );
+  expect(approved.status).toBe(201);
+  const body = (await approved.json()) as { task: { laneId: string }; comment: { kind: string; body: string } };
+  expect(body.task.laneId).toBe("implement");
+  expect(body.comment.kind).toBe("approval");
+  expect(body.comment.body).toContain("plan v1 approved");
+
+  const again = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}/approve`, { method: "POST" }),
+  );
+  expect(again.status).toBe(409); // not in plan lane anymore
+});
+
 test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async () => {
   const app = createApp(db);
 
   const empty = await app.handle(new Request("http://localhost/agents"));
   expect(empty.status).toBe(200);
-  expect(await empty.json()).toEqual({ reviewer: null, builder: null });
+  expect(await empty.json()).toEqual({ planner: null, reviewer: null, builder: null });
 
   const put = await app.handle(
     new Request("http://localhost/agents/reviewer", {

@@ -71,8 +71,11 @@
 <div class="settings-general">
   <section class="settings-general-section">
     <h3 class="settings-general-heading">Role</h3>
-    <p class="settings-general-description">Used by serve --auto-review: the reviewer checks cards in Review, the builder works blocked findings. Switching stashes unsaved edits.</p>
+    <p class="settings-general-description">Used by serve --auto-review: the planner writes plans for cards in Plan, the reviewer checks cards in Review, the builder works blocked findings or builds approved plans. Switching stashes unsaved edits.</p>
     <div class="seg">
+      <button type="button" class="seg-option" class:on={role === "planner"} aria-pressed={role === "planner"} onclick={() => switchRole("planner")}>
+        <span class="seg-label">planner</span>
+      </button>
       <button type="button" class="seg-option" class:on={role === "reviewer"} aria-pressed={role === "reviewer"} onclick={() => switchRole("reviewer")}>
         <span class="seg-label">reviewer</span>
       </button>
@@ -147,7 +150,7 @@
         <label>
           thinking
           <select bind:value={form.thinking}>
-            <option value="">default{role === "reviewer" ? " (max)" : ""}</option>
+            <option value="">default{role === "reviewer" || role === "planner" ? " (max)" : ""}</option>
             <option value="off">off</option>
             <option value="minimal">minimal</option>
             <option value="low">low</option>

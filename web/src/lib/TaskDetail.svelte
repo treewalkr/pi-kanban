@@ -64,6 +64,29 @@
     if (await board.addTask(me.laneId, title, undefined, task.id)) subtaskTitle = "";
   }
 
+  // the plan gate: approve arms the plan-build builder, reject re-arms the planner
+  let rejecting = $state(false);
+  let rejectMsg = $state("");
+
+  const gateFail = (error: unknown): void => {
+    const value = (error as { value?: unknown })?.value as { error?: string } | undefined;
+    board.error = value?.error ?? "request failed";
+  };
+
+  async function approve() {
+    const { error } = await api.tasks({ id: task.id }).approve.post();
+    if (error) return gateFail(error);
+    board.closeCard(); // card now lives in Test + Implement
+  }
+
+  async function reject() {
+    const message = rejectMsg.trim();
+    if (!message) return;
+    const { error } = await api.tasks({ id: task.id }).reject.post({ message });
+    if (error) return gateFail(error);
+    board.closeCard(); // planner re-plans with the feedback
+  }
+
   // per-card thread state: fetch on open, append after own post — SSE refresh
   // is paused while a modal is open, so a reopen catches CLI-side comments
   let comments = $state<Comment[]>([]);
@@ -147,7 +170,7 @@
       {#if live}
         <div class="detail-activity">
           <div class="children-head">
-            {live.role === "reviewer" ? "pi-reviewer" : "pi-builder"} · live · {timeAgo(live.startedAt)}
+            {live.role === "reviewer" ? "pi-reviewer" : live.role === "planner" ? "pi-planner" : "pi-builder"} · live · {timeAgo(live.startedAt)}
           </div>
           <div class="activity-log" bind:this={logEl}>
             {#each live.log as line, i (i)}
@@ -245,6 +268,24 @@
     {/if}
     <div class="editor-actions">
       <IdChip id={me.id} />
+      {#if me.laneId === "plan"}
+        {#if rejecting}
+          <form
+            class="reject-form"
+            onsubmit={(e) => {
+              e.preventDefault();
+              reject();
+            }}
+          >
+            <input placeholder="why reject? this steers the next plan" bind:value={rejectMsg} />
+            <button class="ghost" type="button" onclick={() => (rejecting = false)}>cancel</button>
+            <button class="primary reject" type="submit" disabled={!rejectMsg.trim()}>reject</button>
+          </form>
+        {:else}
+          {#if plan}<button class="ghost approve" onclick={approve}>✓ approve plan</button>{/if}
+          <button class="ghost reject" onclick={() => (rejecting = true)}>✗ reject</button>
+        {/if}
+      {/if}
       <span class="spacer"></span>
       {#if me.laneId !== "done"}
         <button class="ghost" onclick={() => toLane("done")}>✓ done</button>

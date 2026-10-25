@@ -5,10 +5,11 @@ import { board } from "./board.svelte";
 
 type EdenError = { value?: unknown };
 
-/** Reviewer/builder agent settings for the auto-review loop; failures surface via the board toast. */
+/** Planner/reviewer/builder agent settings for the auto-agent loop; failures surface via the board toast. */
 class AgentsStore {
   open = $state(false);
   loaded = $state(false);
+  planner = $state<AgentConfig>({});
   reviewer = $state<AgentConfig>({});
   builder = $state<AgentConfig>({});
   /** pi's catalog for the provider/model selects; empty → the panel falls back to text inputs. */
@@ -23,6 +24,7 @@ class AgentsStore {
     const [agents, models] = await Promise.all([api.agents.get(), api["pi-models"].get()]);
     if (agents.error) this.fail(agents.error);
     else {
+      this.planner = agents.data.planner ?? {};
       this.reviewer = agents.data.reviewer ?? {};
       this.builder = agents.data.builder ?? {};
       this.loaded = true;

@@ -160,6 +160,42 @@ export const createApp = (db: KanbanDb) => {
       },
     )
     .post(
+      "/tasks/:id/approve",
+      ({ params, body, status }): { task: Task; comment: Comment } | unknown => {
+        try {
+          return status(201, db.approveTask(params.id, { author: body?.author, message: body?.message }));
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Optional(
+          t.Object({
+            author: t.Optional(t.String()),
+            message: t.Optional(t.String()),
+          }),
+        ),
+      },
+    )
+    .post(
+      "/tasks/:id/reject",
+      ({ params, body, status }): Comment | unknown => {
+        try {
+          return status(201, db.rejectTask(params.id, body.message, { author: body.author }));
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Object({
+          message: t.String({ minLength: 1 }),
+          author: t.Optional(t.String()),
+        }),
+      },
+    )
+    .post(
       "/tasks",
       ({ body, status }): Task | unknown => {
         try {
@@ -250,7 +286,8 @@ export const createApp = (db: KanbanDb) => {
         }),
       },
     )
-    .get("/agents", (): { reviewer: AgentConfig | null; builder: AgentConfig | null } => ({
+    .get("/agents", (): { planner: AgentConfig | null; reviewer: AgentConfig | null; builder: AgentConfig | null } => ({
+      planner: db.agentConfig("planner"),
       reviewer: db.agentConfig("reviewer"),
       builder: db.agentConfig("builder"),
     }))
@@ -270,7 +307,7 @@ export const createApp = (db: KanbanDb) => {
         }
       },
       {
-        params: t.Object({ role: t.Union([t.Literal("reviewer"), t.Literal("builder")]) }),
+        params: t.Object({ role: t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder")]) }),
         body: t.Object({
           provider: t.Optional(t.String()),
           model: t.Optional(t.String()),
