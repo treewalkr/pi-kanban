@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { KanbanDb, type AgentConfig, type AgentRole, type Task } from "./db";
 
 export type { AgentRole };
@@ -117,17 +119,49 @@ export function formatPiEvent(line: string): string | null {
   }
 }
 
+/**
+ * The plan contract shared by planner and plan reviewer: required sections plus
+ * the review checklist. Read once and embedded in prompts, so agents running in
+ * another repo (serve cwd) still get it.
+ */
+export const PLAN_TEMPLATE = readFileSync(join(import.meta.dir, "..", "skills", "pi-kanban", "plan-template.md"), "utf8");
+
+/** The template's required section headings, in order (a test keeps the file in sync). */
+export const PLAN_SECTIONS = [
+  "Goal",
+  "Context & constraints",
+  "Decisions",
+  "Interfaces & contracts",
+  "Steps",
+  "Test plan",
+  "Architecture impact",
+  "Stack & dependencies",
+  "Data & migrations",
+  "Security",
+  "Performance",
+  "Backward compatibility",
+  "Observability",
+  "Rollback",
+  "Out of scope",
+  "Risks",
+  "Open questions",
+] as const;
+
 export function plannerPrompt(task: Task): string {
-  return `You are pi-planner. Kanban card ${task.id} "${task.title}" is in the Plan lane in this repo — write its implementation plan.
+  return `You are pi-planner. Kanban card ${task.id} "${task.title}" is in the Plan lane in this repo — write its implementation plan. The plan is the builder's contract: two builders following it should produce the same behavior.
 
 1. Run: kanban brief ${task.id} — the note (intent, acceptance criteria), any earlier plan version, and the full thread. If the last comment is a rejection, its feedback is direction for this revision: address every point in v-next.
 2. Ground the plan in the repo: read AGENTS.md, then the files and tests the work touches. Cite real file paths; no invented APIs.
-3. Write the plan to a markdown file (e.g. /tmp/plan-${task.id}.md): goal, approach, numbered steps with target files, test plan, risks/rollback.
-4. Attach it: kanban attach ${task.id} <plan-file>
-5. Disarm with exactly: kanban comment ${task.id} "plan v<N> attached — review it, then kanban approve ${task.id} or kanban reject ${task.id} --message <feedback>" --author pi-planner
+3. Write the plan to a markdown file (e.g. /tmp/plan-${task.id}.md) using the plan template below: every section filled or "N/A — reason", every acceptance criterion mapped to concrete tests.
+4. Self-check the plan against the review checklist below and fix every hit before attaching.
+5. Attach it: kanban attach ${task.id} <plan-file>
+6. Disarm with exactly: kanban comment ${task.id} "plan v<N> attached — review it, then kanban approve ${task.id} or kanban reject ${task.id} --message <feedback>" --author pi-planner
 
 Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate. If the card cannot be planned from the repo alone, attach the questions instead and say so in the comment.
-Your last line: one sentence on the plan's shape.`;
+Your last line: one sentence on the plan's shape.
+
+--- plan template and review checklist ---
+${PLAN_TEMPLATE.trim()}`;
 }
 
 export function builderPlanPrompt(task: Task): string {

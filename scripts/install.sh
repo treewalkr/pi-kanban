@@ -11,6 +11,7 @@ ln -sf "$(pwd)/src/cli.ts" "$BIN_DIR/kanban"
 SKILL_DIR="${HOME}/.pi/agent/skills/pi-kanban"
 mkdir -p "$SKILL_DIR"
 cp skills/pi-kanban/SKILL.md "$SKILL_DIR/SKILL.md"
+cp skills/pi-kanban/plan-template.md "$SKILL_DIR/plan-template.md"
 
 echo "installed:"
 echo "  cli    → $BIN_DIR/kanban"

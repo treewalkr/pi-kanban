@@ -29,7 +29,9 @@ For every non-trivial unit of work:
 - **As you progress**: advance the card (`mv implement`, then `mv review` when
   the work looks complete). When you start Implement, attach your plan:
   write it to a file and `kanban attach <id> <plan-file>` — re-attaching a
-  revised plan versions it (latest wins).
+  revised plan versions it (latest wins). Write plans with
+  [plan-template.md](plan-template.md): every section filled or `N/A — reason`,
+  every acceptance criterion mapped to concrete tests.
 - **Put-down**: `kanban handoff <id> <lane> --message <what you did · what's
   next> --author pi` when stopping or passing the card on — never a bare `mv`
   between actors; the message is the durable record.

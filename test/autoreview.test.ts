@@ -6,6 +6,8 @@ import { KanbanDb } from "../src/db";
 import {
   BUILDER_AUTHOR,
   PLANNER_AUTHOR,
+  PLAN_SECTIONS,
+  PLAN_TEMPLATE,
   REVIEWER_AUTHOR,
   activitySnapshot,
   agentFlags,
@@ -542,5 +544,20 @@ describe("auto-plan", () => {
     expect(plannerPrompt(task)).toContain("Never move the card");
     expect(plannerPrompt(task)).toContain("never run kanban approve/reject");
     expect(builderPlanPrompt(task)).toContain("never run kanban approve/reject");
+  });
+
+  test("plan template file carries every required section, in order", () => {
+    const templatePart = PLAN_TEMPLATE.split(/^## Review checklist$/m)[0]!;
+    const headings = [...templatePart.matchAll(/^### (.+)$/gm)].map((m) => m[1]!.trim());
+    expect(headings).toEqual([...PLAN_SECTIONS]);
+    expect(PLAN_TEMPLATE).toContain("## Review checklist");
+    expect(PLAN_TEMPLATE).toContain("N/A — reason");
+  });
+
+  test("plannerPrompt embeds the template and makes the planner self-check against the checklist", () => {
+    const prompt = plannerPrompt({ id: "abc12", title: "plan me", laneId: "plan" } as never);
+    expect(prompt).toContain(PLAN_TEMPLATE.trim());
+    for (const section of PLAN_SECTIONS) expect(prompt).toContain(`### ${section}`);
+    expect(prompt).toContain("Review checklist");
   });
 });
