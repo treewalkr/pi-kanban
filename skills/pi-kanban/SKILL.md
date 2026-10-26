@@ -66,6 +66,13 @@ the card then waits at the gate. **The human owns the gate** — never run
 - **Approving** (`kanban approve <id>`, or ✓ in the web card): approval comment + move to
   Implement; a `pi-builder` session builds the attached plan, runs tests, and hands off to
   Review, where the reviewer loop takes over.
+- **Chat-approved plans** (fast path): when the human approves a plan you presented in the
+  live session ("go ahead", "build it"), the gate has already done its job in chat. Attach
+  the plan exactly as presented, record the verdict in the thread (`kanban comment <id> "plan
+  approved in chat, <date> — attached plan is what was approved"`), and `mv <id> implement`.
+  Never park the card in Plan first — the planner would adopt it — and never run
+  `kanban approve`/`reject` yourself; if the plan changes materially after the approval, use
+  the normal Plan-lane cycle instead. Hand off to Review as usual when the build is done.
 - **If a plan-review session dies without a verdict** (quota, crash) or cannot evaluate the plan,
   it leaves a `comment` from `pi-plan-reviewer`; any human comment re-runs the **plan reviewer** on
   the attached plan as-is — no re-plan. (The cap-out comment works the same way.) After a pass or a
