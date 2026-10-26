@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { Attachment, Lane, LanePatch, Task, TaskPatch } from "../../../src/db";
+import type { Attachment, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
 import type { AgentSessionInfo } from "../../../src/autoreview";
 import { searchBoard } from "../../../src/search";
 
@@ -26,6 +26,8 @@ class BoardStore {
   tasks = $state<Task[]>([]);
   /** Latest plan per card, keyed by task id (board payload). */
   plans = $state<Record<string, Attachment>>({});
+  /** Plan-lane cards waiting on the human, keyed by task id (board payload, sparse). */
+  waiting = $state<Record<string, WaitingState>>({});
   loading = $state(true);
   error = $state("");
   search = $state("");
@@ -214,6 +216,7 @@ class BoardStore {
     this.lanes = data.lanes;
     this.tasks = data.tasks;
     this.plans = data.plans;
+    this.waiting = data.waiting ?? {}; // guards the dev-restart window against a pre-change API payload
     this.loading = false;
     // a stored project whose tag no longer exists (renamed, or its last card dropped the tag)
     // resets to "all" — an active filter with no visible chip would be a silent empty board

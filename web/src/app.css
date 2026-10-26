@@ -1439,6 +1439,22 @@ button.id-copy {
   animation: working-pulse 1.6s ease-in-out infinite;
 }
 
+/* ---------- waiting-on-you badge (plan lane, computed server-side) ---------- */
+
+.chip.waiting {
+  max-width: none; /* "✓ ready — approve/reject" exceeds the 130px chip cap */
+}
+
+.chip.waiting-gate {
+  color: #3fb950;
+  border-color: color-mix(in srgb, #3fb950 40%, var(--border));
+}
+
+.chip.waiting-question {
+  color: #d29922;
+  border-color: color-mix(in srgb, #d29922 40%, var(--border));
+}
+
 @keyframes working-pulse {
   0%,
   100% {

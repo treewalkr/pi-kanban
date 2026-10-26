@@ -5,6 +5,7 @@
   import IdChip from "./IdChip.svelte";
   import { renderMarkdown } from "./markdown";
   import { timeAgo } from "./util";
+  import { waitingBadge } from "./waiting";
 
   let { task, child = false }: { task: Task; child?: boolean } = $props();
 
@@ -13,6 +14,7 @@
   let open = $derived(board.expanded.has(task.id));
   let parent = $derived(task.parentId ? board.taskById(task.parentId) : undefined);
   let parentChip = $derived(!!parent && !board.nestsUnder(task));
+  let waiting = $derived(waitingBadge(board.waiting[task.id], !!board.activity[task.id]));
 
   function openDetail(e: Event): void {
     e.stopPropagation();
@@ -93,6 +95,9 @@
               ? "planning"
               : "building"} · {timeAgo(board.activity[task.id].startedAt)}
       </span>
+    {/if}
+    {#if waiting}
+      <span class="chip waiting waiting-{waiting.state}" title={waiting.title}>{waiting.label}</span>
     {/if}
     <span class="age" title={new Date(task.updatedAt).toLocaleString()}>{timeAgo(task.updatedAt)}</span>
   </div>
