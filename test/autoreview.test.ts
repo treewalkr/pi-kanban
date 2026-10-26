@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb } from "../src/db";
@@ -825,5 +825,17 @@ describe("auto-plan", () => {
     expect(prompt).toContain(PLAN_TEMPLATE.trim());
     for (const section of PLAN_SECTIONS) expect(prompt).toContain(`### ${section}`);
     expect(prompt).toContain("Review checklist");
+  });
+
+  test("SKILL.md auto-plan section documents failed-review routing", () => {
+    const skillPath = join(import.meta.dir, "..", "skills", "pi-kanban", "SKILL.md");
+    const skillContent = readFileSync(skillPath, "utf8");
+    const [_, planSection] = skillContent.split(/## Auto-plan loop\n/);
+    expect(planSection).toBeDefined();
+    const [autoPlanText] = planSection.split(/## Auto-review loop\n/);
+    expect(autoPlanText).toBeDefined();
+    expect(autoPlanText).toContain("any human comment re-runs the");
+    expect(autoPlanText).toContain("no re-plan");
+    expect(autoPlanText).toContain("re-arms the");
   });
 });

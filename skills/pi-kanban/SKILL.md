@@ -66,6 +66,10 @@ the card then waits at the gate. **The human owns the gate** — never run
 - **Approving** (`kanban approve <id>`, or ✓ in the web card): approval comment + move to
   Implement; a `pi-builder` session builds the attached plan, runs tests, and hands off to
   Review, where the reviewer loop takes over.
+- **If a plan-review session dies without a verdict** (quota, crash) or cannot evaluate the plan,
+  it leaves a `comment` from `pi-plan-reviewer`; any human comment re-runs the **plan reviewer** on
+  the attached plan as-is — no re-plan. (The cap-out comment works the same way.) After a pass or a
+  planner question, a human comment re-arms the **planner** instead.
 - **Each planner or plan-review cycle needs a human action** — no human comment, no re-runs.
 
 ## Auto-review loop
