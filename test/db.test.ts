@@ -502,5 +502,7 @@ test("lease: release frees the card; releaseLeases only drops own rows", () => {
   expect(db.tryTakeLease("t1", "reviewer", b, 60_000)).toBe(true);
   db.releaseLeases(a);
   expect(db.leaseFor("t2")?.ownerPid).toBe(2); // b's lease untouched
+  expect(db.tryTakeLease("t1", "planner", a, 60_000)).toBe(false); // b holds t1 with a fresh heartbeat
+  db.releaseLease("t1", b);
   expect(db.tryTakeLease("t1", "planner", a, 60_000)).toBe(true);
 });
