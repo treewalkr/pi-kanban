@@ -21,6 +21,7 @@ usage:
   kanban review <id> (--approve | --block --message <text> [--finding <text>]…)
   kanban approve <id>                       (plan gate: approve the attached plan → Implement)
   kanban reject <id> --message <feedback>   (plan gate: reject with feedback; planner re-plans)
+  kanban plan-review <id> (--pass | --block --message <text> [--finding <text>]…)  (plan reviewer's verdict on the attached plan)
   kanban brief <id>                         (pickup context: note, plan, thread)
   kanban mv <id> <lane> [--pos <1-based>]     kanban mv <id> --next | --prev
   kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>]
@@ -48,7 +49,7 @@ interface Parsed {
 }
 
 const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message"]);
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review"]);
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass"]);
 const MULTI_FLAGS = new Set(["finding"]); // repeatable: each occurrence appends one value
 
 function parse(argv: string[]): Parsed {
@@ -123,8 +124,8 @@ async function main(): Promise<number> {
   }
 
   const { flags, positional } = parse(rest);
-  if (flags.finding !== undefined && cmd !== "review") {
-    throw new KanbanError("--finding is only valid with 'review --block'", "invalid");
+  if (flags.finding !== undefined && cmd !== "review" && cmd !== "plan-review") {
+    throw new KanbanError("--finding is only valid with 'review --block' or 'plan-review --block'", "invalid");
   }
 
   if (cmd === "serve") {
@@ -273,6 +274,30 @@ async function main(): Promise<number> {
           : db.handoff(idRef, laneById(db, "implement"), { message: message!, author: str(flags, "author"), kind: "review", findings });
         if (json) jsonOut(result);
         else console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+        return 0;
+      }
+
+      case "plan-review": {
+        const idRef = positional[0];
+        const message = str(flags, "message");
+        const pass = !!flags.pass;
+        const block = !!flags.block;
+        if (!idRef || pass === block) {
+          throw new KanbanError(
+            "usage: kanban plan-review <id> (--pass | --block --message <text> [--finding <text>]…)",
+            "invalid",
+          );
+        }
+        const findings = arr(flags, "finding");
+        if (!block && findings.length > 0) throw new KanbanError("--finding is only valid with 'plan-review --block'", "invalid");
+        const comment = db.planReview(idRef, {
+          verdict: pass ? "pass" : "block",
+          message: message ?? (pass ? "plan meets the checklist" : undefined),
+          findings,
+          author: str(flags, "author"),
+        });
+        if (json) jsonOut(comment);
+        else console.log(commentLine(comment));
         return 0;
       }
 

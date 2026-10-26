@@ -35,7 +35,7 @@ export interface Attachment {
 
 export type CommentKind = "comment" | "review" | "handoff" | "approval" | "rejection" | "question";
 
-export type AgentRole = "reviewer" | "builder" | "planner";
+export type AgentRole = "reviewer" | "builder" | "planner" | "plan-reviewer";
 
 export type AgentThinking = "" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -96,7 +96,7 @@ const GAP = 100;
 const MIN_GAP = 0.01;
 
 const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "review", "handoff", "approval", "rejection", "question"]);
-const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder", "planner"]);
+const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder", "planner", "plan-reviewer"]);
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lanes (
@@ -669,6 +669,30 @@ export class KanbanDb {
     return this.createComment(task.id, { author: input.author, kind: "rejection", body: `plan rejected: ${body}` });
   }
 
+  /** Plan-review verdict prefixes — the autoreview loop arms on these exact strings. */
+  static readonly PLAN_REVIEW_PASS = "plan review: pass";
+  static readonly PLAN_REVIEW_BLOCK = "plan review: block";
+
+  /** The plan reviewer's verdict: pass leaves the card at the human gate, block sends it back to the planner. Never moves the card. */
+  planReview(
+    taskRef: string,
+    input: { verdict: "pass" | "block"; message?: string; findings?: string[]; author?: string },
+  ): Comment {
+    const task = this.resolveTask(taskRef);
+    if (task.laneId !== "plan") {
+      throw new KanbanError(`card '${task.id}' is not in the plan lane (it is in '${task.laneId}')`, "conflict");
+    }
+    if (!this.attachment(task.id, "plan")) throw new KanbanError(`card '${task.id}' has no attached plan to review`, "conflict");
+    const message = input.message?.trim() ?? "";
+    const findings = (input.findings ?? []).map((f) => f.trim()).filter(Boolean);
+    if (!message && (input.verdict === "pass" || findings.length === 0)) {
+      throw new KanbanError("plan review needs a message (block: message or findings)", "invalid");
+    }
+    const prefix = input.verdict === "pass" ? KanbanDb.PLAN_REVIEW_PASS : KanbanDb.PLAN_REVIEW_BLOCK;
+    const body = `${prefix}${message ? ` — ${message}` : ""}${findings.map((f) => `\n- ${f}`).join("")}`;
+    return this.createComment(task.id, { author: input.author, kind: "review", body });
+  }
+
   // ---------- agent configs ----------
 
   /** The stored agent config for a role, or null when never set. */
@@ -680,7 +704,7 @@ export class KanbanDb {
   /** Full replace of a role's config; empty strings/arrays drop out. */
   setAgentConfig(role: string, config: AgentConfig): AgentConfig {
     if (!AGENT_ROLES.has(role)) {
-      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder | planner)`, "invalid");
+      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder | planner | plan-reviewer)`, "invalid");
     }
     const clean: AgentConfig = {};
     if (config.provider?.trim()) clean.provider = config.provider.trim();

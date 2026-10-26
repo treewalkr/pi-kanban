@@ -286,11 +286,15 @@ export const createApp = (db: KanbanDb) => {
         }),
       },
     )
-    .get("/agents", (): { planner: AgentConfig | null; reviewer: AgentConfig | null; builder: AgentConfig | null } => ({
-      planner: db.agentConfig("planner"),
-      reviewer: db.agentConfig("reviewer"),
-      builder: db.agentConfig("builder"),
-    }))
+    .get(
+      "/agents",
+      (): { planner: AgentConfig | null; reviewer: AgentConfig | null; builder: AgentConfig | null; "plan-reviewer": AgentConfig | null } => ({
+        planner: db.agentConfig("planner"),
+        reviewer: db.agentConfig("reviewer"),
+        builder: db.agentConfig("builder"),
+        "plan-reviewer": db.agentConfig("plan-reviewer"),
+      }),
+    )
     .get("/pi-models", async (): Promise<{ models: Awaited<ReturnType<typeof listPiModels>> }> => ({
       models: await listPiModels(),
     }))
@@ -307,7 +311,7 @@ export const createApp = (db: KanbanDb) => {
         }
       },
       {
-        params: t.Object({ role: t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder")]) }),
+        params: t.Object({ role: t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer")]) }),
         body: t.Object({
           provider: t.Optional(t.String()),
           model: t.Optional(t.String()),

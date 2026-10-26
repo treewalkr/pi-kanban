@@ -12,6 +12,7 @@ class AgentsStore {
   planner = $state<AgentConfig>({});
   reviewer = $state<AgentConfig>({});
   builder = $state<AgentConfig>({});
+  ["plan-reviewer"] = $state<AgentConfig>({});
   /** pi's catalog for the provider/model selects; empty → the panel falls back to text inputs. */
   models = $state<CatalogModel[]>([]);
 
@@ -27,6 +28,7 @@ class AgentsStore {
       this.planner = agents.data.planner ?? {};
       this.reviewer = agents.data.reviewer ?? {};
       this.builder = agents.data.builder ?? {};
+      this["plan-reviewer"] = agents.data["plan-reviewer"] ?? {};
       this.loaded = true;
     }
     if (!models.error) this.models = models.data.models;

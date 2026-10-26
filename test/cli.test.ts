@@ -281,6 +281,32 @@ test("handoff moves + records; review --approve/--block with findings", async ()
   await cli("rm", task.id, "--json");
 });
 
+test("plan-review records pass/block verdicts on a plan-lane card", async () => {
+  const task = JSON.parse((await cli("add", "plan card", "--lane", "plan", "--json")).stdout) as Task;
+  const planFile = join(dir, "plan.md");
+  await Bun.write(planFile, "# plan v1\nsteps");
+  await cli("attach", task.id, planFile);
+
+  const passed = await cli("plan-review", task.id, "--pass", "--message", "meets the checklist", "--author", "pi-plan-reviewer", "--json");
+  expect(passed.code).toBe(0);
+  const verdict = JSON.parse(passed.stdout) as { kind: string; author: string; body: string };
+  expect(verdict).toMatchObject({ kind: "review", author: "pi-plan-reviewer", body: "plan review: pass — meets the checklist" });
+  expect((JSON.parse((await cli("show", task.id, "--json")).stdout) as Task).laneId).toBe("plan");
+
+  const blocked = await cli(
+    "plan-review", task.id, "--block", "--message", "vague", "--finding", "AC2 untested", "--author", "pi-plan-reviewer", "--json",
+  );
+  expect(blocked.code).toBe(0);
+  expect((JSON.parse(blocked.stdout) as { body: string }).body).toContain("- AC2 untested");
+
+  const usage = await cli("plan-review", task.id);
+  expect(usage.code).toBe(1);
+  expect(usage.stderr).toContain("usage: kanban plan-review");
+  const stray = await cli("plan-review", task.id, "--pass", "--finding", "x");
+  expect(stray.code).toBe(1);
+  expect(stray.stderr).toContain("--finding is only valid with 'plan-review --block'");
+});
+
 test("brief prints pickup context: note, plan, and thread", async () => {
   const task = JSON.parse((await cli("add", "briefed card", "--lane", "implement", "--json")).stdout) as Task;
   await cli("edit", task.id, "--note", "the note body");

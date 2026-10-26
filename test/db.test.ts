@@ -73,6 +73,35 @@ test("rejectTask: feedback comment, card stays in plan; empty feedback rejected"
   expect(() => db.rejectTask(db.createTask({ title: "x" }).id, "why")).toThrow(/not in the plan lane/);
 });
 
+test("planReview: verdict comments with prefixes; lane, plan and message guards", () => {
+  const task = db.createTask({ title: "feature" });
+  db.moveTask(task.id, "plan");
+  db.attach(task.id, "plan", "# plan v1");
+  const pass = db.planReview(task.id, { verdict: "pass", message: "checks out", author: "pi-plan-reviewer" });
+  expect(pass.kind).toBe("review");
+  expect(pass.author).toBe("pi-plan-reviewer");
+  expect(pass.body).toBe("plan review: pass — checks out");
+  expect(db.resolveTask(task.id).laneId).toBe("plan"); // verdicts never move the card
+
+  const block = db.planReview(task.id, { verdict: "block", message: "vague tests", findings: ["AC2 has no test", "step 3 has no target file"] });
+  expect(block.body).toBe("plan review: block — vague tests\n- AC2 has no test\n- step 3 has no target file");
+  expect(block.author).toBe("user"); // author defaults like any comment
+
+  const findingsOnly = db.planReview(task.id, { verdict: "block", findings: ["only finding"] });
+  expect(findingsOnly.body).toBe("plan review: block\n- only finding");
+
+  const bare = db.createTask({ title: "no plan" });
+  db.moveTask(bare.id, "plan");
+  expect(() => db.planReview(bare.id, { verdict: "pass" })).toThrow(/no attached plan/);
+  const moved = db.createTask({ title: "moved on" });
+  db.moveTask(moved.id, "plan");
+  db.attach(moved.id, "plan", "# p");
+  db.approveTask(moved.id);
+  expect(() => db.planReview(moved.id, { verdict: "pass" })).toThrow(/not in the plan lane/);
+  expect(() => db.planReview(task.id, { verdict: "pass", message: "  " })).toThrow(/needs a message/);
+  expect(() => db.planReview(task.id, { verdict: "block", message: "", findings: [] })).toThrow(/needs a message/);
+});
+
 test("comment kinds include the plan-gate pair and the planner's question", () => {
   const task = db.createTask({ title: "kinds" });
   for (const kind of ["comment", "review", "handoff", "approval", "rejection", "question"] as const) {

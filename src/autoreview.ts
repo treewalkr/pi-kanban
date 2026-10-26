@@ -21,11 +21,13 @@ export type { AgentRole };
 export const PLANNER_AUTHOR = "pi-planner";
 export const REVIEWER_AUTHOR = "pi-reviewer";
 export const BUILDER_AUTHOR = "pi-builder";
+export const PLAN_REVIEWER_AUTHOR = "pi-plan-reviewer";
 
 export const AUTHOR_BY_ROLE: Record<AgentRole, string> = {
   planner: PLANNER_AUTHOR,
   reviewer: REVIEWER_AUTHOR,
   builder: BUILDER_AUTHOR,
+  "plan-reviewer": PLAN_REVIEWER_AUTHOR,
 };
 
 export interface AgentJob {
