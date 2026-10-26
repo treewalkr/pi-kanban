@@ -1302,6 +1302,31 @@ button.id-copy {
   min-height: 0;
 }
 
+/* shown while agent configs fetch — the form must not mount before them */
+.settings-loading {
+  margin: 40px 0;
+  text-align: center;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.settings-loading button {
+  margin-left: 8px;
+  padding: 1px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.settings-loading button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 /* the section scrolls across the dialog's full width; content keeps a centered readable column */
 .settings-general {
   width: 100%;

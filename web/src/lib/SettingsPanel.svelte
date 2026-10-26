@@ -71,7 +71,18 @@
         <div class="settings-section-host" hidden={section !== "general"}><GeneralSettings /></div>
       {/if}
       {#if visited.has("agents")}
-        <div class="settings-section-host" hidden={section !== "agents"}><AgentsSettings /></div>
+        <div class="settings-section-host" hidden={section !== "agents"}>
+          {#if agents.loaded}
+            <AgentsSettings />
+          {:else}
+            <!-- gate on load: mounting the form before the fetch lands initializes
+                 every select from an empty store — the "settings look reset" race -->
+            <p class="settings-loading">
+              loading agent settings…
+              <button type="button" onclick={() => void agents.load()}>retry</button>
+            </p>
+          {/if}
+        </div>
       {/if}
     </main>
   </div>
