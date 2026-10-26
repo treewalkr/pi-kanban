@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { runShutdown } from "./shutdown";
 
 let running = false;
 
@@ -52,12 +53,18 @@ export async function serveRestart(): Promise<void> {
   running = true;
   try {
     if (!(await buildWeb())) return;
-    console.log("[restart] build ok — respawning server…");
+    console.log("[restart] build ok — draining sessions, respawning server…");
+    await runShutdown(); // terminate agent children, release leases — no orphans
     Bun.spawn([process.execPath, ...process.argv.slice(1)], {
       detached: true,
       stdin: "ignore",
       stdout: "inherit",
       stderr: "inherit",
+      env: {
+        ...process.env,
+        // the replacement may bind while we exit — sharing the port is safe here
+        KANBAN_SHARE_PORT: "1",
+      },
     });
     setTimeout(() => process.exit(0), 150); // give the spawn a beat to take
   } finally {

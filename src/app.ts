@@ -42,7 +42,11 @@ function createChangeBus() {
 
 export const createApp = (
   db: KanbanDb,
-  opts: { onDevRestart?: () => Promise<void>; onServeRestart?: () => Promise<void> } = {}, // test seams for /restart
+  opts: {
+    onDevRestart?: () => Promise<void>;
+    onServeRestart?: () => Promise<void>;
+    sessions?: () => number;
+  } = {}, // test seams for /restart
 ) => {
   const bus = createChangeBus();
   const booted = Date.now(); // lets clients tell an old server from a restarted one
@@ -91,12 +95,20 @@ export const createApp = (
     .get("/health", () => ({ ok: true, booted }))
     .post(
       "/restart",
-      ({ request, status }) => {
+      ({ request, status, query }) => {
         // drive-by guard: browsers always send Origin on cross-origin posts — only
         // local pages may trigger a restart; curl and same-origin UIs send none/local
         const origin = request.headers.get("origin");
         if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(origin))
           return status(403, { error: "restart is local-only", code: "forbidden" });
+        // in-flight guard: a restart kills running agent sessions — make it explicit
+        const inFlight = opts.sessions ? opts.sessions() : activitySnapshot().length;
+        if (inFlight > 0 && query.force !== "true")
+          return status(409, {
+            error: `${inFlight} agent session(s) in flight — restart kills them; retry with force to proceed`,
+            code: "sessions-in-flight",
+            sessions: inFlight,
+          });
         // fire after the response flushes: dev rewrites the watch marker, serve respawns itself
         const restart =
           process.env.KANBAN_DEV === "1"
@@ -109,6 +121,7 @@ export const createApp = (
         response: {
           202: t.Object({ restarting: t.Boolean() }),
           403: t.Object({ error: t.String(), code: t.String() }),
+          409: t.Object({ error: t.String(), code: t.String(), sessions: t.Number() }),
         },
       },
     )

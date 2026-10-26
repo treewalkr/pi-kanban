@@ -328,3 +328,20 @@ test("POST /restart fires the serve respawn hook in production", async () => {
     else process.env.KANBAN_DEV = prev;
   }
 });
+
+test("POST /restart refuses while agent sessions run; force overrides", async () => {
+  let inFlight = 1;
+  const app = createApp(db, { onServeRestart: async () => {}, sessions: () => inFlight });
+  const refused = await app.handle(new Request("http://localhost/restart", { method: "POST" }));
+  expect(refused.status).toBe(409);
+  const body = (await refused.json()) as { sessions: number; code: string };
+  expect(body.code).toBe("sessions-in-flight");
+  expect(body.sessions).toBe(1);
+  const forced = await app.handle(
+    new Request("http://localhost/restart?force=true", { method: "POST" }),
+  );
+  expect(forced.status).toBe(202);
+  inFlight = 0;
+  const plain = await app.handle(new Request("http://localhost/restart", { method: "POST" }));
+  expect(plain.status).toBe(202);
+});

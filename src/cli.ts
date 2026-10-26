@@ -133,17 +133,13 @@ async function main(): Promise<number> {
   if (cmd === "serve") {
     const port = Number(str(flags, "port") ?? process.env.PORT ?? 4600);
     if (flags.open) setTimeout(() => Bun.spawn(["open", `http://127.0.0.1:${port}`]), 800);
-    const proc = Bun.spawn({
-      cmd: [process.execPath, join(import.meta.dir, "index.ts")],
-      env: {
-        ...process.env,
-        PORT: String(port),
-        ...(flags["auto-review"] ? { KANBAN_AUTO_REVIEW: "1" } : {}),
-      },
-      stdio: ["inherit", "inherit", "inherit"],
-    });
-    await proc.exited;
-    return proc.exitCode ?? 0;
+    // serve in-process: one process, one cmdline — killing `kanban serve` kills
+    // the server and its agent loop, no orphaned wrapper children
+    process.env.PORT = String(port);
+    if (flags["auto-review"]) process.env.KANBAN_AUTO_REVIEW = "1";
+    const { boot } = await import("./index");
+    await boot(); // resolves after listen; the listener keeps the process alive
+    return 0;
   }
 
   const db = new KanbanDb(defaultDbPath());

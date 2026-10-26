@@ -23,7 +23,17 @@
     note = "restarting — waiting for the server…";
     try {
       const before = (await healthBooted()) ?? 0;
-      const res = await api.restart.post();
+      let res = await api.restart.post();
+      // in-flight agent sessions: the server refuses unless forced — ask once
+      const conflict = res.error?.value as { code?: string; sessions?: number } | undefined;
+      if (res.error && conflict?.code === "sessions-in-flight") {
+        const n = conflict.sessions ?? 0;
+        if (!confirm(`${n} agent session${n === 1 ? "" : "s"} running — restarting kills ${n === 1 ? "it" : "them"}. Restart anyway?`)) {
+          note = "restart cancelled — agent sessions left running";
+          return;
+        }
+        res = await api.restart.post(null, { query: { force: "true" } });
+      }
       if (res.error) {
         failed = true;
         const value = res.error.value;
