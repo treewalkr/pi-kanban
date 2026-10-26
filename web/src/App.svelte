@@ -3,6 +3,7 @@
   import { agents } from "./lib/agents.svelte";
   import { eventsUrl } from "./api";
   import LaneView from "./lib/Lane.svelte";
+  import ListView from "./lib/ListView.svelte";
   import TaskDetail from "./lib/TaskDetail.svelte";
   import TaskEditor from "./lib/TaskEditor.svelte";
   import AddLane from "./lib/AddLane.svelte";
@@ -62,6 +63,22 @@
 <div class="app">
   <header class="top">
     <div class="brand"><span class="mark"></span>kanban</div>
+    <div class="view-toggle" role="tablist" aria-label="view">
+      <button
+        class:active={board.view === "board"}
+        role="tab"
+        aria-selected={board.view === "board"}
+        title="lanes — work by stage"
+        onclick={() => (board.view = "board")}>board</button
+      >
+      <button
+        class:active={board.view === "list"}
+        role="tab"
+        aria-selected={board.view === "list"}
+        title="hierarchy — parents and subtasks together"
+        onclick={() => (board.view = "list")}>list</button
+      >
+    </div>
     <SearchBox />
     <div class="chips">
       <button class:active={board.projectFilter === ""} onclick={() => (board.projectFilter = "")}>
@@ -97,6 +114,8 @@
 
   {#if board.loading}
     <div class="state">loading board…</div>
+  {:else if board.view === "list"}
+    <ListView />
   {:else}
     <main class="board">
       {#each board.lanes as lane, i (lane.id)}
