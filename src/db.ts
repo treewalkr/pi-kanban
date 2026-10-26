@@ -3,6 +3,21 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { newId, slugify } from "./ids";
 
+/** Identity of one server/loop instance for agent session leases. */
+export interface LeaseOwner {
+  pid: number;
+  bootId: number;
+}
+
+/** A held agent session lease — one agent works a card at a time, process-wide. */
+export interface AgentLease {
+  taskId: string;
+  role: string;
+  ownerPid: number;
+  bootId: number;
+  heartbeatAt: number;
+}
+
 export interface Lane {
   id: string;
   name: string;
@@ -142,6 +157,13 @@ CREATE TABLE IF NOT EXISTS agent_configs (
   role TEXT PRIMARY KEY,
   config TEXT NOT NULL,
   updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_leases (
+  task_id TEXT PRIMARY KEY,
+  role TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  boot_id INTEGER NOT NULL,
+  heartbeat_at INTEGER NOT NULL
 );
 `;
 
@@ -708,6 +730,59 @@ export class KanbanDb {
   agentConfig(role: string): AgentConfig | null {
     const row = this.q("SELECT config FROM agent_configs WHERE role = ?").get(role) as { config: string } | null;
     return row ? (JSON.parse(row.config) as AgentConfig) : null;
+  }
+
+  // ---------- agent session leases ----------
+  // One agent works a card at a time — across every server process. A loop takes
+  // the lease before spawning and releases it when the session ends; a lease
+  // whose heartbeat went stale (owner killed hard, no graceful release) is
+  // reclaimable by any other process.
+
+  tryTakeLease(taskId: string, role: string, owner: LeaseOwner, staleAfterMs: number): boolean {
+    const now = Date.now();
+    return this.db.transaction((): boolean => {
+      const row = this.q("SELECT heartbeat_at FROM agent_leases WHERE task_id = ?").get(taskId) as
+        | { heartbeat_at: number }
+        | undefined;
+      if (row && now - row.heartbeat_at < staleAfterMs) return false; // a live owner holds it
+      this.q(
+        "INSERT OR REPLACE INTO agent_leases (task_id, role, owner_pid, boot_id, heartbeat_at) VALUES (?, ?, ?, ?, ?)",
+      ).run(taskId, role, owner.pid, owner.bootId, now);
+      return true;
+    })();
+  }
+
+  heartbeatLease(taskId: string, owner: LeaseOwner): void {
+    this.q(
+      "UPDATE agent_leases SET heartbeat_at = ? WHERE task_id = ? AND owner_pid = ? AND boot_id = ?",
+    ).run(Date.now(), taskId, owner.pid, owner.bootId);
+  }
+
+  releaseLease(taskId: string, owner: LeaseOwner): void {
+    this.q("DELETE FROM agent_leases WHERE task_id = ? AND owner_pid = ? AND boot_id = ?").run(
+      taskId,
+      owner.pid,
+      owner.bootId,
+    );
+  }
+
+  releaseLeases(owner: LeaseOwner): void {
+    this.q("DELETE FROM agent_leases WHERE owner_pid = ? AND boot_id = ?").run(owner.pid, owner.bootId);
+  }
+
+  leaseFor(taskId: string): AgentLease | null {
+    const row = this.q("SELECT * FROM agent_leases WHERE task_id = ?").get(taskId) as
+      | { task_id: string; role: string; owner_pid: number; boot_id: number; heartbeat_at: number }
+      | undefined;
+    return row
+      ? {
+          taskId: row.task_id,
+          role: row.role,
+          ownerPid: row.owner_pid,
+          bootId: row.boot_id,
+          heartbeatAt: row.heartbeat_at,
+        }
+      : null;
   }
 
   /** Full replace of a role's config; empty strings/arrays drop out. */

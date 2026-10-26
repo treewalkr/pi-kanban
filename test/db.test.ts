@@ -474,3 +474,33 @@ test("watch fires on writes from another connection and stops on unsubscribe", a
   await Bun.sleep(100);
   expect(hits).toBe(after);
 });
+
+// ---------- agent session leases ----------
+
+test("lease: first taker wins, second live owner refused", () => {
+  const a = { pid: 1, bootId: 100 };
+  const b = { pid: 2, bootId: 200 };
+  expect(db.tryTakeLease("t1", "planner", a, 60_000)).toBe(true);
+  expect(db.tryTakeLease("t1", "planner", b, 60_000)).toBe(false);
+});
+
+test("lease: heartbeat keeps it held, stale lease is reclaimable", () => {
+  const a = { pid: 1, bootId: 100 };
+  const b = { pid: 2, bootId: 200 };
+  expect(db.tryTakeLease("t1", "planner", a, 60_000)).toBe(true);
+  db.heartbeatLease("t1", a); // fresh beat → still held
+  expect(db.tryTakeLease("t1", "planner", b, 60_000)).toBe(false);
+  expect(db.tryTakeLease("t1", "planner", b, 0)).toBe(true); // ttl 0 → any age is stale
+});
+
+test("lease: release frees the card; releaseLeases only drops own rows", () => {
+  const a = { pid: 1, bootId: 100 };
+  const b = { pid: 2, bootId: 200 };
+  expect(db.tryTakeLease("t1", "planner", a, 60_000)).toBe(true);
+  expect(db.tryTakeLease("t2", "reviewer", b, 60_000)).toBe(true);
+  db.releaseLease("t1", a);
+  expect(db.tryTakeLease("t1", "reviewer", b, 60_000)).toBe(true);
+  db.releaseLeases(a);
+  expect(db.leaseFor("t2")?.ownerPid).toBe(2); // b's lease untouched
+  expect(db.tryTakeLease("t1", "planner", a, 60_000)).toBe(true);
+});
