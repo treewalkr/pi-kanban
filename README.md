@@ -33,11 +33,17 @@ kanban serve --open            # web UI at http://127.0.0.1:4600
 bun run dev                    # hacking: api watch + vite dev server
 ```
 
+One server at a time: `serve` refuses to start when the port is already taken
+(and agent work is leased per card in the DB, so stray processes can't double-
+plan a card). A restart drains first — in-flight agent sessions are terminated
+cleanly, never orphaned.
+
 Settings → General → **Service** carries a **restart service** button (web UI and API alike):
 one click rebuilds `web/dist` (`bun run build`) and restarts the server — under `bun run dev`
-it reloads the watched API via a marker rewrite, under `kanban serve` the process respawns
-itself — and the board reconnects automatically once the server is back. Local pages only:
-cross-origin requests are refused.
+it reloads the watched API via a marker rewrite, under `kanban serve` the process drains
+its agent sessions and respawns itself. While agent sessions run, the restart is refused
+with a confirm (force overrides). The board reconnects automatically once the server is
+back. Local pages only: cross-origin requests are refused.
 
 ```bash
 kanban add Fix login redirect --note "bounces to / after oauth" --project my-app
