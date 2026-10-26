@@ -381,3 +381,55 @@ test("search ranks titles, checklists and notes; --project scopes; empty query f
   expect(empty.code).toBe(1);
   expect(empty.stderr).toContain("usage: kanban search");
 });
+
+test("next: prints the highest-priority card for a project", async () => {
+  const proj = "next-e2e-priority";
+  const backlog = JSON.parse(
+    (await cli("add", "backlog card", "--project", proj, "--json")).stdout,
+  ) as Task;
+  const review = JSON.parse(
+    (await cli("add", "review card", "--project", proj, "--json")).stdout,
+  ) as Task;
+  await cli("mv", review.id, "review");
+
+  const out = await cli("next", "--project", proj);
+  expect(out.code).toBe(0);
+  expect(out.stdout).toContain(review.id);
+  expect(out.stdout).toContain("Review");
+
+  // with only a backlog card tagged
+  const projOnlyBacklog = "next-e2e-backlog-only";
+  const onlyBacklog = JSON.parse(
+    (await cli("add", "only backlog card", "--project", projOnlyBacklog, "--json")).stdout,
+  ) as Task;
+
+  const outBacklog = await cli("next", "--project", projOnlyBacklog);
+  expect(outBacklog.code).toBe(0);
+  expect(outBacklog.stdout).toContain(onlyBacklog.id);
+  expect(outBacklog.stdout).toContain("Backlog");
+});
+
+test("next --json: Task object; null and exit 0 when nothing to pull forward", async () => {
+  const proj = "next-e2e-json";
+  const card = JSON.parse(
+    (await cli("add", "review task", "--project", proj, "--json")).stdout,
+  ) as Task;
+  await cli("mv", card.id, "review");
+
+  const resJson = await cli("next", "--project", proj, "--json");
+  expect(resJson.code).toBe(0);
+  const task = JSON.parse(resJson.stdout) as Task;
+  expect(task.id).toBe(card.id);
+  expect(task.laneId).toBe("review");
+  expect(task.title).toBe("review task");
+
+  const emptyProj = "next-e2e-empty";
+  const emptyJson = await cli("next", "--project", emptyProj, "--json");
+  expect(emptyJson.code).toBe(0);
+  expect(JSON.parse(emptyJson.stdout)).toBeNull();
+
+  const emptyHuman = await cli("next", "--project", emptyProj);
+  expect(emptyHuman.code).toBe(0);
+  expect(emptyHuman.stdout.trim()).toBe("nothing to pull forward");
+});
+

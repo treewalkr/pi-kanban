@@ -12,6 +12,7 @@ const HELP = `kanban ${VERSION} — task board for the pi agent
 usage:
   kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>] [--top]
   kanban ls [lane] [--project <tag>] [--json]
+  kanban next [--project <tag>] [--json]  (what's next: review → implement → plan → backlog, oldest first)
   kanban search <query…> [--project <tag>] [--json]
   kanban show <id>
   kanban attach <id> <plan-file>            (re-attach versions; show prints the latest)
@@ -173,6 +174,14 @@ async function main(): Promise<number> {
           .filter((t) => (project ? t.project === project : true));
         if (json) jsonOut(tasks);
         else console.log(listLanes(db, laneRef, project));
+        return 0;
+      }
+
+      case "next": {
+        const task = db.nextTask(project);
+        if (json) jsonOut(task);
+        else if (task) console.log(taskLine(db, task));
+        else console.log(c.dim("nothing to pull forward"));
         return 0;
       }
 
