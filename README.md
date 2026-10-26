@@ -53,7 +53,7 @@ links).
 
 ### pi agent
 
-The skill in `skills/kanban/SKILL.md` (installed to `~/.pi/agent/skills/kanban/` by
+The skill in `skills/pi-kanban/SKILL.md` (installed to `~/.pi/agent/skills/pi-kanban/` by
 `scripts/install.sh`) teaches pi the workflow contract: card per unit of work, advance it
 through lanes, never leave stale cards. The CLI writes the DB directly; the server watches the
 database and pushes changes to the web UI over SSE, so the board updates live.
@@ -104,6 +104,6 @@ src/    db.ts (sqlite + queries) · app.ts (elysia, type App) · index.ts (serve
         cli.ts + render.ts (kanban CLI)
 web/    Svelte 5 SPA: board with nested subtask cards, drag & drop, card detail
         view, editor, filters
-skills/kanban/SKILL.md   pi skill (source of truth)
+skills/pi-kanban/SKILL.md   pi skill (source of truth)
 data/kanban.db           your board (gitignored; KANBAN_DB overrides, used by tests)
 ```

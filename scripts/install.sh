@@ -8,9 +8,9 @@ mkdir -p "$BIN_DIR"
 chmod +x src/cli.ts
 ln -sf "$(pwd)/src/cli.ts" "$BIN_DIR/kanban"
 
-SKILL_DIR="${HOME}/.pi/agent/skills/kanban"
+SKILL_DIR="${HOME}/.pi/agent/skills/pi-kanban"
 mkdir -p "$SKILL_DIR"
-cp skills/kanban/SKILL.md "$SKILL_DIR/SKILL.md"
+cp skills/pi-kanban/SKILL.md "$SKILL_DIR/SKILL.md"
 
 echo "installed:"
 echo "  cli    → $BIN_DIR/kanban"

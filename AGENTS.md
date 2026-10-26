@@ -6,7 +6,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 
 - `src/` — Bun/TS: `db.ts` (SQLite + all queries), `app.ts` (Elysia app, exports `type App`), `index.ts` (server entry), `cli.ts` + `render.ts` (CLI)
 - `web/` — Vite + Svelte 5 SPA (board UI), calls the API via Eden Treaty
-- `skills/kanban/SKILL.md` — pi skill, installed to `~/.pi/agent/skills/kanban/` by `scripts/install.sh`
+- `skills/pi-kanban/SKILL.md` — pi skill, installed to `~/.pi/agent/skills/pi-kanban/` by `scripts/install.sh`
 - `data/kanban.db` — SQLite DB (gitignored); `KANBAN_DB` env var overrides the path (tests use this)
 
 ## Rules

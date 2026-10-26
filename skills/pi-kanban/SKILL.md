@@ -1,5 +1,5 @@
 ---
-name: kanban
+name: pi-kanban
 description: Track and manage task state on the Kanban board (Backlog → Plan → Test + Implement → Review → Done → Archive) using the kanban CLI. Use when starting, planning, or finishing a unit of work; when the user mentions tasks, the board, kanban, backlog, "what's next", or moving work forward; and to review what's in flight.
 ---
 
