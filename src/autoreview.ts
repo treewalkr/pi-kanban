@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { KanbanDb, type AgentConfig, type AgentRole, type Task } from "./db";
+import { KanbanDb, type AgentConfig, type AgentRole, type LeaseOwner, type Task } from "./db";
 
 export type { AgentRole };
 
@@ -48,6 +48,8 @@ export interface SpawnContext {
   log: (message: string) => void;
   /** Streams one formatted output line from the running session. */
   emit: (line: string) => void;
+  /** Registers the child's kill handle so shutdown can terminate in-flight sessions. */
+  track: (kill: () => void) => void;
 }
 
 /** Runs one agent session; resolves with the child's exit code (non-zero = failure). */
@@ -155,12 +157,12 @@ export const PLAN_SECTIONS = [
   "Open questions",
 ] as const;
 
-export function plannerPrompt(task: Task): string {
+export function plannerPrompt(task: Task, now: number = Date.now()): string {
   return `You are pi-planner. Kanban card ${task.id} "${task.title}" is in the Plan lane in this repo — write its implementation plan. The plan is the builder's contract: two builders following it should produce the same behavior.
 
 1. Run: kanban brief ${task.id} — the note (intent, acceptance criteria), any earlier plan version, and the full thread. If the last comment is a rejection or a plan-review block, its feedback and findings are direction for this revision: address every point in v-next.
 2. Ground the plan in the repo: read AGENTS.md, then the files and tests the work touches. Cite real file paths; no invented APIs.
-3. Write the plan to a markdown file (e.g. /tmp/plan-${task.id}.md) using the plan template below: every section filled or "N/A — reason", every acceptance criterion mapped to concrete tests.
+3. Write the plan to a markdown file — use exactly /tmp/plan-${task.id}-${now.toString(36)}.md so concurrent runs never clobber each other — using the plan template below: every section filled or "N/A — reason", every acceptance criterion mapped to concrete tests.
 4. Self-check the plan against the review checklist below and fix every hit before attaching.
 5. Attach it: kanban attach ${task.id} <plan-file>
 6. Hand off with exactly: kanban comment ${task.id} "plan v<N> attached — over to pi-plan-reviewer" --kind handoff --author pi-planner
@@ -263,7 +265,7 @@ export function sessionIdFor(job: AgentJob, now: number = Date.now()): string {
   return `kanban-${job.task.id}-${job.role}-${now.toString(36)}`;
 }
 
-const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit }) => {
+const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }) => {
   const proc = Bun.spawn({
     // json mode streams JSONL events while the session runs (--print waits for the end)
     cmd: ["pi", "--mode", "json", "--session-id", sessionIdFor(job), ...agentFlags(job.role, config), job.prompt],
@@ -272,6 +274,7 @@ const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit }) => {
     stdout: "pipe",
     stderr: "pipe",
   });
+  track(() => proc.kill());
   const stderr = new Response(proc.stderr).text();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -317,6 +320,18 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const db = opts.db;
   const log = opts.log ?? (() => {});
   const spawnFn = opts.spawnFn ?? defaultSpawn;
+
+  // ---------- cross-process session leases ----------
+  // One agent per card across every server: the lease is taken before spawn,
+  // heartbeated while the session runs, released on finish/shutdown. A lease
+  // whose heartbeat went stale (owner killed hard) is reclaimable.
+  const owner: LeaseOwner = { pid: process.pid, bootId: Date.now() };
+  const LEASE_TTL_MS = 60_000;
+  const LEASE_HEARTBEAT_MS = 15_000;
+  const kills = new Set<() => void>();
+  const track = (kill: () => void): void => {
+    kills.add(kill);
+  };
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBlocks = opts.maxBlocks ?? DEFAULT_MAX_BLOCKS;
   const maxPlanBlocks = opts.maxPlanBlocks ?? DEFAULT_MAX_PLAN_BLOCKS;
@@ -386,6 +401,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     const lanes = new Set(db.lanes().map((l) => l.id));
     if (!lanes.has("review") || !lanes.has("implement")) return;
     for (const task of db.tasks()) {
+      if (db.leaseFor(task.id)) continue; // another process (or our own session) works this card
       const role = roleFor(task);
       if (role === "planner") enqueue({ task, role, prompt: plannerPrompt(task) });
       else if (role === "plan-reviewer") enqueue({ task, role, prompt: planReviewerPrompt(task) });
@@ -422,6 +438,10 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         const job = queue.shift()!;
         const fresh = db.tasks().find((t) => t.id === job.task.id);
         if (!fresh || roleFor(fresh) !== job.role) continue; // state moved on while queued
+        if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {
+          log(`${job.role} ${job.task.id}: lease held by another server — skipping`);
+          continue;
+        }
         inFlight.add(job.task.id);
         const config = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
         const flags = agentFlags(job.role, config);
@@ -430,6 +450,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         const skills = config?.skills?.length ? `${config.skills.length} skill${config.skills.length === 1 ? "" : "s"}` : "";
         log(`${job.role} start ${job.task.id} "${job.task.title}" (${[model, thinking, skills].filter(Boolean).join(" · ")})`);
         const session: AgentSessionInfo = { taskId: job.task.id, role: job.role, startedAt: Date.now(), log: [] };
+        const beat = setInterval(() => db.heartbeatLease(job.task.id, owner), LEASE_HEARTBEAT_MS);
         sessions.set(job.task.id, session);
         const emit = (line: string): void => {
           session.log.push(line);
@@ -438,7 +459,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         };
         let code = 0;
         try {
-          code = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit });
+          code = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track });
         } catch (err) {
           log(`${job.role} ${job.task.id}: spawn error ${(err as Error).message}`);
           code = 1;
@@ -454,6 +475,8 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
             }
           }
           sessions.delete(job.task.id);
+          clearInterval(beat);
+          db.releaseLease(job.task.id, owner);
         }
         inFlight.delete(job.task.id);
         try {
@@ -521,11 +544,23 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
 
   return {
     stop(): void {
+      if (stopped) return;
       stopped = true;
       stopWatch();
       activityProviders.delete(provide);
       sessions.clear();
       queue.length = 0;
+      // graceful shutdown: terminate in-flight children so they stop writing,
+      // then drop our leases — no orphans outlive this server
+      for (const kill of kills) {
+        try {
+          kill();
+        } catch {
+          /* already gone */
+        }
+      }
+      kills.clear();
+      db.releaseLeases(owner);
     },
   };
 }

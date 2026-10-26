@@ -839,3 +839,70 @@ describe("auto-plan", () => {
     expect(autoPlanText).toContain("re-arms the");
   });
 });
+
+// ---------- cross-process leases ----------
+
+test("two server loops on one db → exactly one planner spawns", async () => {
+  const { dbFile, writer } = setup();
+  writer.createTask({ title: "race me", lane: "plan" });
+  const a = fakeSpawn();
+  const b = fakeSpawn();
+  const dbA = new KanbanDb(dbFile);
+  const dbB = new KanbanDb(dbFile);
+  const hA = startAutoReview({ db: dbA, cwd: dir, spawnFn: a.spawnFn, watchIntervalMs: 50 });
+  const hB = startAutoReview({ db: dbB, cwd: dir, spawnFn: b.spawnFn, watchIntervalMs: 50 });
+  stop = () => {
+    hA.stop();
+    hB.stop();
+    dbA.close();
+    dbB.close();
+  };
+  await sleep(500);
+  expect(a.calls.length + b.calls.length).toBe(1);
+});
+
+test("stop kills in-flight children and releases the lease", async () => {
+  const { dbFile, writer } = setup();
+  const card = writer.createTask({ title: "long runner", lane: "plan" });
+  const kills: number[] = [];
+  let spawns = 0;
+  const spawnFn: SpawnFn = (_job, ctx) => {
+    spawns += 1;
+    ctx.track(() => kills.push(1));
+    return new Promise<number>(() => {}); // runs until killed
+  };
+  const dbA = new KanbanDb(dbFile);
+  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn, watchIntervalMs: 50 });
+  stop = () => {
+    h.stop();
+    dbA.close();
+  };
+  await sleep(300);
+  expect(spawns).toBe(1);
+  expect(writer.leaseFor(card.id)).not.toBeNull(); // held while the session runs
+  h.stop();
+  expect(kills.length).toBe(1); // child terminated, not orphaned
+  expect(writer.leaseFor(card.id)).toBeNull(); // lease released on shutdown
+});
+
+test("lease released after a session finishes normally", async () => {
+  const { dbFile, writer } = setup();
+  const card = writer.createTask({ title: "quick one", lane: "plan" });
+  const fake = fakeSpawn();
+  const dbA = new KanbanDb(dbFile);
+  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn: fake.spawnFn, watchIntervalMs: 50 });
+  stop = () => {
+    h.stop();
+    dbA.close();
+  };
+  await sleep(300);
+  expect(fake.calls.length).toBe(1);
+  fake.calls[0]!.finish(0);
+  await sleep(200);
+  expect(writer.leaseFor(card.id)).toBeNull();
+});
+
+test("plannerPrompt names a per-run plan file so concurrent runs never clobber", () => {
+  const task = { id: "k7x9", title: "t", note: "", laneId: "plan", project: "", parentId: null, position: 1, createdAt: 1, updatedAt: 1 };
+  expect(plannerPrompt(task as never, 1234)).toContain("/tmp/plan-k7x9-ya.md");
+});
