@@ -48,8 +48,8 @@ export interface SpawnContext {
   log: (message: string) => void;
   /** Streams one formatted output line from the running session. */
   emit: (line: string) => void;
-  /** Registers the child's kill handle so shutdown can terminate in-flight sessions. */
-  track: (kill: () => void) => void;
+  /** Registers the child's kill handle so shutdown can terminate in-flight sessions; returns an untrack cleanup function. */
+  track: (kill: () => void) => () => void;
 }
 
 /** Runs one agent session; resolves with the child's exit code (non-zero = failure). */
@@ -274,7 +274,7 @@ const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }
     stdout: "pipe",
     stderr: "pipe",
   });
-  track(() => proc.kill());
+  const untrack = track(() => proc.kill());
   const stderr = new Response(proc.stderr).text();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -305,7 +305,7 @@ const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }
     }
   })();
 
-  return proc.exited.then(async (code) => {
+  return proc.exited.finally(untrack).then(async (code) => {
     clearTimeout(timer);
     if (timedOut) log(`${job.role} ${job.task.id}: timed out after ${Math.round(timeoutMs / 60_000)} min, killed`);
     else if (code !== 0) {
@@ -329,8 +329,11 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const LEASE_TTL_MS = 60_000;
   const LEASE_HEARTBEAT_MS = 15_000;
   const kills = new Set<() => void>();
-  const track = (kill: () => void): void => {
+  const track = (kill: () => void): (() => void) => {
     kills.add(kill);
+    return () => {
+      kills.delete(kill);
+    };
   };
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBlocks = opts.maxBlocks ?? DEFAULT_MAX_BLOCKS;
@@ -457,13 +460,24 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           if (session.log.length > MAX_LOG_LINES) session.log.shift();
           log(`${job.role} ${job.task.id} │ ${line}`);
         };
+        const jobKills = new Set<() => void>();
+        const jobTrack = (kill: () => void): (() => void) => {
+          const untrack = track(kill);
+          jobKills.add(untrack);
+          return () => {
+            jobKills.delete(untrack);
+            untrack();
+          };
+        };
         let code = 0;
         try {
-          code = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track });
+          code = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track: jobTrack });
         } catch (err) {
           log(`${job.role} ${job.task.id}: spawn error ${(err as Error).message}`);
           code = 1;
         } finally {
+          for (const untrack of jobKills) untrack();
+          jobKills.clear();
           // keep the transcript on the card — the live view evaporates when the session ends
           if (session.log.length > 0) {
             const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));

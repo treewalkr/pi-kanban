@@ -902,6 +902,33 @@ test("lease released after a session finishes normally", async () => {
   expect(writer.leaseFor(card.id)).toBeNull();
 });
 
+test("session finish untracks kill handle so stop() does not invoke it", async () => {
+  const { dbFile, writer } = setup();
+  writer.createTask({ title: "track cleanup", lane: "plan" });
+  let killCalled = false;
+  let finishSession!: () => void;
+  const spawnFn: SpawnFn = (_job, ctx) => {
+    ctx.track(() => {
+      killCalled = true;
+    });
+    return new Promise<number>((resolve) => {
+      finishSession = () => resolve(0);
+    });
+  };
+  const dbA = new KanbanDb(dbFile);
+  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn, watchIntervalMs: 50 });
+  stop = () => {
+    h.stop();
+    dbA.close();
+  };
+  await sleep(300);
+  expect(finishSession).toBeDefined();
+  finishSession();
+  await sleep(200);
+  h.stop();
+  expect(killCalled).toBe(false);
+});
+
 test("stale lease is reclaimed on scan and session spawns", async () => {
   const { dbFile, writer } = setup();
   const card = writer.createTask({ title: "crashed owner card", lane: "plan" });
