@@ -3,7 +3,7 @@ import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type Attachment, type Board, type Comment, type Lane, type Task } from "./db";
 import { activitySnapshot } from "./autoreview";
 import { listPiModels } from "./models";
-import { defaultDevRestart } from "./dev-restart";
+import { devWatchRestart, serveRestart } from "./restart";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
 
@@ -42,7 +42,7 @@ function createChangeBus() {
 
 export const createApp = (
   db: KanbanDb,
-  opts: { onDevRestart?: () => Promise<void> } = {}, // onDevRestart: test seam for /dev/restart
+  opts: { onDevRestart?: () => Promise<void>; onServeRestart?: () => Promise<void> } = {}, // test seams for /restart
 ) => {
   const bus = createChangeBus();
   const booted = Date.now(); // lets clients tell an old server from a restarted one
@@ -90,18 +90,25 @@ export const createApp = (
     })
     .get("/health", () => ({ ok: true, booted }))
     .post(
-      "/dev/restart",
-      ({ status }) => {
-        if (process.env.KANBAN_DEV !== "1")
-          return status(404, { error: "restart requires the dev server (KANBAN_DEV=1)", code: "not-found" });
-        // fire after the response flushes: build + marker rewrite reload the bun --watch process
-        setTimeout(() => void (opts.onDevRestart ?? defaultDevRestart)(), 250);
+      "/restart",
+      ({ request, status }) => {
+        // drive-by guard: browsers always send Origin on cross-origin posts — only
+        // local pages may trigger a restart; curl and same-origin UIs send none/local
+        const origin = request.headers.get("origin");
+        if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(origin))
+          return status(403, { error: "restart is local-only", code: "forbidden" });
+        // fire after the response flushes: dev rewrites the watch marker, serve respawns itself
+        const restart =
+          process.env.KANBAN_DEV === "1"
+            ? (opts.onDevRestart ?? devWatchRestart)
+            : (opts.onServeRestart ?? serveRestart);
+        setTimeout(() => void restart(), 250);
         return status(202, { restarting: true });
       },
       {
         response: {
           202: t.Object({ restarting: t.Boolean() }),
-          404: t.Object({ error: t.String(), code: t.String() }),
+          403: t.Object({ error: t.String(), code: t.String() }),
         },
       },
     )

@@ -271,22 +271,56 @@ test("GET /health reports a boot stamp so clients can detect restarts", async ()
   expect(body.booted).toBeLessThanOrEqual(Date.now());
 });
 
-test("POST /dev/restart is unavailable unless KANBAN_DEV=1", async () => {
+test("POST /restart rejects cross-origin browser requests", async () => {
   const app = createApp(db);
-  const res = await app.handle(new Request("http://localhost/dev/restart", { method: "POST" }));
-  expect(res.status).toBe(404);
+  const res = await app.handle(
+    new Request("http://localhost/restart", {
+      method: "POST",
+      headers: { origin: "https://evil.example" },
+    }),
+  );
+  expect(res.status).toBe(403);
 });
 
-test("POST /dev/restart with KANBAN_DEV=1 accepts, then fires the restart hook", async () => {
+test("POST /restart accepts local origins and no-origin clients", async () => {
+  const app = createApp(db, { onServeRestart: async () => {} });
+  for (const origin of [undefined, "http://localhost:5174", "http://127.0.0.1:4600"]) {
+    const res = await app.handle(
+      new Request("http://localhost/restart", {
+        method: "POST",
+        headers: origin ? { origin } : {},
+      }),
+    );
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ restarting: true });
+  }
+});
+
+test("POST /restart fires the dev hook when KANBAN_DEV=1", async () => {
   const prev = process.env.KANBAN_DEV;
   process.env.KANBAN_DEV = "1";
   try {
     let fired = 0;
     const app = createApp(db, { onDevRestart: async () => void fired++ });
-    const res = await app.handle(new Request("http://localhost/dev/restart", { method: "POST" }));
+    const res = await app.handle(new Request("http://localhost/restart", { method: "POST" }));
     expect(res.status).toBe(202);
-    expect(await res.json()).toEqual({ restarting: true });
     expect(fired).toBe(0); // delayed so the response flushes before any reload
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(fired).toBe(1);
+  } finally {
+    if (prev === undefined) delete process.env.KANBAN_DEV;
+    else process.env.KANBAN_DEV = prev;
+  }
+});
+
+test("POST /restart fires the serve respawn hook in production", async () => {
+  const prev = process.env.KANBAN_DEV;
+  delete process.env.KANBAN_DEV;
+  try {
+    let fired = 0;
+    const app = createApp(db, { onServeRestart: async () => void fired++ });
+    const res = await app.handle(new Request("http://localhost/restart", { method: "POST" }));
+    expect(res.status).toBe(202);
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(fired).toBe(1);
   } finally {

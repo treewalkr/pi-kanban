@@ -2,8 +2,6 @@
   import { theme, setTheme } from "./theme.svelte";
   import { api } from "../api";
 
-  const devMode = import.meta.env.DEV;
-
   let restarting = $state(false);
   let note = $state("");
   let failed = $state(false);
@@ -25,7 +23,7 @@
     note = "restarting — waiting for the server…";
     try {
       const before = (await healthBooted()) ?? 0;
-      const res = await api.dev.restart.post();
+      const res = await api.restart.post();
       if (res.error) {
         failed = true;
         const value = res.error.value;
@@ -46,7 +44,7 @@
         }
       }
       failed = true;
-      note = "server didn't come back — check the dev terminal (build errors?).";
+      note = "server didn't come back — check the serve log (build errors?).";
     } catch {
       failed = true;
       note = "cannot reach the API — is it running?";
@@ -72,22 +70,20 @@
     </div>
   </section>
 
-  {#if devMode}
-    <section class="settings-general-section">
-      <h3 class="settings-general-heading">Development</h3>
-      <p class="settings-general-description">
-        Rebuild the web bundle (<code>bun run build</code>) and reload the dev API — handy after
-        code changes land, e.g. when tasks go done. The board reconnects automatically once the
-        server is back. Needs the API started via <code>bun run dev:api</code>.
-      </p>
-      <div class="settings-dev-restart">
-        <button type="button" class="ghost" onclick={restartService} disabled={restarting}>
-          {restarting ? "restarting…" : "restart service"}
-        </button>
-        {#if note}
-          <span class="settings-dev-note" class:err={failed}>{note}</span>
-        {/if}
-      </div>
-    </section>
-  {/if}
+  <section class="settings-general-section">
+    <h3 class="settings-general-heading">Service</h3>
+    <p class="settings-general-description">
+      Rebuild the web bundle (<code>bun run build</code>) and restart the server — handy after
+      code changes land, e.g. when tasks go done. The board reconnects automatically once the
+      server is back. Local pages only; remote sites cannot trigger it.
+    </p>
+    <div class="settings-dev-restart">
+      <button type="button" class="ghost" onclick={restartService} disabled={restarting}>
+        {restarting ? "restarting…" : "restart service"}
+      </button>
+      {#if note}
+        <span class="settings-dev-note" class:err={failed}>{note}</span>
+      {/if}
+    </div>
+  </section>
 </div>
