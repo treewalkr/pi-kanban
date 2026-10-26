@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -941,9 +942,14 @@ test("session finish untracks kill handle so stop() does not invoke it", async (
 test("stale lease is reclaimed on scan and session spawns", async () => {
   const { dbFile, writer } = setup();
   const card = writer.createTask({ title: "crashed owner card", lane: "plan" });
-  writer.db.query(
-    "INSERT INTO agent_leases (task_id, role, owner_pid, boot_id, heartbeat_at) VALUES (?, ?, ?, ?, ?)",
-  ).run(card.id, "planner", 99999, 1, Date.now() - 120_000);
+  const raw = new Database(dbFile);
+  try {
+    raw.query(
+      "INSERT INTO agent_leases (task_id, role, owner_pid, boot_id, heartbeat_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(card.id, "planner", 99999, 1, Date.now() - 120_000);
+  } finally {
+    raw.close();
+  }
 
   expect(writer.leaseFor(card.id)).not.toBeNull();
   expect(writer.leaseFor(card.id, 60_000)).toBeNull();
