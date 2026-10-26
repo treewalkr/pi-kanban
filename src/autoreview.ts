@@ -191,10 +191,20 @@ export function agentFlags(role: AgentRole, cfg: AgentConfig | null): string[] {
   return args;
 }
 
+/**
+ * A fresh pi session per spawn: `--session-id` resumes an existing session, so a
+ * per-card id would let every role inherit every earlier transcript (the builder
+ * would see the planner's reasoning, hiding plan gaps). The card thread
+ * (`kanban brief`) is the only shared context.
+ */
+export function sessionIdFor(job: AgentJob, now: number = Date.now()): string {
+  return `kanban-${job.task.id}-${job.role}-${now.toString(36)}`;
+}
+
 const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit }) => {
   const proc = Bun.spawn({
     // json mode streams JSONL events while the session runs (--print waits for the end)
-    cmd: ["pi", "--mode", "json", "--session-id", `kanban-${job.task.id}`, ...agentFlags(job.role, config), job.prompt],
+    cmd: ["pi", "--mode", "json", "--session-id", sessionIdFor(job), ...agentFlags(job.role, config), job.prompt],
     cwd,
     stdin: "ignore",
     stdout: "pipe",

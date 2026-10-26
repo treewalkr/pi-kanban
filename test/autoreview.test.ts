@@ -13,6 +13,7 @@ import {
   formatPiEvent,
   plannerPrompt,
   reviewerPrompt,
+  sessionIdFor,
   startAutoReview,
   type AgentJob,
   type SpawnContext,
@@ -344,6 +345,19 @@ describe("auto-review", () => {
     expect(seen[0]!.flags).toContain("--skill");
     expect(seen[0]!.flags).toContain("claude-opus-4-5");
     expect(seen[0]!.timeoutMs).toBe(300_000);
+  });
+
+  test("sessionIdFor: fresh per role and per spawn, valid pi session id", () => {
+    const task = { id: "abc12", title: "t", laneId: "plan" } as never;
+    const planner = sessionIdFor({ task, role: "planner", prompt: "" }, 1_000);
+    const builder = sessionIdFor({ task, role: "builder", prompt: "" }, 1_000);
+    const later = sessionIdFor({ task, role: "planner", prompt: "" }, 2_000);
+    for (const id of [planner, builder, later]) {
+      expect(id).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]$/);
+      expect(id).toStartWith("kanban-abc12-");
+    }
+    expect(planner).not.toBe(builder);
+    expect(planner).not.toBe(later);
   });
 
   test("formatPiEvent renders signal events, drops noise", () => {
