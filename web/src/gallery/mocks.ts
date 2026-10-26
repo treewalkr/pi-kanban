@@ -300,7 +300,7 @@ function stubMutations(): void {
   };
 
   agents.save = async (role: AgentRole, config: AgentConfig): Promise<boolean> => {
-    agents[role] = config;
+    agents.configs[role] = config;
     return true;
   };
 }
@@ -327,8 +327,8 @@ export function seed(): void {
   // loaded=true keeps SettingsPanel's agents tab from fetching the real config
   agents.open = false;
   agents.loaded = true;
-  agents.reviewer = { provider: "anthropic", model: "claude-sonnet-4-6", thinking: "high", timeoutMs: 20 * 60_000 };
-  agents.builder = { provider: "zai", model: "glm-5.3", thinking: "medium", skills: ["~/.pi/agent/skills/tdd"] };
+  agents.configs.reviewer = { provider: "anthropic", model: "claude-sonnet-4-6", thinking: "high", timeoutMs: 20 * 60_000 };
+  agents.configs.builder = { provider: "zai", model: "glm-5.3", thinking: "medium", skills: ["~/.pi/agent/skills/tdd"] };
   agents.models = [...CATALOG];
 
   stubMutations();

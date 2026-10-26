@@ -36,7 +36,7 @@
   });
 
   let role = $state<AgentRole>("reviewer");
-  let form = $state<AgentForm>(toForm(agents.reviewer));
+  let form = $state<AgentForm>(toForm(agents.configs.reviewer));
   let saving = $state(false);
 
   let providers = $derived([...new Set(agents.models.map((m) => m.provider))].sort());
@@ -54,9 +54,9 @@
   // role switch stashes edits in the store so the other role's form can load
   function switchRole(next: AgentRole): void {
     if (next === role) return;
-    agents[role] = toConfig(form);
+    agents.configs[role] = toConfig(form);
     role = next;
-    form = toForm(agents[next]);
+    form = toForm(agents.configs[next]);
   }
 
   async function save(): Promise<void> {
