@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { DEFAULT_LANES, KanbanDb, KanbanError } from "../src/db";
+import { DEFAULT_LANES, PLAN_REVIEWER_AUTHOR, KanbanDb, KanbanError } from "../src/db";
 
 let dir = "";
 let db: KanbanDb;
@@ -323,6 +323,88 @@ test("latestPlans keys the newest plan per card for the board payload", () => {
   expect(plans[a.id]!.content).toBe("v2");
   expect(plans[b.id]!.content).toBe("only");
   expect(db.board().plans[a.id]!.content).toBe("v2");
+});
+
+test("waiting maps the plan-lane thread's last comment to all five states", () => {
+  const task = db.createTask({ title: "w", lane: "plan" });
+  db.attach(task.id, "plan", "# p");
+
+  // gate: reviewer pass verdict
+  db.planReview(task.id, { verdict: "pass", message: "checks out", author: PLAN_REVIEWER_AUTHOR });
+  expect(db.waiting(task.id)).toBe("gate");
+
+  // question: planner asking (kind question)
+  db.createComment(task.id, { author: "pi-planner", kind: "question", body: "sse or polling?" });
+  expect(db.waiting(task.id)).toBe("question");
+
+  // rerun: reviewer failure body (autoreview afterJob)
+  db.createComment(task.id, {
+    author: PLAN_REVIEWER_AUTHOR,
+    kind: "comment",
+    body: "plan review failed (exit 1) — approve or reject the plan directly, or comment on this card to re-run the review.",
+  });
+  expect(db.waiting(task.id)).toBe("rerun");
+
+  // rerun: reviewer cannot-evaluate body
+  db.createComment(task.id, { author: PLAN_REVIEWER_AUTHOR, kind: "comment", body: "cannot evaluate the plan — no checklist verdict" });
+  expect(db.waiting(task.id)).toBe("rerun");
+
+  // capped: reviewer cap body (autoreview plan-capped)
+  db.createComment(task.id, {
+    author: PLAN_REVIEWER_AUTHOR,
+    kind: "comment",
+    body: `plan review cap reached: blocked 2× since the last human comment — the latest plan waits at the gate with open findings. kanban reject ${task.id} --message <feedback> to re-plan, or comment to re-run the review.`,
+  });
+  expect(db.waiting(task.id)).toBe("capped");
+
+  // null: block verdict — the planner or cap comment takes the next turn
+  db.planReview(task.id, { verdict: "block", message: "vague tests" });
+  expect(db.waiting(task.id)).toBeNull();
+
+  // null: planner handoff
+  db.createComment(task.id, { author: "pi-planner", kind: "handoff", body: "plan v2 attached — over to pi-plan-reviewer" });
+  expect(db.waiting(task.id)).toBeNull();
+
+  // null: planner-failure comment (known gap — spec maps only pi-plan-reviewer comments to rerun)
+  db.createComment(task.id, { author: "pi-planner", kind: "comment", body: "auto-plan failed (exit 1) — comment on this card to re-trigger." });
+  expect(db.waiting(task.id)).toBeNull();
+
+  // last comment wins: pass, then a newer human comment → null
+  db.planReview(task.id, { verdict: "pass", message: "ok again", author: PLAN_REVIEWER_AUTHOR });
+  expect(db.waiting(task.id)).toBe("gate");
+  db.createComment(task.id, { author: "user", kind: "comment", body: "use the defaults" });
+  expect(db.waiting(task.id)).toBeNull();
+
+  // null: empty thread
+  const fresh = db.createTask({ title: "fresh", lane: "plan" });
+  expect(db.waiting(fresh.id)).toBeNull();
+});
+
+test("waiting is null outside the plan lane whatever the thread says", () => {
+  const backlog = db.createTask({ title: "b" });
+  db.createComment(backlog.id, { author: "pi-planner", kind: "question", body: "hmm?" });
+  expect(db.waiting(backlog.id)).toBeNull();
+
+  const impl = db.createTask({ title: "i", lane: "implement" });
+  db.createComment(impl.id, { author: PLAN_REVIEWER_AUTHOR, kind: "review", body: "plan review: pass — ok" });
+  expect(db.waiting(impl.id)).toBeNull();
+});
+
+test("board() ships a sparse waiting map keyed by task id", () => {
+  const gate = db.createTask({ title: "g", lane: "plan" });
+  db.attach(gate.id, "plan", "# g");
+  db.planReview(gate.id, { verdict: "pass", message: "ok", author: PLAN_REVIEWER_AUTHOR });
+  const question = db.createTask({ title: "q", lane: "plan" });
+  db.createComment(question.id, { author: "pi-planner", kind: "question", body: "sse?" });
+  const idle = db.createTask({ title: "idle", lane: "plan" }); // plan lane, nothing owed
+  const backlog = db.createTask({ title: "x" }); // question shape, wrong lane
+  db.createComment(backlog.id, { author: "pi-planner", kind: "question", body: "ignored" });
+
+  const { waiting } = db.board();
+  expect(waiting).toEqual({ [gate.id]: "gate", [question.id]: "question" });
+  expect(waiting).toEqual(db.waitingStates());
+  expect(waiting[backlog.id]).toBeUndefined();
+  expect(waiting[idle.id]).toBeUndefined();
 });
 
 test("deleting a task (or its lane) removes its attachments", () => {

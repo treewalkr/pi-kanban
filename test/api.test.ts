@@ -87,6 +87,36 @@ test("/board carries the latest plan per card", async () => {
   expect(board.plans[task.id]).toMatchObject({ content: "v2", version: 2 });
 });
 
+test("/board carries waiting; comment writes flip the state and notify /events", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "one", lane: "plan" });
+  db.attach(task.id, "plan", "# p");
+  db.planReview(task.id, { verdict: "pass", message: "checks out", author: "pi-plan-reviewer" });
+
+  const res = await app.handle(new Request("http://localhost/board"));
+  const board = (await res.json()) as { waiting: Record<string, string> };
+  expect(board.waiting).toEqual({ [task.id]: "gate" });
+
+  // the SSE change bus fires on comment writes, so live boards see the flip
+  const events = await app.handle(new Request("http://localhost/events"));
+  const reader = events.body!.getReader();
+  const readChunk = async () => new TextDecoder().decode((await reader.read()).value);
+  expect(await readChunk()).toContain("event: change"); // fresh subscriber syncs immediately
+
+  await app.handle(
+    new Request(`http://localhost/tasks/${task.id}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ body: "looks good" }),
+    }),
+  );
+  expect(await readChunk()).toContain("event: change");
+
+  const after = await app.handle(new Request("http://localhost/board"));
+  expect(((await after.json()) as { waiting: Record<string, string> }).waiting).toEqual({});
+  await reader.cancel();
+});
+
 test("GET/POST /tasks/:id/comments thread a card; unknown task 404s, bad body 4xx", async () => {
   const app = createApp(db);
   const task = db.createTask({ title: "one" });

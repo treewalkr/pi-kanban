@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { KanbanDb, type AgentConfig, type AgentRole, type LeaseOwner, type Task } from "./db";
+import { KanbanDb, PLAN_REVIEWER_AUTHOR, type AgentConfig, type AgentRole, type LeaseOwner, type Task } from "./db";
 
 export type { AgentRole };
+export { PLAN_REVIEWER_AUTHOR };
 
 /**
  * Auto-agents loop, hosted by the serve process (`KANBAN_AUTO_REVIEW=1`).
@@ -24,7 +25,6 @@ export type { AgentRole };
 export const PLANNER_AUTHOR = "pi-planner";
 export const REVIEWER_AUTHOR = "pi-reviewer";
 export const BUILDER_AUTHOR = "pi-builder";
-export const PLAN_REVIEWER_AUTHOR = "pi-plan-reviewer";
 
 export const AUTHOR_BY_ROLE: Record<AgentRole, string> = {
   planner: PLANNER_AUTHOR,
@@ -425,7 +425,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         db.createComment(task.id, {
           author: PLAN_REVIEWER_AUTHOR,
           kind: "comment",
-          body: `plan review cap reached: blocked ${maxPlanBlocks}× since the last human comment — the latest plan waits at the gate with open findings. kanban reject ${task.id} --message <feedback> to re-plan, or comment to re-run the review.`,
+          body: `${KanbanDb.PLAN_REVIEW_CAP}: blocked ${maxPlanBlocks}× since the last human comment — the latest plan waits at the gate with open findings. kanban reject ${task.id} --message <feedback> to re-plan, or comment to re-run the review.`,
         });
         log(`plan-review cap reached on ${task.id} — leaving it for a human`);
       }

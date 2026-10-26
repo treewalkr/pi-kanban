@@ -50,6 +50,12 @@ export interface Attachment {
 
 export type CommentKind = "comment" | "review" | "handoff" | "approval" | "rejection" | "question";
 
+/** Why a Plan-lane card is waiting on the human (from its thread's last comment). */
+export type WaitingState = "gate" | "question" | "rerun" | "capped";
+
+/** Author of plan-review verdicts/failure comments — shared by the loop and the waiting classifier. */
+export const PLAN_REVIEWER_AUTHOR = "pi-plan-reviewer";
+
 export type AgentRole = "reviewer" | "builder" | "planner" | "plan-reviewer";
 
 export type AgentThinking = "" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -79,6 +85,8 @@ export interface Board {
   lanes: Lane[];
   tasks: Task[];
   plans: Record<string, Attachment>;
+  /** Plan-lane cards waiting on the human, keyed by task id (sparse — absent key = not waiting). */
+  waiting: Record<string, WaitingState>;
 }
 
 export interface TaskPatch {
@@ -251,6 +259,24 @@ const rowToComment = (r: CommentRow): Comment => ({
   createdAt: r.created_at,
 });
 
+/**
+ * The waiting state a Plan-lane card's *last* comment implies, mirroring the loop's
+ * `roleFor` semantics: question kind → asking; reviewer pass verdict → gate; reviewer
+ * cap comment → capped; any other reviewer comment (failed session, cannot evaluate) →
+ * rerun; everything else (no comments, block verdicts, handoffs, human/planner comments)
+ * → null — an agent turn is coming or nothing is owed.
+ */
+export function waitingFromLastComment(last: Pick<Comment, "author" | "kind" | "body">): WaitingState | null {
+  if (last.kind === "question") return "question";
+  if (last.author !== PLAN_REVIEWER_AUTHOR) return null;
+  if (last.kind === "review" && last.body.startsWith(KanbanDb.PLAN_REVIEW_PASS)) return "gate";
+  if (last.kind === "comment") {
+    if (last.body.startsWith(KanbanDb.PLAN_REVIEW_CAP)) return "capped";
+    return "rerun";
+  }
+  return null;
+}
+
 export class KanbanDb {
   private db: Database;
   private stmts = new Map<string, ReturnType<Database["prepare"]>>();
@@ -368,7 +394,7 @@ export class KanbanDb {
     const tasks = this.tasks().sort(
       (a, b) => (laneOrder.get(a.laneId) ?? 0) - (laneOrder.get(b.laneId) ?? 0) || a.position - b.position,
     );
-    return { lanes: this.lanes(), tasks, plans: this.latestPlans() };
+    return { lanes: this.lanes(), tasks, plans: this.latestPlans(), waiting: this.waitingStates() };
   }
 
   laneTasks(laneId: string): Task[] {
@@ -611,6 +637,35 @@ export class KanbanDb {
     return Object.fromEntries(rows.map((r) => [r.card_id, rowToAttachment(r)]));
   }
 
+  // ---------- waiting state ----------
+
+  /** Why this card waits on the human; null unless it is a Plan-lane card whose last comment says so. */
+  waiting(taskRef: string): WaitingState | null {
+    const task = this.resolveTask(taskRef);
+    if (task.laneId !== "plan") return null;
+    const last = this.comments(task.id).at(-1);
+    return last ? waitingFromLastComment(last) : null;
+  }
+
+  /** Waiting state per Plan-lane card (non-null only), keyed by task id — the shape the board payload ships. */
+  waitingStates(): Record<string, WaitingState> {
+    // MAX(rowid) picks the last-posted comment per card — comments are append-only
+    const rows = this.q(
+      `SELECT t.id AS task_id, c.author, c.kind, c.body
+       FROM tasks t
+       JOIN (SELECT card_id, MAX(rowid) AS rid FROM comments GROUP BY card_id) m
+         ON m.card_id = t.id
+       JOIN comments c ON c.rowid = m.rid
+       WHERE t.lane_id = 'plan'`,
+    ).all() as Array<{ task_id: string; author: string; kind: string; body: string }>;
+    const out: Record<string, WaitingState> = {};
+    for (const r of rows) {
+      const state = waitingFromLastComment({ author: r.author, kind: r.kind as CommentKind, body: r.body });
+      if (state) out[r.task_id] = state;
+    }
+    return out;
+  }
+
   // ---------- comments ----------
 
   /** Append to a card's thread; kind and author are normalized here so every writer agrees. */
@@ -703,6 +758,8 @@ export class KanbanDb {
   /** Plan-review verdict prefixes — the autoreview loop arms on these exact strings. */
   static readonly PLAN_REVIEW_PASS = "plan review: pass";
   static readonly PLAN_REVIEW_BLOCK = "plan review: block";
+  /** Prefix of the plan-review cap comment body — autoreview builds its body from this. */
+  static readonly PLAN_REVIEW_CAP = "plan review cap reached";
 
   /** The plan reviewer's verdict: pass leaves the card at the human gate, block sends it back to the planner. Never moves the card. */
   planReview(
