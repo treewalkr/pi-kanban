@@ -51,9 +51,73 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
+const TASK_LINE_RE =
+  /^(?: {0,3}>+[ \t]?)* {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+\[( |x|X)\](?=[ \t]|$)/;
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Toggle the index-th (0-based) task checkbox in the markdown source.
+ * Spliced by character offset so all other bytes remain unchanged.
+ * Returns src unchanged if index is out of range or not an integer.
+ */
+export function toggleTaskLine(src: string, index: number): string {
+  if (!Number.isInteger(index) || index < 0) {
+    return src;
+  }
+
+  const lines = src.split("\n");
+  let inFence: string | null = null;
+  let taskCount = 0;
+  let lineStartOffset = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+
+    if (inFence === null) {
+      const openMatch = line.match(FENCE_OPEN_RE);
+      if (openMatch) {
+        inFence = openMatch[1][0];
+      } else {
+        const match = line.match(TASK_LINE_RE);
+        if (match) {
+          if (taskCount === index) {
+            const markerChar = match[1];
+            const newChar = markerChar === " " ? "x" : " ";
+            const charOffset = lineStartOffset + (match[0].length - 2);
+            return src.slice(0, charOffset) + newChar + src.slice(charOffset + 1);
+          }
+          taskCount++;
+        }
+      }
+    } else {
+      const closeRegex = inFence === "`" ? /^ {0,3}`{3,}[ \t]*$/ : /^ {0,3}~{3,}[ \t]*$/;
+      if (closeRegex.test(line)) {
+        inFence = null;
+      }
+    }
+
+    lineStartOffset += rawLine.length + 1;
+  }
+
+  return src;
+}
+
 /** Card note → sanitized markdown HTML (safe for {@html}). */
-export function renderMarkdown(src: string): string {
-  return DOMPurify.sanitize(marked.parse(src) as string, {
+export function renderMarkdown(
+  src: string,
+  opts?: { interactiveTasks?: boolean }
+): string {
+  let html = marked.parse(src) as string;
+  if (opts?.interactiveTasks) {
+    let taskIndex = 0;
+    html = html.replace(
+      /<input (checked="" )?disabled="" type="checkbox">/g,
+      (_match, checked) => `<input ${checked ?? ""}data-task="${taskIndex++}" type="checkbox">`
+    );
+  }
+  return DOMPurify.sanitize(html, {
     ADD_TAGS: ["input"], // gfm task-list checkboxes
   });
 }
+
