@@ -184,6 +184,9 @@ export const DEFAULT_LANES: Array<Omit<Lane, "position">> = [
   { id: "archive", name: "Archive", description: "Kept out of the way", fixed: 1 },
 ];
 
+/** Lane priority for "what's next": Review → Test + Implement → Plan → Backlog (skill contract). */
+export const NEXT_LANE_PRIORITY = ["review", "implement", "plan", "backlog"] as const;
+
 export function defaultDbPath(): string {
   return process.env.KANBAN_DB ?? join(import.meta.dir, "..", "data", "kanban.db");
 }
@@ -387,6 +390,27 @@ export class KanbanDb {
 
   tasks(): Task[] {
     return (this.q("SELECT * FROM tasks ORDER BY created_at, id").all() as TaskRow[]).map(rowToTask);
+  }
+
+  /**
+   * The skill's "what's next" card: first lane in NEXT_LANE_PRIORITY present on the
+   * board that holds a (project-matching) task; within it the smallest (created_at, id).
+   */
+  nextTask(project?: string): Task | null {
+    const present = new Set(this.lanes().map((l) => l.id));
+    for (const laneId of NEXT_LANE_PRIORITY) {
+      if (!present.has(laneId)) continue;
+      const row = (
+        project !== undefined
+          ? this.q("SELECT * FROM tasks WHERE lane_id = ? AND project = ? ORDER BY created_at, id LIMIT 1").get(
+              laneId,
+              project,
+            )
+          : this.q("SELECT * FROM tasks WHERE lane_id = ? ORDER BY created_at, id LIMIT 1").get(laneId)
+      ) as TaskRow | null;
+      if (row) return rowToTask(row);
+    }
+    return null;
   }
 
   board(): Board {
