@@ -170,7 +170,7 @@
       {#if live}
         <div class="detail-activity">
           <div class="children-head">
-            {live.role === "reviewer" ? "pi-reviewer" : live.role === "planner" ? "pi-planner" : "pi-builder"} · live · {timeAgo(live.startedAt)}
+            {live.role === "reviewer" ? "pi-reviewer" : live.role === "plan-reviewer" ? "pi-plan-reviewer" : live.role === "planner" ? "pi-planner" : "pi-builder"} · live · {timeAgo(live.startedAt)}
           </div>
           <div class="activity-log" bind:this={logEl}>
             {#each live.log as line, i (i)}

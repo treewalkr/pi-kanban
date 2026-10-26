@@ -71,7 +71,7 @@
 <div class="settings-general">
   <section class="settings-general-section">
     <h3 class="settings-general-heading">Role</h3>
-    <p class="settings-general-description">Used by serve --auto-review: the planner writes plans for cards in Plan, the reviewer checks cards in Review, the builder works blocked findings or builds approved plans. Switching stashes unsaved edits.</p>
+    <p class="settings-general-description">Used by serve --auto-review: the planner writes plans for cards in Plan, the plan reviewer checks them against the template checklist before the human gate, the reviewer checks cards in Review, the builder works blocked findings or builds approved plans. Switching stashes unsaved edits.</p>
     <div class="seg">
       <button type="button" class="seg-option" class:on={role === "planner"} aria-pressed={role === "planner"} onclick={() => switchRole("planner")}>
         <span class="seg-label">planner</span>
@@ -81,6 +81,15 @@
       </button>
       <button type="button" class="seg-option" class:on={role === "builder"} aria-pressed={role === "builder"} onclick={() => switchRole("builder")}>
         <span class="seg-label">builder</span>
+      </button>
+      <button
+        type="button"
+        class="seg-option"
+        class:on={role === "plan-reviewer"}
+        aria-pressed={role === "plan-reviewer"}
+        onclick={() => switchRole("plan-reviewer")}
+      >
+        <span class="seg-label">plan reviewer</span>
       </button>
     </div>
   </section>
@@ -150,7 +159,7 @@
         <label>
           thinking
           <select bind:value={form.thinking}>
-            <option value="">default{role === "reviewer" || role === "planner" ? " (max)" : ""}</option>
+            <option value="">default{role === "reviewer" || role === "planner" || role === "plan-reviewer" ? " (max)" : ""}</option>
             <option value="off">off</option>
             <option value="minimal">minimal</option>
             <option value="low">low</option>

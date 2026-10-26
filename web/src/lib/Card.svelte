@@ -85,7 +85,13 @@
     {#if task.project}<span class="chip">{task.project}</span>{/if}
     {#if board.activity[task.id]}
       <span class="chip working" title="pi agent working — open the card for live output">
-        ◌ {board.activity[task.id].role === "reviewer" ? "reviewing" : "building"} · {timeAgo(board.activity[task.id].startedAt)}
+        ◌ {board.activity[task.id].role === "reviewer"
+          ? "reviewing"
+          : board.activity[task.id].role === "plan-reviewer"
+            ? "checking plan"
+            : board.activity[task.id].role === "planner"
+              ? "planning"
+              : "building"} · {timeAgo(board.activity[task.id].startedAt)}
       </span>
     {/if}
     <span class="age" title={new Date(task.updatedAt).toLocaleString()}>{timeAgo(task.updatedAt)}</span>

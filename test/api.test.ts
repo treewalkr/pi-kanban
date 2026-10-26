@@ -197,6 +197,19 @@ test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async (
   const got = await app.handle(new Request("http://localhost/agents"));
   expect(await got.json()).toMatchObject({ reviewer: { provider: "anthropic" }, builder: null });
 
+  const putPlanReviewer = await app.handle(
+    new Request("http://localhost/agents/plan-reviewer", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-5.2", thinking: "medium" }),
+    }),
+  );
+  expect(putPlanReviewer.status).toBe(200);
+  const gotAll = (await app.handle(new Request("http://localhost/agents"))).json() as Promise<{
+    "plan-reviewer": { model?: string; thinking?: string } | null;
+  }>;
+  expect((await gotAll)["plan-reviewer"]).toMatchObject({ model: "openai/gpt-5.2", thinking: "medium" });
+
   const json = { headers: { "content-type": "application/json" } };
   const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
   const badRole = await app.handle(new Request("http://localhost/agents/worker", { method: "PUT", ...putBody({}) }));
