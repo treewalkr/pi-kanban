@@ -202,6 +202,10 @@ test("comment/comments roundtrip; show prints the thread; usage errors exit 1", 
   const human = await cli("comments", task.id);
   expect(human.stdout).toContain("pi-builder");
   expect(human.stdout).toContain("picked this up");
+  expect(human.stdout).toContain("── today");
+  expect(human.stdout).toContain("[review]");
+  expect(human.stdout).toContain("▶ ");
+  expect(human.stdout).toContain("just now");
 
   const show = await cli("show", task.id);
   expect(show.stdout).toContain("thread:");

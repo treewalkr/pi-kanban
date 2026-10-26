@@ -1,5 +1,6 @@
 import type { Comment, KanbanDb, Lane, Task } from "./db";
 import type { SearchResult } from "./search";
+import { clockTime, KIND_TAG_COLORS, latestStateIndex, relTime, shortDate, wrapText } from "./thread";
 
 const enabled = !!process.stdout.isTTY && !process.env.NO_COLOR;
 
@@ -79,20 +80,76 @@ export function commentLine(comment: Comment): string {
   return `${c.green("✓")} ${c.dim(comment.id)}  ${comment.author}${kind}  ${truncate(comment.body, 60)}`;
 }
 
-/** A card's thread, oldest first — dim meta line, body indented like the note. */
-export function commentThread(comments: Comment[]): string {
+/** A card's thread, oldest first — scannable day-grouped layout with kind tags and latest state marker. */
+export function commentThread(
+  comments: Comment[],
+  width: number = process.stdout.columns ?? 80,
+  now: number = Date.now(),
+): string {
   if (comments.length === 0) return c.dim("no comments");
-  return comments
-    .map((comment) => {
-      const meta = [
-        new Date(comment.createdAt).toLocaleString(),
-        comment.author,
-        ...(comment.kind === "comment" ? [] : [comment.kind]),
-      ].join(" · ");
-      const body = comment.body.split("\n").map((line) => `  ${line}`).join("\n");
-      return `${c.dim(meta)}\n${body}`;
-    })
-    .join("\n\n");
+
+  const latestIdx = latestStateIndex(comments);
+  const bodyWidth = Math.max(20, width - 2);
+
+  const sameDay = (t1: number, t2: number): boolean => {
+    const d1 = new Date(t1);
+    const d2 = new Date(t2);
+    return (
+      d1.getFullYear() === d2.getFullYear() &&
+      d1.getMonth() === d2.getMonth() &&
+      d1.getDate() === d2.getDate()
+    );
+  };
+
+  type CommentWithIndex = { comment: Comment; index: number };
+  const groups: Array<{ dateLabel: string; items: CommentWithIndex[] }> = [];
+  let currentItems: CommentWithIndex[] = [];
+
+  for (let i = 0; i < comments.length; i++) {
+    const com = comments[i]!;
+    if (i > 0 && !sameDay(comments[i - 1]!.createdAt, com.createdAt)) {
+      groups.push({
+        dateLabel: shortDate(currentItems[0]!.comment.createdAt, now),
+        items: currentItems,
+      });
+      currentItems = [];
+    }
+    currentItems.push({ comment: com, index: i });
+  }
+  if (currentItems.length > 0) {
+    groups.push({
+      dateLabel: shortDate(currentItems[0]!.comment.createdAt, now),
+      items: currentItems,
+    });
+  }
+
+  const renderedGroups = groups.map((group) => {
+    const sep = c.dim(`── ${group.dateLabel}`);
+    const commentBlocks = group.items.map(({ comment, index }) => {
+      const isLatestState = index === latestIdx;
+      const isLast = index === comments.length - 1;
+
+      const parts: string[] = [
+        c.dim(clockTime(comment.createdAt)),
+        c.bold(comment.author),
+      ];
+      if (comment.kind !== "comment") {
+        const color = KIND_TAG_COLORS[comment.kind] ?? "#7d8590";
+        parts.push(c.hex(color, `[${comment.kind}]`));
+      }
+      if (isLast) {
+        parts.push(c.dim(relTime(comment.createdAt, now)));
+      }
+      const meta = (isLatestState ? c.bold("▶ ") : "") + parts.join(" · ");
+      const bodyLines = wrapText(comment.body, bodyWidth)
+        .map((line) => `  ${line}`)
+        .join("\n");
+      return `${meta}\n${bodyLines}`;
+    });
+    return `${sep}\n${commentBlocks.join("\n\n")}`;
+  });
+
+  return renderedGroups.join("\n\n");
 }
 
 /** Ranked search results, best first — title rows read like `ls`, checklists keep their box. */
