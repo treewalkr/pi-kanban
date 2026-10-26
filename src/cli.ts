@@ -5,7 +5,7 @@ import { KanbanDb, KanbanError, defaultDbPath, type Task, type TaskPatch } from 
 import { c, commentLine, commentThread, laneList, listLanes, searchResults, taskDetail, taskLine } from "./render";
 import { searchBoard } from "./search";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 const HELP = `kanban ${VERSION} — task board for the pi agent
 
