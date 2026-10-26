@@ -4,7 +4,7 @@
   import { api } from "../api";
   import { board } from "./board.svelte";
   import IdChip from "./IdChip.svelte";
-  import { renderMarkdown } from "./markdown";
+  import { renderMarkdown, toggleTaskLine } from "./markdown";
   import { laneColor, timeAgo } from "./util";
 
   const task = board.editing!;
@@ -57,6 +57,26 @@
   async function toLane(laneId: string) {
     await board.moveTask(task.id, laneId);
     board.closeCard();
+  }
+
+  async function toggleNoteTask(e: MouseEvent) {
+    const el = e.target;
+    if (!(el instanceof HTMLInputElement) || el.type !== "checkbox") return;
+    const rawIndex = el.dataset.task;
+    if (rawIndex === undefined) return;
+    const index = Number.parseInt(rawIndex, 10);
+    if (!Number.isInteger(index)) return;
+
+    const next = toggleTaskLine(me.note, index);
+    if (next === me.note) {
+      el.checked = !el.checked;
+      return;
+    }
+
+    await board.updateTask(me.id, { note: next });
+    if (board.error) {
+      el.checked = !el.checked;
+    }
   }
 
   async function addSubtask() {
@@ -154,7 +174,9 @@
     <h2 class="detail-title">{me.title}</h2>
     <div class="detail-body">
       {#if me.note}
-        <div class="detail-note md">{@html renderMarkdown(me.note)}</div>
+        <div class="detail-note md" role="presentation" onclick={toggleNoteTask}>
+          {@html renderMarkdown(me.note, { interactiveTasks: true })}
+        </div>
       {:else}
         <p class="detail-note empty">no note</p>
       {/if}
