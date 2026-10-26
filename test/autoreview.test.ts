@@ -902,6 +902,29 @@ test("lease released after a session finishes normally", async () => {
   expect(writer.leaseFor(card.id)).toBeNull();
 });
 
+test("stale lease is reclaimed on scan and session spawns", async () => {
+  const { dbFile, writer } = setup();
+  const card = writer.createTask({ title: "crashed owner card", lane: "plan" });
+  writer.db.query(
+    "INSERT INTO agent_leases (task_id, role, owner_pid, boot_id, heartbeat_at) VALUES (?, ?, ?, ?, ?)",
+  ).run(card.id, "planner", 99999, 1, Date.now() - 120_000);
+
+  expect(writer.leaseFor(card.id)).not.toBeNull();
+  expect(writer.leaseFor(card.id, 60_000)).toBeNull();
+
+  const fake = fakeSpawn();
+  const dbA = new KanbanDb(dbFile);
+  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn: fake.spawnFn, watchIntervalMs: 50 });
+  stop = () => {
+    h.stop();
+    dbA.close();
+  };
+  await sleep(300);
+  expect(fake.calls.length).toBe(1);
+  expect(fake.calls[0]!.job.role).toBe("planner");
+  expect(writer.leaseFor(card.id)?.ownerPid).toBe(process.pid);
+});
+
 test("plannerPrompt names a per-run plan file so concurrent runs never clobber", () => {
   const task = { id: "k7x9", title: "t", note: "", laneId: "plan", project: "", parentId: null, position: 1, createdAt: 1, updatedAt: 1 };
   expect(plannerPrompt(task as never, 1234)).toContain("/tmp/plan-k7x9-ya.md");

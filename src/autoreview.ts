@@ -401,7 +401,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     const lanes = new Set(db.lanes().map((l) => l.id));
     if (!lanes.has("review") || !lanes.has("implement")) return;
     for (const task of db.tasks()) {
-      if (db.leaseFor(task.id)) continue; // another process (or our own session) works this card
+      if (db.leaseFor(task.id, LEASE_TTL_MS)) continue; // another process (or our own session) works this card
       const role = roleFor(task);
       if (role === "planner") enqueue({ task, role, prompt: plannerPrompt(task) });
       else if (role === "plan-reviewer") enqueue({ task, role, prompt: planReviewerPrompt(task) });

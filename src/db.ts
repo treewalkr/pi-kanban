@@ -770,19 +770,19 @@ export class KanbanDb {
     this.q("DELETE FROM agent_leases WHERE owner_pid = ? AND boot_id = ?").run(owner.pid, owner.bootId);
   }
 
-  leaseFor(taskId: string): AgentLease | null {
+  leaseFor(taskId: string, staleAfterMs?: number): AgentLease | null {
     const row = this.q("SELECT * FROM agent_leases WHERE task_id = ?").get(taskId) as
       | { task_id: string; role: string; owner_pid: number; boot_id: number; heartbeat_at: number }
       | undefined;
-    return row
-      ? {
-          taskId: row.task_id,
-          role: row.role,
-          ownerPid: row.owner_pid,
-          bootId: row.boot_id,
-          heartbeatAt: row.heartbeat_at,
-        }
-      : null;
+    if (!row) return null;
+    if (staleAfterMs !== undefined && Date.now() - row.heartbeat_at >= staleAfterMs) return null;
+    return {
+      taskId: row.task_id,
+      role: row.role,
+      ownerPid: row.owner_pid,
+      bootId: row.boot_id,
+      heartbeatAt: row.heartbeat_at,
+    };
   }
 
   /** Full replace of a role's config; empty strings/arrays drop out. */

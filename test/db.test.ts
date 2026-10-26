@@ -491,6 +491,9 @@ test("lease: heartbeat keeps it held, stale lease is reclaimable", () => {
   db.heartbeatLease("t1", a); // fresh beat → still held
   expect(db.tryTakeLease("t1", "planner", b, 60_000)).toBe(false);
   expect(db.tryTakeLease("t1", "planner", b, 0)).toBe(true); // ttl 0 → any age is stale
+  expect(db.leaseFor("t1", 0)).toBeNull(); // stale lease filtered out
+  expect(db.leaseFor("t1")).not.toBeNull(); // raw lookup finds the row
+  expect(db.leaseFor("t1", 60_000)).not.toBeNull(); // within TTL is live
 });
 
 test("lease: release frees the card; releaseLeases only drops own rows", () => {
