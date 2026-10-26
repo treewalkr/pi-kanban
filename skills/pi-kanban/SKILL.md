@@ -103,6 +103,7 @@ review your own work in that mode unless asked.
 ```
 kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>] [--top]  # new card (Backlog by default; --parent nests it)
 kanban ls [lane] [--project <tag>] [--json]                           # board overview / one lane (children indented)
+kanban next [--project <tag>] [--json]                           # what's next: review → implement → plan → backlog, oldest first
 kanban search <query…> [--project <tag>] [--json]                     # ranked matches: titles, checklist lines, notes, plans
 kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks
 kanban attach <id> <plan-file>                                        # attach/version a plan; show prints the latest
@@ -173,7 +174,9 @@ kanban help | version                                                 # CLI help
 
 ## When the user asks "what's next" / to plan the day
 
-Run `kanban ls` (or `--json`), read Review first (awaiting acceptance), then
-Test + Implement (in flight), then Plan, then Backlog. Skip Archive — it's
-history, not work. Summarize per lane and propose the next card to pull
-forward.
+Run `kanban next` (add `--project <repo>` on a shared board; `--json` for scripts):
+it prints the proposed card — first match by lane priority (Review →
+Test + Implement → Plan → Backlog), oldest first within the lane. Done,
+Archive and custom lanes are never proposed; an empty answer means the
+board is clear. `kanban brief <id>` picks the proposal up from there. For
+a fuller picture, run `kanban ls` and summarize per lane.
