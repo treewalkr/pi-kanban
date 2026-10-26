@@ -13,6 +13,14 @@ function loadProjectFilter(): string {
   }
 }
 
+function loadView(): "board" | "list" {
+  try {
+    return localStorage.getItem("kanban-view") === "list" ? "list" : "board";
+  } catch {
+    return "board";
+  }
+}
+
 class BoardStore {
   lanes = $state<Lane[]>([]);
   tasks = $state<Task[]>([]);
@@ -37,6 +45,31 @@ class BoardStore {
     } catch {
       /* storage unavailable — the filter still works for this session */
     }
+  }
+
+  #view = $state<"board" | "list">(loadView());
+
+  /** Active lens over the same data: lanes (board) or hierarchy (list). Persists as kanban-view. */
+  get view(): "board" | "list" {
+    return this.#view;
+  }
+
+  set view(v: "board" | "list") {
+    this.#view = v;
+    try {
+      localStorage.setItem("kanban-view", v);
+    } catch {
+      /* storage unavailable — the toggle still works for this session */
+    }
+  }
+
+  /** Collapsed parents in the list view (missing = expanded — the list's default is open, unlike the board). */
+  listCollapsed = $state<Set<string>>(new Set());
+
+  toggleListCollapsed(id: string): void {
+    const next = new Set(this.listCollapsed);
+    if (!next.delete(id)) next.add(id);
+    this.listCollapsed = next;
   }
 
   editing = $state<Task | null>(null);
