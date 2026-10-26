@@ -196,8 +196,17 @@
         </button>
       </div>
       <div class="gallery-frames">
-        <Frame title="plain" note="id chip · project chip · age">
+        <Frame title="plain" note="id chip · project chip · waiting ✓ badge · age">
           <CardView task={byId(ids.plain)} />
+        </Frame>
+        <Frame title="waiting: question" note="? amber badge in card-meta">
+          <CardView task={byId(ids.question)} />
+        </Frame>
+        <Frame title="waiting: rerun" note="↻ badge — muted">
+          <CardView task={byId(ids.rerun)} />
+        </Frame>
+        <Frame title="waiting: capped" note="⏸ badge — muted">
+          <CardView task={byId(ids.capped)} />
         </Frame>
         <Frame title="markdown note" note="checklist · fenced code · disclosure + nested child">
           <CardView task={byId(ids.epic)} />

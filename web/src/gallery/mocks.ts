@@ -113,6 +113,36 @@ const plain = task({
   updatedAt: now() - 10 * MIN,
   note: "Bump cli VERSION + package.json together.",
 });
+const waitingQuestion = task({
+  id: "q1a5w",
+  title: "waiting on a design question",
+  laneId: "plan",
+  project: "kanban",
+  position: 120,
+  createdAt: now() - 4 * HOUR,
+  updatedAt: now() - 30 * MIN,
+  note: "Planner asked SSE vs polling — the amber ? badge is on the card.",
+});
+const waitingRerun = task({
+  id: "r6e3n",
+  title: "review session stalled",
+  laneId: "plan",
+  project: "kanban",
+  position: 140,
+  createdAt: now() - 3 * HOUR,
+  updatedAt: now() - 45 * MIN,
+  note: "Plan review ended without a verdict — a comment re-runs it.",
+});
+const waitingCapped = task({
+  id: "c8p2k",
+  title: "plan review hit the cap",
+  laneId: "plan",
+  project: "kanban",
+  position: 160,
+  createdAt: now() - 6 * HOUR,
+  updatedAt: now() - 1 * HOUR,
+  note: "Blocked twice since the last human comment — needs a human.",
+});
 const crossChild = task({
   id: "m6j2d",
   title: "contrast check both themes",
@@ -163,7 +193,7 @@ const archived = task({
   note: "Kept for the archive strip + dimmed card state.",
 });
 
-const TASKS: Task[] = [epic, subA, subB, docsDone, docsChild, plain, crossChild, working, implA, implB, archived];
+const TASKS: Task[] = [epic, subA, subB, docsDone, docsChild, plain, waitingQuestion, waitingRerun, waitingCapped, crossChild, working, implA, implB, archived];
 
 const PLAN: Attachment = {
   id: "pln1",
@@ -199,6 +229,9 @@ const ACTIVITY: Record<string, AgentSessionInfo> = {
 export const ids = {
   epic: epic.id,
   plain: plain.id,
+  question: waitingQuestion.id,
+  rerun: waitingRerun.id,
+  capped: waitingCapped.id,
   docs: docsDone.id,
   crossChild: crossChild.id,
   working: working.id,
@@ -311,6 +344,7 @@ export function seed(): void {
   board.lanes = LANES.map((l) => ({ ...l }));
   board.tasks = TASKS.map((t) => ({ ...t }));
   board.plans = { [epic.id]: { ...PLAN } };
+  board.waiting = { [plain.id]: "gate", [waitingQuestion.id]: "question", [waitingRerun.id]: "rerun", [waitingCapped.id]: "capped" };
   board.activity = Object.fromEntries(Object.entries(ACTIVITY).map(([k, v]) => [k, { ...v, log: [...v.log] }]));
   board.loading = false;
   board.error = "";
