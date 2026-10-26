@@ -62,6 +62,11 @@ describe("renderMarkdown", () => {
     const corpus = [
       "- [ ] plain list",
       "  - [x] nested list",
+      "    - [ ] 3-level nested list",
+      "- [ ] 4-space parent",
+      "    - [ ] 4-space nested list",
+      "- [ ]",
+      "- [ ] after empty item",
       "1. [ ] ordered list",
       "> - [X] blockquoted list",
       "",
@@ -82,12 +87,54 @@ describe("renderMarkdown", () => {
     }
 
     expect(dataTaskMatches.length).toBe(countedByToggle);
-    expect(dataTaskMatches.length).toBe(4);
+    expect(dataTaskMatches.length).toBe(8);
 
-    // Fenced and 4-space-indented lines produce no checkbox and are not counted
-    expect(html).not.toContain('data-task="4"');
+    // Empty item renders as plain bullet, fenced and 4-space indented lines produce no checkbox
+    expect(html).toContain("<li>[ ]</li>");
+    expect(html).not.toContain('data-task="8"');
     expect(html).toContain('<pre><code class="hljs language-plaintext">- [ ] fenced code</code></pre>');
     expect(html).toContain('<pre><code class="hljs language-plaintext">- [ ] 4 spaces indent</code></pre>');
+  });
+
+  test("toggling each rendered index flips the line it rendered from", () => {
+    const corpus = [
+      "- [ ] plain list",
+      "  - [x] nested list",
+      "    - [ ] 3-level nested list",
+      "- [ ] 4-space parent",
+      "    - [ ] 4-space nested list",
+      "- [ ]",
+      "- [ ] after empty item",
+      "1. [ ] ordered list",
+      "> - [X] blockquoted list",
+      "",
+      "```",
+      "- [ ] fenced code",
+      "```",
+      "",
+      "    - [ ] 4 spaces indent",
+    ].join("\n");
+
+    const expectedLines = [0, 1, 2, 3, 4, 6, 7, 8];
+    const origLines = corpus.split("\n");
+
+    for (let i = 0; i < expectedLines.length; i++) {
+      const targetLineIdx = expectedLines[i];
+      const toggled = toggleTaskLine(corpus, i);
+      const toggledLines = toggled.split("\n");
+
+      expect(toggledLines.length).toBe(origLines.length);
+      for (let l = 0; l < origLines.length; l++) {
+        if (l === targetLineIdx) {
+          expect(toggledLines[l]).not.toBe(origLines[l]);
+          const origChar = origLines[l].includes("[x]") || origLines[l].includes("[X]") ? "x" : " ";
+          const expectedChar = origChar === " " ? "x" : " ";
+          expect(toggledLines[l]).toContain(`[${expectedChar}]`);
+        } else {
+          expect(toggledLines[l]).toBe(origLines[l]);
+        }
+      }
+    }
   });
 
   test("toggleTaskLine flips only the nth task marker", () => {

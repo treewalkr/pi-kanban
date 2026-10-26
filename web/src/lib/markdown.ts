@@ -51,9 +51,95 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
-const TASK_LINE_RE =
-  /^(?: {0,3}>+[ \t]?)* {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+\[( |x|X)\](?=[ \t]|$)/;
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+const HEADING_RE = /^ {0,3}#{1,6}[ \t]/;
+const HR_RE = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/;
+const LIST_ITEM_PREFIX_RE = /^([ \t]*)(?:[-*+]|\d{1,9}[.)])[ \t]+/;
+const TASK_MARKER_RE = /^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\[( |x|X)\](?= +\S)/;
+
+interface TaskLineMatch {
+  charOffset: number;
+  markerChar: string;
+}
+
+function findTaskLines(src: string): TaskLineMatch[] {
+  const lines = src.split("\n");
+  let inFence: string | null = null;
+  let inList = false;
+  let blankLineSeen = true;
+  let currentQuoteDepth = 0;
+  let lineStartOffset = 0;
+  const tasks: TaskLineMatch[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+
+    if (inFence !== null) {
+      const closeRegex = inFence === "`" ? /^ {0,3}`{3,}[ \t]*$/ : /^ {0,3}~{3,}[ \t]*$/;
+      if (closeRegex.test(line)) {
+        inFence = null;
+        inList = false;
+        blankLineSeen = false;
+      }
+    } else {
+      const openMatch = line.match(FENCE_OPEN_RE);
+      if (openMatch) {
+        inFence = openMatch[1][0];
+        inList = false;
+        blankLineSeen = false;
+      } else {
+        const quoteMatch = line.match(/^(?: {0,3}>+[ \t]?)+/);
+        const quotePrefix = quoteMatch ? quoteMatch[0] : "";
+        const quoteDepth = quoteMatch ? (quotePrefix.match(/>/g)?.length ?? 0) : 0;
+        if (quoteDepth !== currentQuoteDepth) {
+          inList = false;
+          currentQuoteDepth = quoteDepth;
+          blankLineSeen = true;
+        }
+
+        const rest = line.slice(quotePrefix.length);
+        if (rest.trim() === "") {
+          blankLineSeen = true;
+        } else if (HEADING_RE.test(rest) || HR_RE.test(rest)) {
+          inList = false;
+          blankLineSeen = false;
+        } else {
+          const listMatch = rest.match(LIST_ITEM_PREFIX_RE);
+          if (listMatch) {
+            const rawIndent = listMatch[1];
+            const isCodeIndent = rawIndent.includes("\t") || rawIndent.length >= 4;
+            if (inList || !isCodeIndent) {
+              const taskMatch = rest.match(TASK_MARKER_RE);
+              if (taskMatch) {
+                const markerChar = taskMatch[1];
+                const charOffset = lineStartOffset + quotePrefix.length + (taskMatch[0].length - 2);
+                tasks.push({ charOffset, markerChar });
+              }
+              inList = true;
+              blankLineSeen = false;
+            } else {
+              inList = false;
+              blankLineSeen = false;
+            }
+          } else {
+            const indentMatch = rest.match(/^[ \t]*/);
+            const indent = indentMatch ? indentMatch[0] : "";
+            const isCodeIndent = indent.includes("\t") || indent.length >= 4;
+            if (!isCodeIndent && blankLineSeen) {
+              inList = false;
+            }
+            blankLineSeen = false;
+          }
+        }
+      }
+    }
+
+    lineStartOffset += rawLine.length + 1;
+  }
+
+  return tasks;
+}
 
 /**
  * Toggle the index-th (0-based) task checkbox in the markdown source.
@@ -65,42 +151,14 @@ export function toggleTaskLine(src: string, index: number): string {
     return src;
   }
 
-  const lines = src.split("\n");
-  let inFence: string | null = null;
-  let taskCount = 0;
-  let lineStartOffset = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const rawLine = lines[i];
-    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-
-    if (inFence === null) {
-      const openMatch = line.match(FENCE_OPEN_RE);
-      if (openMatch) {
-        inFence = openMatch[1][0];
-      } else {
-        const match = line.match(TASK_LINE_RE);
-        if (match) {
-          if (taskCount === index) {
-            const markerChar = match[1];
-            const newChar = markerChar === " " ? "x" : " ";
-            const charOffset = lineStartOffset + (match[0].length - 2);
-            return src.slice(0, charOffset) + newChar + src.slice(charOffset + 1);
-          }
-          taskCount++;
-        }
-      }
-    } else {
-      const closeRegex = inFence === "`" ? /^ {0,3}`{3,}[ \t]*$/ : /^ {0,3}~{3,}[ \t]*$/;
-      if (closeRegex.test(line)) {
-        inFence = null;
-      }
-    }
-
-    lineStartOffset += rawLine.length + 1;
+  const tasks = findTaskLines(src);
+  if (index >= tasks.length) {
+    return src;
   }
 
-  return src;
+  const target = tasks[index];
+  const newChar = target.markerChar === " " ? "x" : " ";
+  return src.slice(0, target.charOffset) + newChar + src.slice(target.charOffset + 1);
 }
 
 /** Card note → sanitized markdown HTML (safe for {@html}). */
