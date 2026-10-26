@@ -33,7 +33,7 @@ export interface Attachment {
   createdAt: number;
 }
 
-export type CommentKind = "comment" | "review" | "handoff" | "approval" | "rejection";
+export type CommentKind = "comment" | "review" | "handoff" | "approval" | "rejection" | "question";
 
 export type AgentRole = "reviewer" | "builder" | "planner";
 
@@ -95,7 +95,7 @@ export class KanbanError extends Error {
 const GAP = 100;
 const MIN_GAP = 0.01;
 
-const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "review", "handoff", "approval", "rejection"]);
+const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "review", "handoff", "approval", "rejection", "question"]);
 const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder", "planner"]);
 
 const SCHEMA = `
@@ -589,7 +589,7 @@ export class KanbanDb {
     if (!body) throw new KanbanError("comment body must not be empty", "invalid");
     const kind = input.kind ?? "comment";
     if (!COMMENT_KINDS.has(kind)) {
-      throw new KanbanError(`unknown comment kind '${kind}' (comment | review | handoff | approval | rejection)`, "invalid");
+      throw new KanbanError(`unknown comment kind '${kind}' (comment | review | handoff | approval | rejection | question)`, "invalid");
     }
     const author = input.author?.trim() || "user";
     for (let attempt = 0; attempt < 5; attempt++) {

@@ -521,6 +521,30 @@ describe("auto-plan", () => {
     expect(calls.length).toBe(0);
   });
 
+  test("planner question disarms; a human answer re-arms the planner", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "ambiguous idea", lane: "plan" });
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.prompt).toContain("--kind question");
+
+    // planner asks instead of attaching a plan → waiting on the human, no failure comment
+    await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "question", body: "Q1: SSE or polling? default: SSE" });
+    calls[0].finish(0);
+    await sleep(20);
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(1);
+    expect(db!.comments(card.id).at(-1)!.kind).toBe("question");
+
+    // the human answers → planner runs again
+    await w.createComment(card.id, { author: "user", body: "SSE" });
+    await sleep(200);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("planner");
+  });
+
   test("planner crash posts a failure comment and does not hot-loop", async () => {
     const { dbFile, writer: w } = setup();
     const card = w.createTask({ title: "doomed", lane: "plan" });

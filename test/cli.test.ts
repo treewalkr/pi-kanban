@@ -195,6 +195,10 @@ test("comment/comments roundtrip; show prints the thread; usage errors exit 1", 
   expect(listed.map((m) => m.body)).toEqual(["picked this up", "needs a second pass"]);
   expect(listed[1]!.kind).toBe("review");
 
+  const asked = await cli("comment", task.id, "Q1: SSE or polling? default SSE", "--kind", "question", "--author", "pi-planner", "--json");
+  expect(asked.code).toBe(0);
+  expect(JSON.parse(asked.stdout)).toMatchObject({ kind: "question", author: "pi-planner" });
+
   const human = await cli("comments", task.id);
   expect(human.stdout).toContain("pi-builder");
   expect(human.stdout).toContain("picked this up");

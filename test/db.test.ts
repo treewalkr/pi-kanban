@@ -73,9 +73,9 @@ test("rejectTask: feedback comment, card stays in plan; empty feedback rejected"
   expect(() => db.rejectTask(db.createTask({ title: "x" }).id, "why")).toThrow(/not in the plan lane/);
 });
 
-test("comment kinds include the plan-gate pair", () => {
+test("comment kinds include the plan-gate pair and the planner's question", () => {
   const task = db.createTask({ title: "kinds" });
-  for (const kind of ["comment", "review", "handoff", "approval", "rejection"] as const) {
+  for (const kind of ["comment", "review", "handoff", "approval", "rejection", "question"] as const) {
     expect(db.createComment(task.id, { kind, body: `as ${kind}` }).kind).toBe(kind);
   }
   expect(() => db.createComment(task.id, { kind: "verdict", body: "nope" })).toThrow(KanbanError);

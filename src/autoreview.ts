@@ -157,7 +157,8 @@ export function plannerPrompt(task: Task): string {
 5. Attach it: kanban attach ${task.id} <plan-file>
 6. Disarm with exactly: kanban comment ${task.id} "plan v<N> attached — review it, then kanban approve ${task.id} or kanban reject ${task.id} --message <feedback>" --author pi-planner
 
-Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate. If the card cannot be planned from the repo alone, attach the questions instead and say so in the comment.
+Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate.
+Questions first: after reading the repo, ask only if an answer would genuinely change the plan — post every question with its recommended default as one comment: kanban comment ${task.id} "<Q1…? default: …>" --kind question --author pi-planner, then stop without attaching a plan; the human's answer re-arms you and its "use the defaults" counts as an answer. When the repo can decide, decide and record it under Decisions instead of asking.
 Your last line: one sentence on the plan's shape.
 
 --- plan template and review checklist ---

@@ -15,7 +15,7 @@ usage:
   kanban search <query…> [--project <tag>] [--json]
   kanban show <id>
   kanban attach <id> <plan-file>            (re-attach versions; show prints the latest)
-  kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff>]
+  kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]
   kanban comments <id>
   kanban handoff <id> <lane> --message <text> [--author <name>]   (atomic move + thread record)
   kanban review <id> (--approve | --block --message <text> [--finding <text>]…)
@@ -225,7 +225,7 @@ async function main(): Promise<number> {
         const [idRef, ...text] = positional;
         const body = text.join(" ");
         if (!idRef || !body) {
-          throw new KanbanError("usage: kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff>]", "invalid");
+          throw new KanbanError("usage: kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]", "invalid");
         }
         const comment = db.createComment(idRef, { body, author: str(flags, "author"), kind: str(flags, "kind") });
         if (json) jsonOut(comment);

@@ -1637,6 +1637,10 @@ button.id-copy {
   color: #f85149;
 }
 
+.comment-meta .kind.question {
+  color: #d29922;
+}
+
 .editor-actions .approve {
   color: #3fb950;
 }
