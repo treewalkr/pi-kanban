@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Attachment, Comment, Task } from "../../../src/db";
+  import { isAgentChatter, latestStateIndex } from "../../../src/thread";
   import { api } from "../api";
   import { board } from "./board.svelte";
   import IdChip from "./IdChip.svelte";
@@ -90,6 +91,7 @@
   // per-card thread state: fetch on open, append after own post — SSE refresh
   // is paused while a modal is open, so a reopen catches CLI-side comments
   let comments = $state<Comment[]>([]);
+  let stateIdx = $derived(latestStateIndex(comments));
   let commentBody = $state("");
 
   // finished agent sessions saved on the card (live one renders above these)
@@ -205,8 +207,8 @@
           <p class="comments-empty">no comments — the card is the forum</p>
         {:else}
           <ul class="comment-list">
-            {#each comments as comment (comment.id)}
-              <li>
+            {#each comments as comment, i (comment.id)}
+              <li class:loop={isAgentChatter(comment)} class:latest-state={i === stateIdx}>
                 <div class="comment-meta">
                   <span class="author">{comment.author}</span>
                   {#if comment.kind !== "comment"}<span class="kind {comment.kind}">{comment.kind}</span>{/if}

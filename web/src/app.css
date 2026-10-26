@@ -1774,6 +1774,15 @@ button.id-copy {
   gap: 8px;
 }
 
+.comment-list li.loop .comment-body {
+  color: var(--text-dim);
+}
+
+.comment-list li.latest-state {
+  border-left: 2px solid var(--accent);
+  padding-left: 8px;
+}
+
 .comment-meta {
   display: flex;
   align-items: baseline;
@@ -1784,7 +1793,7 @@ button.id-copy {
 }
 
 .comment-meta .author {
-  color: var(--text-muted);
+  color: var(--text);
   font-weight: 600;
 }
 
