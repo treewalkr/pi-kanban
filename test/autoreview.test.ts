@@ -868,21 +868,30 @@ test("stop kills in-flight children and releases the lease", async () => {
   let spawns = 0;
   const spawnFn: SpawnFn = (_job, ctx) => {
     spawns += 1;
-    ctx.track(() => kills.push(1));
-    return new Promise<number>(() => {}); // runs until killed
+    return new Promise<number>((resolve) => {
+      ctx.track(() => {
+        kills.push(1);
+        resolve(143);
+      });
+    });
   };
   const dbA = new KanbanDb(dbFile);
   const h = startAutoReview({ db: dbA, cwd: dir, spawnFn, watchIntervalMs: 50 });
   stop = () => {
     h.stop();
-    dbA.close();
+    try {
+      dbA.close();
+    } catch {}
   };
   await sleep(300);
   expect(spawns).toBe(1);
   expect(writer.leaseFor(card.id)).not.toBeNull(); // held while the session runs
   h.stop();
+  dbA.close();
+  await sleep(100);
   expect(kills.length).toBe(1); // child terminated, not orphaned
   expect(writer.leaseFor(card.id)).toBeNull(); // lease released on shutdown
+  expect(writer.comments(card.id).length).toBe(0); // stopped session posts no exit 143 failure comment
 });
 
 test("lease released after a session finishes normally", async () => {

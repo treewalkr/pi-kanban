@@ -479,7 +479,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           for (const untrack of jobKills) untrack();
           jobKills.clear();
           // keep the transcript on the card — the live view evaporates when the session ends
-          if (session.log.length > 0) {
+          if (!stopped && session.log.length > 0) {
             const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
             const header = `${AUTHOR_BY_ROLE[job.role]} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
             try {
@@ -490,15 +490,23 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           }
           sessions.delete(job.task.id);
           clearInterval(beat);
-          db.releaseLease(job.task.id, owner);
+          if (!stopped) {
+            try {
+              db.releaseLease(job.task.id, owner);
+            } catch {
+              /* db may be closed */
+            }
+          }
         }
         inFlight.delete(job.task.id);
-        try {
-          afterJob(job, code);
-        } catch (err) {
-          log(`${job.role} ${job.task.id}: ${err instanceof Error ? err.message : String(err)}`);
+        if (!stopped) {
+          try {
+            afterJob(job, code);
+          } catch (err) {
+            log(`${job.role} ${job.task.id}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          scan(); // follow the verdict: block → builder, handoff → reviewer
         }
-        scan(); // follow the verdict: block → builder, handoff → reviewer
       }
     } finally {
       draining = false;
