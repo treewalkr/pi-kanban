@@ -9,6 +9,7 @@
   import AddLane from "./lib/AddLane.svelte";
   import SearchBox from "./lib/SearchBox.svelte";
   import SettingsPanel from "./lib/SettingsPanel.svelte";
+  import Mark from "./lib/Mark.svelte";
   import { theme, setTheme } from "./lib/theme.svelte";
 
   // initial load, plus catch-up when a modal closes (change events are paused while editing)
@@ -62,7 +63,7 @@
 
 <div class="app">
   <header class="top">
-    <div class="brand"><span class="mark"></span>kanban</div>
+    <div class="brand"><Mark />kanban</div>
     <div class="view-toggle" role="tablist" aria-label="view">
       <button
         class:active={board.view === "board"}

@@ -175,10 +175,11 @@ button {
 }
 
 .mark {
+  display: block;
+  flex: none;
   width: 10px;
   height: 10px;
-  border-radius: 2px;
-  background: var(--accent);
+  color: var(--accent);
 }
 
 .search {

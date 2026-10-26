@@ -15,6 +15,7 @@
   import TaskEditor from "../lib/TaskEditor.svelte";
   import SettingsPanel from "../lib/SettingsPanel.svelte";
   import AgentsSettings from "../lib/AgentsSettings.svelte";
+  import Mark from "../lib/Mark.svelte";
   import Frame from "./Frame.svelte";
   import { CATALOG, ids, seed } from "./mocks";
 
@@ -93,7 +94,7 @@
 
 <div class="gallery">
   <header class="gallery-top">
-    <div class="brand"><span class="mark"></span>kanban · gallery</div>
+    <div class="brand"><Mark />kanban · gallery</div>
     <span class="hint">dev-only — mock board, no server, writes stay in memory</span>
     <span class="spacer"></span>
     <a class="gallery-link" href="/">← board</a>

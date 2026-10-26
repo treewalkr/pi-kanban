@@ -5,6 +5,10 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..");
 const faviconPath = join(root, "web", "public", "favicon.svg");
 const indexPath = join(root, "web", "index.html");
+const markPath = join(root, "web", "src", "lib", "Mark.svelte");
+const appCssPath = join(root, "web", "src", "app.css");
+const appPath = join(root, "web", "src", "App.svelte");
+const galleryPath = join(root, "web", "src", "gallery", "Gallery.svelte");
 
 function srgbToLinear(c: number): number {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
@@ -25,6 +29,29 @@ function contrast(hex1: string, hex2: string): number {
   const lighter = Math.max(l1, l2);
   const darker = Math.min(l1, l2);
   return (lighter + 0.05) / (darker + 0.05);
+}
+
+interface RectGeometry {
+  x: string;
+  y: string;
+  width: string;
+  height: string;
+  rx: string;
+}
+
+function extractRectGeometries(svgContent: string): RectGeometry[] {
+  const rectMatches = Array.from(svgContent.matchAll(/<rect\s+([^>]+)\/>/g));
+  return rectMatches.map((m) => {
+    const attrs = m[1];
+    const get = (name: string) => attrs.match(new RegExp(`${name}="([^"]+)"`))?.[1] ?? "";
+    return {
+      x: get("x"),
+      y: get("y"),
+      width: get("width"),
+      height: get("height"),
+      rx: get("rx"),
+    };
+  });
 }
 
 test("favicon.svg serves a three-bar transparent mark at 16×16", () => {
@@ -68,4 +95,62 @@ test("index.html links /favicon.svg and drops the data URI", () => {
   expect(content).toContain('href="/favicon.svg"');
   expect(content).toContain('type="image/svg+xml"');
   expect(content).not.toContain("data:image/svg+xml");
+});
+
+test("header mark and favicon share the same geometry", () => {
+  const faviconContent = readFileSync(faviconPath, "utf-8");
+  const markContent = readFileSync(markPath, "utf-8");
+
+  expect(faviconContent).toContain('viewBox="0 0 16 16"');
+  expect(markContent).toContain('viewBox="0 0 16 16"');
+
+  const faviconRects = extractRectGeometries(faviconContent);
+  const markRects = extractRectGeometries(markContent);
+
+  expect(faviconRects.length).toBe(3);
+  expect(markRects).toEqual(faviconRects);
+});
+
+test("header mark is theme-driven via currentColor and --accent", () => {
+  const markContent = readFileSync(markPath, "utf-8");
+  const markRects = Array.from(markContent.matchAll(/<rect\s+([^>]+)\/>/g));
+  expect(markRects.length).toBe(3);
+
+  for (const match of markRects) {
+    expect(match[1]).toContain('fill="currentColor"');
+  }
+  expect(markContent).not.toMatch(/#[0-9a-fA-F]{3,8}/);
+
+  const cssContent = readFileSync(appCssPath, "utf-8");
+  const markCssMatch = cssContent.match(/\.mark\s*\{([^}]+)\}/);
+  expect(markCssMatch).not.toBeNull();
+  const markCss = markCssMatch![1];
+  expect(markCss).toContain("color: var(--accent);");
+  expect(markCss).not.toContain("background");
+});
+
+test("mark has no sub-pixel detail", () => {
+  const faviconContent = readFileSync(faviconPath, "utf-8");
+  const markContent = readFileSync(markPath, "utf-8");
+
+  for (const content of [faviconContent, markContent]) {
+    expect(content).not.toContain("stroke");
+    const rects = extractRectGeometries(content);
+    for (const r of rects) {
+      expect(parseFloat(r.width)).toBeGreaterThanOrEqual(3);
+    }
+  }
+});
+
+test("both headers render the shared mark component", () => {
+  const appContent = readFileSync(appPath, "utf-8");
+  const galleryContent = readFileSync(galleryPath, "utf-8");
+
+  expect(appContent).toContain('import Mark from "./lib/Mark.svelte";');
+  expect(appContent).toContain("<Mark />");
+  expect(appContent).not.toContain('<span class="mark">');
+
+  expect(galleryContent).toContain('import Mark from "../lib/Mark.svelte";');
+  expect(galleryContent).toContain("<Mark />");
+  expect(galleryContent).not.toContain('<span class="mark">');
 });
