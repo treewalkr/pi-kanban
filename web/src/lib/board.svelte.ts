@@ -5,6 +5,14 @@ import { searchBoard } from "../../../src/search";
 
 type EdenError = { value?: unknown };
 
+function loadProjectFilter(): string {
+  try {
+    return localStorage.getItem("kanban-project") ?? "";
+  } catch {
+    return "";
+  }
+}
+
 class BoardStore {
   lanes = $state<Lane[]>([]);
   tasks = $state<Task[]>([]);
@@ -13,7 +21,24 @@ class BoardStore {
   loading = $state(true);
   error = $state("");
   search = $state("");
-  projectFilter = $state("");
+
+  #projectFilter = $state(loadProjectFilter());
+
+  /** Active project chip; persists to localStorage (kanban-project, same idea as kanban-theme) so a reload keeps the focus. */
+  get projectFilter(): string {
+    return this.#projectFilter;
+  }
+
+  set projectFilter(v: string) {
+    this.#projectFilter = v;
+    try {
+      if (v === "") localStorage.removeItem("kanban-project");
+      else localStorage.setItem("kanban-project", v);
+    } catch {
+      /* storage unavailable — the filter still works for this session */
+    }
+  }
+
   editing = $state<Task | null>(null);
   editMode = $state(false);
   archiveOpen = $state(false);
@@ -157,6 +182,11 @@ class BoardStore {
     this.tasks = data.tasks;
     this.plans = data.plans;
     this.loading = false;
+    // a stored project whose tag no longer exists (renamed, or its last card dropped the tag)
+    // resets to "all" — an active filter with no visible chip would be a silent empty board
+    if (this.projectFilter !== "" && !this.projects.includes(this.projectFilter)) {
+      this.projectFilter = "";
+    }
   }
 
   async pollActivity(): Promise<void> {
