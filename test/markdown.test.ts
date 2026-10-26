@@ -137,6 +137,88 @@ describe("renderMarkdown", () => {
     }
   });
 
+  test("differential check: toggling rendered index flips exactly that checkbox in re-render across various markdown shapes", () => {
+    function parseRenderedCheckboxes(html: string) {
+      const matches = [...html.matchAll(/<input([^>]*)type="checkbox"([^>]*)>/g)];
+      return matches.map((m) => {
+        const full = m[0];
+        const checked = full.includes('checked=""');
+        const taskMatch = full.match(/data-task="(\d+)"/);
+        const taskIdx = taskMatch ? parseInt(taskMatch[1], 10) : null;
+        return { checked, taskIdx };
+      });
+    }
+
+    const shapes = [
+      "- [ ] a\n- [x] b",
+      [
+        "- [ ] plain list",
+        "  - [x] nested list",
+        "    - [ ] 3-level nested list",
+        "- [ ] 4-space parent",
+        "    - [ ] 4-space nested list",
+        "- [ ]",
+        "- [ ] after empty item",
+        "1. [ ] ordered list",
+        "> - [X] blockquoted list",
+        "",
+        "```",
+        "- [ ] fenced code",
+        "```",
+        "",
+        "    - [ ] 4 spaces indent",
+      ].join("\n"),
+      // Finding 1: continuation paragraph inside list item before nested task
+      "- [ ] a\n\n  para\n\n    - [ ] b\n- [ ] c",
+      "1. [ ] a\n\n   details\n\n      - [ ] sub\n2. [ ] b",
+      // Finding 2: over-indented lazy continuation line
+      "- [ ] a\n      - [ ] deep6\n- [ ] c",
+      // Finding 2: 8-space indented code block inside list item
+      "- a\n\n        - [ ] x\n- [ ] c",
+      // Finding 2: HTML block
+      "<div>\n- [ ] h\n</div>\n- [ ] c",
+      // Blockquotes and CRLF
+      "> - [ ] a\n> > - [x] b\n> - [ ] c",
+      "- [ ] CRLF\r\n- [x] line 2\r\n",
+    ];
+
+    for (const src of shapes) {
+      const origHtml = renderMarkdown(src, { interactiveTasks: true });
+      const origCheckboxes = parseRenderedCheckboxes(origHtml);
+
+      for (let i = 0; i < origCheckboxes.length; i++) {
+        const toggled = toggleTaskLine(src, i);
+        expect(toggled).not.toBe(src);
+
+        const toggledHtml = renderMarkdown(toggled, { interactiveTasks: true });
+        const toggledCheckboxes = parseRenderedCheckboxes(toggledHtml);
+
+        expect(toggledCheckboxes.length).toBe(origCheckboxes.length);
+
+        for (let j = 0; j < origCheckboxes.length; j++) {
+          if (j === i) {
+            expect(toggledCheckboxes[j].checked).toBe(!origCheckboxes[j].checked);
+          } else {
+            expect(toggledCheckboxes[j].checked).toBe(origCheckboxes[j].checked);
+          }
+        }
+
+        // Toggling again flips it back to the original state
+        const roundTripped = toggleTaskLine(toggled, i);
+        const roundTrippedHtml = renderMarkdown(roundTripped, { interactiveTasks: true });
+        const roundTrippedCheckboxes = parseRenderedCheckboxes(roundTrippedHtml);
+        for (let j = 0; j < origCheckboxes.length; j++) {
+          expect(roundTrippedCheckboxes[j].checked).toBe(origCheckboxes[j].checked);
+        }
+      }
+
+      // Out of bounds indices return src unchanged (safe fail-safe)
+      expect(toggleTaskLine(src, origCheckboxes.length)).toBe(src);
+      expect(toggleTaskLine(src, origCheckboxes.length + 5)).toBe(src);
+      expect(toggleTaskLine(src, -1)).toBe(src);
+    }
+  });
+
   test("toggleTaskLine flips only the nth task marker", () => {
     const src = "- [ ] item 1\n- [ ] item 2\n- [ ] item 3";
     const toggled = toggleTaskLine(src, 1);

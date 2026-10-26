@@ -14,7 +14,7 @@ import sql from "highlight.js/lib/languages/sql";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { marked, type Tokens } from "marked";
+import { marked, type Token, type Tokens } from "marked";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("css", css);
@@ -51,108 +51,93 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
-const HEADING_RE = /^ {0,3}#{1,6}[ \t]/;
-const HR_RE = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$/;
-const LIST_ITEM_PREFIX_RE = /^([ \t]*)(?:[-*+]|\d{1,9}[.)])[ \t]+/;
-const TASK_MARKER_RE = /^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\[( |x|X)\](?= +\S)/;
+const TASK_LINE_PREFIX_RE = /^(?:[ \t]*>+[ \t]?)*[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\[([ xX])\](?= +\S)/;
 
 interface TaskLineMatch {
   charOffset: number;
   markerChar: string;
 }
 
-function findTaskLines(src: string): TaskLineMatch[] {
-  const lines = src.split("\n");
-  let inFence: string | null = null;
-  let inList = false;
-  let blankLineSeen = true;
-  let currentQuoteDepth = 0;
-  let lineStartOffset = 0;
-  const tasks: TaskLineMatch[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const rawLine = lines[i];
-    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-
-    if (inFence !== null) {
-      const closeRegex = inFence === "`" ? /^ {0,3}`{3,}[ \t]*$/ : /^ {0,3}~{3,}[ \t]*$/;
-      if (closeRegex.test(line)) {
-        inFence = null;
-        inList = false;
-        blankLineSeen = false;
-      }
-    } else {
-      const openMatch = line.match(FENCE_OPEN_RE);
-      if (openMatch) {
-        inFence = openMatch[1][0];
-        inList = false;
-        blankLineSeen = false;
-      } else {
-        const quoteMatch = line.match(/^(?: {0,3}>+[ \t]?)+/);
-        const quotePrefix = quoteMatch ? quoteMatch[0] : "";
-        const quoteDepth = quoteMatch ? (quotePrefix.match(/>/g)?.length ?? 0) : 0;
-        if (quoteDepth !== currentQuoteDepth) {
-          inList = false;
-          currentQuoteDepth = quoteDepth;
-          blankLineSeen = true;
-        }
-
-        const rest = line.slice(quotePrefix.length);
-        if (rest.trim() === "") {
-          blankLineSeen = true;
-        } else if (HEADING_RE.test(rest) || HR_RE.test(rest)) {
-          inList = false;
-          blankLineSeen = false;
-        } else {
-          const listMatch = rest.match(LIST_ITEM_PREFIX_RE);
-          if (listMatch) {
-            const rawIndent = listMatch[1];
-            const isCodeIndent = rawIndent.includes("\t") || rawIndent.length >= 4;
-            if (inList || !isCodeIndent) {
-              const taskMatch = rest.match(TASK_MARKER_RE);
-              if (taskMatch) {
-                const markerChar = taskMatch[1];
-                const charOffset = lineStartOffset + quotePrefix.length + (taskMatch[0].length - 2);
-                tasks.push({ charOffset, markerChar });
-              }
-              inList = true;
-              blankLineSeen = false;
-            } else {
-              inList = false;
-              blankLineSeen = false;
-            }
-          } else {
-            const indentMatch = rest.match(/^[ \t]*/);
-            const indent = indentMatch ? indentMatch[0] : "";
-            const isCodeIndent = indent.includes("\t") || indent.length >= 4;
-            if (!isCodeIndent && blankLineSeen) {
-              inList = false;
-            }
-            blankLineSeen = false;
-          }
-        }
-      }
+function countLexerTasks(tokens: Token[]): number {
+  let count = 0;
+  for (const t of tokens) {
+    if (t.type === "list_item" && (t as Tokens.ListItem).task) {
+      count++;
     }
+    if ("tokens" in t && t.tokens) {
+      count += countLexerTasks(t.tokens);
+    }
+    if ("items" in t && t.items) {
+      count += countLexerTasks(t.items);
+    }
+  }
+  return count;
+}
 
-    lineStartOffset += rawLine.length + 1;
+function findTaskLines(src: string, tokens?: Token[]): TaskLineMatch[] {
+  const norm = src.replace(/\r\n|\r/g, "\n");
+  const rawLines = src.split("\n");
+  const lineStartOffsets: number[] = [];
+  let offset = 0;
+  for (let i = 0; i < rawLines.length; i++) {
+    lineStartOffsets.push(offset);
+    offset += rawLines[i].length + 1;
   }
 
+  const lexerTokens = tokens ?? marked.lexer(norm);
+  const tasks: TaskLineMatch[] = [];
+
+  function walk(toks: Token[], baseLine: number) {
+    let curLine = baseLine;
+    for (const t of toks) {
+      if (t.type === "list") {
+        let itLine = curLine;
+        for (const it of (t as Tokens.List).items) {
+          if (it.task) {
+            const rawLine = rawLines[itLine] ?? "";
+            const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+            const match = line.match(TASK_LINE_PREFIX_RE);
+            if (match) {
+              const markerChar = match[1];
+              const charOffset = lineStartOffsets[itLine] + (match[0].length - 2);
+              tasks.push({ charOffset, markerChar });
+            }
+          }
+          if (it.tokens) {
+            walk(it.tokens, itLine);
+          }
+          itLine += (it.raw.match(/\n/g) || []).length;
+        }
+      } else if (t.type === "blockquote") {
+        if ("tokens" in t && t.tokens) {
+          walk(t.tokens, curLine);
+        }
+      }
+      curLine += (t.raw.match(/\n/g) || []).length;
+    }
+  }
+
+  walk(lexerTokens, 0);
   return tasks;
 }
 
 /**
  * Toggle the index-th (0-based) task checkbox in the markdown source.
  * Spliced by character offset so all other bytes remain unchanged.
- * Returns src unchanged if index is out of range or not an integer.
+ * Returns src unchanged if index is out of range, not an integer,
+ * or if task line counting drifts from marked's lexer.
  */
 export function toggleTaskLine(src: string, index: number): string {
   if (!Number.isInteger(index) || index < 0) {
     return src;
   }
 
-  const tasks = findTaskLines(src);
-  if (index >= tasks.length) {
+  const norm = src.replace(/\r\n|\r/g, "\n");
+  const tokens = marked.lexer(norm);
+  const lexerTaskCount = countLexerTasks(tokens);
+
+  const tasks = findTaskLines(src, tokens);
+  if (tasks.length !== lexerTaskCount || index >= tasks.length) {
     return src;
   }
 
