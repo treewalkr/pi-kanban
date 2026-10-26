@@ -7,7 +7,7 @@
     "kanban": "./src/cli.ts"
   },
   "scripts": {
-    "dev:api": "bun run --watch src/index.ts",
+    "dev:api": "KANBAN_DEV=1 bun run --watch src/index.ts",
     "dev:web": "vite",
     "dev": "concurrently -n api,web -c blue,green 'bun run dev:api' 'bun run dev:web'",
     "build": "vite build",

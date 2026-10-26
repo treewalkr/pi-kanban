@@ -4,6 +4,7 @@ import staticPlugin from "@elysiajs/static";
 import { app } from "./app";
 import { startAutoReview } from "./autoreview";
 import { KanbanDb, defaultDbPath } from "./db";
+import "./dev-reload"; // watch marker: rewritten by POST /dev/restart to trigger a bun --watch reload
 
 const port = Number(process.env.PORT ?? 4600);
 const dist = join(import.meta.dir, "..", "web", "dist");

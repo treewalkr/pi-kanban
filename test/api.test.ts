@@ -261,3 +261,36 @@ test("GET /activity lists in-flight agent sessions (none when idle)", async () =
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ sessions: [] });
 });
+
+test("GET /health reports a boot stamp so clients can detect restarts", async () => {
+  const app = createApp(db);
+  const res = await app.handle(new Request("http://localhost/health"));
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { ok: boolean; booted: number };
+  expect(body.ok).toBe(true);
+  expect(body.booted).toBeLessThanOrEqual(Date.now());
+});
+
+test("POST /dev/restart is unavailable unless KANBAN_DEV=1", async () => {
+  const app = createApp(db);
+  const res = await app.handle(new Request("http://localhost/dev/restart", { method: "POST" }));
+  expect(res.status).toBe(404);
+});
+
+test("POST /dev/restart with KANBAN_DEV=1 accepts, then fires the restart hook", async () => {
+  const prev = process.env.KANBAN_DEV;
+  process.env.KANBAN_DEV = "1";
+  try {
+    let fired = 0;
+    const app = createApp(db, { onDevRestart: async () => void fired++ });
+    const res = await app.handle(new Request("http://localhost/dev/restart", { method: "POST" }));
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ restarting: true });
+    expect(fired).toBe(0); // delayed so the response flushes before any reload
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(fired).toBe(1);
+  } finally {
+    if (prev === undefined) delete process.env.KANBAN_DEV;
+    else process.env.KANBAN_DEV = prev;
+  }
+});

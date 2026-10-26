@@ -3,6 +3,7 @@ import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type Attachment, type Board, type Comment, type Lane, type Task } from "./db";
 import { activitySnapshot } from "./autoreview";
 import { listPiModels } from "./models";
+import { defaultDevRestart } from "./dev-restart";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
 
@@ -39,8 +40,12 @@ function createChangeBus() {
   };
 }
 
-export const createApp = (db: KanbanDb) => {
+export const createApp = (
+  db: KanbanDb,
+  opts: { onDevRestart?: () => Promise<void> } = {}, // onDevRestart: test seam for /dev/restart
+) => {
   const bus = createChangeBus();
+  const booted = Date.now(); // lets clients tell an old server from a restarted one
   db.watch(() => bus.emit()); // CLI writes commit from another connection
   return new Elysia()
     .use(cors({ origin: /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ }))
@@ -83,7 +88,23 @@ export const createApp = (db: KanbanDb) => {
         { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } },
       );
     })
-    .get("/health", () => ({ ok: true }))
+    .get("/health", () => ({ ok: true, booted }))
+    .post(
+      "/dev/restart",
+      ({ status }) => {
+        if (process.env.KANBAN_DEV !== "1")
+          return status(404, { error: "restart requires the dev server (KANBAN_DEV=1)", code: "not-found" });
+        // fire after the response flushes: build + marker rewrite reload the bun --watch process
+        setTimeout(() => void (opts.onDevRestart ?? defaultDevRestart)(), 250);
+        return status(202, { restarting: true });
+      },
+      {
+        response: {
+          202: t.Object({ restarting: t.Boolean() }),
+          404: t.Object({ error: t.String(), code: t.String() }),
+        },
+      },
+    )
     .get("/board", (): Board => db.board())
     .post(
       "/tasks/:id/plan",

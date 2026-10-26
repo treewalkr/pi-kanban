@@ -33,6 +33,12 @@ kanban serve --open            # web UI at http://127.0.0.1:4600
 bun run dev                    # hacking: api watch + vite dev server
 ```
 
+While hacking, the vite dev UI gets a **restart service** button in settings → General →
+Development: it rebuilds `web/dist` (`bun run build`) and reloads the API under `bun --watch`,
+so a click applies all pending code changes — the board reconnects automatically once the
+server is back. Dev-only: the endpoint is armed by `KANBAN_DEV=1` in `dev:api`, and the
+button is stripped from production builds.
+
 ```bash
 kanban add Fix login redirect --note "bounces to / after oauth" --project my-app
 kanban mv <id> plan            # or --next / --prev

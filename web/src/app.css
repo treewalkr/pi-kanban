@@ -1337,6 +1337,25 @@ button.id-copy {
   line-height: 1.5;
 }
 
+.settings-general-description code {
+  font-size: 10.5px;
+}
+
+.settings-dev-restart {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-dev-note {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.settings-dev-note.err {
+  color: var(--error);
+}
+
 /* ---------- segmented control (pi-web settings-send-mode) ---------- */
 
 .seg {
