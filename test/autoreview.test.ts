@@ -615,6 +615,117 @@ describe("auto-plan", () => {
     expect(calls.length).toBe(1);
   });
 
+  test("plan-reviewer failure: a human comment re-runs the reviewer, not the planner", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    calls[0].finish(1);
+    await sleep(20);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
+    expect(last.body).toContain("failed");
+
+    await w.createComment(card.id, { author: "user", body: "re-run the review" });
+    await sleep(200);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("plan-reviewer");
+    expect(calls[1].job.prompt).toContain(`plan-review ${card.id} --pass`);
+    expect(calls.map((c) => c.job.role)).not.toContain("planner");
+    expect(db!.attachments(card.id, "plan").length).toBe(1);
+  });
+
+  test("plan-reviewer cannot-evaluate: a human comment re-runs the reviewer", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    const threadBefore = db!.comments(card.id).length;
+    await w.createComment(card.id, {
+      author: PLAN_REVIEWER_AUTHOR,
+      kind: "comment",
+      body: "cannot evaluate the plan — repo unreadable",
+    });
+    calls[0].finish(0);
+    await sleep(20);
+    expect(db!.comments(card.id).length).toBe(threadBefore + 1);
+
+    await w.createComment(card.id, { author: "user", body: "fixed repo, try again" });
+    await sleep(200);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("plan-reviewer");
+  });
+
+  test("plan-review cap: a human comment re-runs the reviewer on the same plan", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    // block 1 → planner
+    await planVerdict(w, card, "block", `${BLOCK} — 1`);
+    calls[0].finish(0);
+    await sleep(20);
+    expect(calls[1]!.job.role).toBe("planner");
+    await w.attach(card.id, "plan", "# plan v2\nrevised");
+    await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v2 attached — over to pi-plan-reviewer" });
+    calls[1].finish(0);
+    await sleep(20);
+    expect(calls[2]!.job.role).toBe("plan-reviewer");
+    // block 2 → cap
+    await planVerdict(w, card, "block", `${BLOCK} — 2`);
+    calls[2].finish(0);
+    await sleep(20);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
+    expect(last.body).toContain("cap");
+    expect(db!.attachments(card.id, "plan").length).toBe(2);
+
+    await w.createComment(card.id, { author: "user", body: "give it another look" });
+    await sleep(200);
+    expect(calls.length).toBe(4);
+    expect(calls[3].job.role).toBe("plan-reviewer");
+    expect(db!.attachments(card.id, "plan").length).toBe(2);
+  });
+
+  test("human comment after a pass re-arms the planner (unchanged)", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("plan-reviewer");
+
+    await planVerdict(w, card, "pass", `${PASS} — executable`);
+    calls[0].finish(0);
+    await sleep(20);
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(1); // pass leaves the card at the human gate
+
+    await w.createComment(card.id, { author: "user", body: "actually revise step 2" });
+    await sleep(200);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("planner");
+  });
+
+  test("rejection after a reviewer failure still re-arms the planner", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    calls[0].finish(1);
+    await sleep(20);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
+    expect(last.body).toContain("failed");
+
+    await w.rejectTask(card.id, "rewrite it");
+    await sleep(200);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("planner");
+  });
+
   test("plan reviewer defaults to thinking max; prompt forbids the gate", () => {
     const task = { id: "abc12", title: "plan me", laneId: "plan" } as never;
     withAgentEnv({}, () => {

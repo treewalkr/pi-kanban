@@ -351,7 +351,18 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         ).length;
         return blocks < maxPlanBlocks ? "planner" : "plan-capped";
       }
-      return "planner"; // fresh card, human comment, or rejection
+      // last is a human comment, a rejection, or the thread is empty — route by
+      // *why* the card is waiting, not just by last author: scan back to the
+      // most recent agent comment (a newer human rejection outranks it). A
+      // non-verdict plan-reviewer comment (session failed, cannot-evaluate, or
+      // cap) means the plan itself never failed, so the human comment re-runs
+      // the reviewer on the attached plan as-is; anything else re-arms the planner.
+      for (let i = thread.length - 1; i >= 0; i--) {
+        const c = thread[i]!;
+        if (c.kind === "rejection") return "planner"; // explicit human intent: re-plan with the feedback
+        if (c.author.startsWith("pi-")) return c.author === PLAN_REVIEWER_AUTHOR && c.kind === "comment" ? "plan-reviewer" : "planner";
+      }
+      return "planner"; // fresh card, or only human comments so far
     }
     if (task.laneId === "review" && last?.author !== REVIEWER_AUTHOR) return "reviewer";
     if (task.laneId === "implement") {
