@@ -6,6 +6,7 @@ import { KanbanDb } from "../src/db";
 import {
   BUILDER_AUTHOR,
   PLANNER_AUTHOR,
+  PLAN_REVIEWER_AUTHOR,
   PLAN_SECTIONS,
   PLAN_TEMPLATE,
   REVIEWER_AUTHOR,
@@ -14,6 +15,7 @@ import {
   builderPlanPrompt,
   formatPiEvent,
   plannerPrompt,
+  planReviewerPrompt,
   reviewerPrompt,
   sessionIdFor,
   startAutoReview,
@@ -490,6 +492,135 @@ describe("auto-plan", () => {
     expect(calls[0].job.role).toBe("planner");
     expect(calls[0].job.prompt).toContain("rejection");
     expect(db!.resolveTask(card.id).laneId).toBe("plan");
+  });
+
+  const PASS = "plan review: pass";
+  const BLOCK = "plan review: block";
+
+  /** A card whose planner just handed off — armed for the plan reviewer. */
+  function planReady(w: KanbanDb, title = "plan ready") {
+    const card = w.createTask({ title, lane: "plan" });
+    w.attach(card.id, "plan", "# plan v1\nsteps");
+    w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v1 attached — over to pi-plan-reviewer" });
+    return card;
+  }
+
+  function planVerdict(w: KanbanDb, card: { id: string }, verdict: "pass" | "block", body: string) {
+    return w.createComment(card.id, { author: PLAN_REVIEWER_AUTHOR, kind: "review", body });
+  }
+
+  test("planner handoff arms the plan reviewer; its prompt carries the checklist", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("plan-reviewer");
+    expect(calls[0].job.task.id).toBe(card.id);
+    expect(calls[0].job.prompt).toContain(`plan-review ${card.id} --pass`);
+    expect(calls[0].job.prompt).toContain(`plan-review ${card.id} --block`);
+    expect(calls[0].job.prompt).toContain("Review checklist");
+    expect(calls[0].job.prompt).toContain("Never move the card");
+
+    await planVerdict(w, card, "pass", `${PASS} — executable`);
+    calls[0].finish(0);
+    await sleep(20);
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(1); // pass leaves the card at the human gate
+  });
+
+  test("plan-review block re-arms the planner with the findings", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await planVerdict(w, card, "block", `${BLOCK} — vague tests\n- AC2 has no test`);
+    calls[0].finish(0);
+    await sleep(20);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("planner");
+    expect(calls[1].job.prompt).toContain("plan-review");
+    expect(db!.resolveTask(card.id).laneId).toBe("plan");
+  });
+
+  test("two blocks since the last human comment hit the plan-review cap", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    // block 1 → planner
+    await planVerdict(w, card, "block", `${BLOCK} — 1`);
+    calls[0].finish(0);
+    await sleep(20);
+    expect(calls[1]!.job.role).toBe("planner");
+    await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v2 attached — over to pi-plan-reviewer" });
+    calls[1].finish(0);
+    await sleep(20);
+    expect(calls[2]!.job.role).toBe("plan-reviewer");
+    // block 2 → cap, not a third planner run
+    await planVerdict(w, card, "block", `${BLOCK} — 2`);
+    calls[2].finish(0);
+    await sleep(20);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
+    expect(last.body).toContain("cap");
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(3); // cap comment disarmed the card
+  });
+
+  test("a human rejection resets the plan-review block count", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    for (let round = 1; round <= 2; round++) {
+      await planVerdict(w, card, "block", `${BLOCK} — ${round}`);
+      calls.at(-1)!.finish(0);
+      await sleep(20);
+      if (round === 1) {
+        await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v2 — over to pi-plan-reviewer" });
+        calls.at(-1)!.finish(0);
+        await sleep(20);
+      }
+    }
+    expect(db!.comments(card.id).at(-1)!.body).toContain("cap"); // two blocks → capped
+
+    await w.rejectTask(card.id, "shrink the scope"); // human feedback resets the count
+    await sleep(200);
+    expect(calls.at(-1)!.job.role).toBe("planner");
+    await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v3 — over to pi-plan-reviewer" });
+    calls.at(-1)!.finish(0);
+    await sleep(20);
+    await planVerdict(w, card, "block", `${BLOCK} — after reset`);
+    calls.at(-1)!.finish(0);
+    await sleep(20);
+    expect(calls.at(-1)!.job.role).toBe("planner"); // 1 block since the human comment — not capped
+    expect(db!.comments(card.id).at(-1)!.body).not.toContain("cap");
+  });
+
+  test("plan-reviewer crash posts a failure comment and does not hot-loop", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    calls[0].finish(1);
+    await sleep(20);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
+    expect(last.body).toContain("failed");
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(1);
+  });
+
+  test("plan reviewer defaults to thinking max; prompt forbids the gate", () => {
+    const task = { id: "abc12", title: "plan me", laneId: "plan" } as never;
+    withAgentEnv({}, () => {
+      expect(agentFlags("plan-reviewer", null)).toEqual(["--thinking", "max"]);
+    });
+    expect(planReviewerPrompt(task)).toContain("never run kanban approve/reject");
   });
 
   test("approval arms the plan-build builder; its handoff re-arms the reviewer", async () => {

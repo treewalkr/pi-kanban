@@ -7,10 +7,13 @@ export type { AgentRole };
 /**
  * Auto-agents loop, hosted by the serve process (`KANBAN_AUTO_REVIEW=1`).
  *
- * Three agents over the lanes, all state derived from the board: a card in the
+ * Agents over the lanes, all state derived from the board: a card in the
  * plan lane whose thread's last comment is not from the planner gets a
- * headless `pi` planning session that writes and attaches a plan, then posts a
- * disarm comment; the human owns the gate (`kanban approve` / `reject`). An
+ * headless `pi` planning session that writes and attaches a plan against the
+ * shared plan template, then hands off (kind handoff) to a plan reviewer that
+ * checks the plan against the template's review checklist — a block bounces
+ * back to the planner (max 2 rounds per human comment), a pass leaves the
+ * card at the gate; the human owns it (`kanban approve` / `reject`). An
  * approval (comment kind "approval", never agent-authored) moves the card to
  * implement and arms a builder session that builds the attached plan. A card
  * in the review lane whose last comment is not from the reviewer gets a review
@@ -56,12 +59,15 @@ export interface AutoReviewOptions {
   spawnFn?: SpawnFn;
   timeoutMs?: number;
   maxBlocks?: number;
+  /** Plan-review blocks allowed since the last human comment before the card goes to the human (default 2). */
+  maxPlanBlocks?: number;
   watchIntervalMs?: number;
   log?: (message: string) => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const DEFAULT_MAX_BLOCKS = 3;
+const DEFAULT_MAX_PLAN_BLOCKS = 2;
 const MAX_LOG_LINES = 150;
 
 export interface AgentSessionInfo {
@@ -152,16 +158,34 @@ export const PLAN_SECTIONS = [
 export function plannerPrompt(task: Task): string {
   return `You are pi-planner. Kanban card ${task.id} "${task.title}" is in the Plan lane in this repo — write its implementation plan. The plan is the builder's contract: two builders following it should produce the same behavior.
 
-1. Run: kanban brief ${task.id} — the note (intent, acceptance criteria), any earlier plan version, and the full thread. If the last comment is a rejection, its feedback is direction for this revision: address every point in v-next.
+1. Run: kanban brief ${task.id} — the note (intent, acceptance criteria), any earlier plan version, and the full thread. If the last comment is a rejection or a plan-review block, its feedback and findings are direction for this revision: address every point in v-next.
 2. Ground the plan in the repo: read AGENTS.md, then the files and tests the work touches. Cite real file paths; no invented APIs.
 3. Write the plan to a markdown file (e.g. /tmp/plan-${task.id}.md) using the plan template below: every section filled or "N/A — reason", every acceptance criterion mapped to concrete tests.
 4. Self-check the plan against the review checklist below and fix every hit before attaching.
 5. Attach it: kanban attach ${task.id} <plan-file>
-6. Disarm with exactly: kanban comment ${task.id} "plan v<N> attached — review it, then kanban approve ${task.id} or kanban reject ${task.id} --message <feedback>" --author pi-planner
+6. Hand off with exactly: kanban comment ${task.id} "plan v<N> attached — over to pi-plan-reviewer" --kind handoff --author pi-planner
 
 Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate.
 Questions first: after reading the repo, ask only if an answer would genuinely change the plan — post every question with its recommended default as one comment: kanban comment ${task.id} "<Q1…? default: …>" --kind question --author pi-planner, then stop without attaching a plan; the human's answer re-arms you and its "use the defaults" counts as an answer. When the repo can decide, decide and record it under Decisions instead of asking.
 Your last line: one sentence on the plan's shape.
+
+--- plan template and review checklist ---
+${PLAN_TEMPLATE.trim()}`;
+}
+
+export function planReviewerPrompt(task: Task): string {
+  return `You are pi-plan-reviewer. Kanban card ${task.id} "${task.title}" has a fresh plan in the Plan lane in this repo — critique it before the human gate. You are the second pair of eyes: assume the planner was convincing but lazy.
+
+1. Run: kanban brief ${task.id} — the note (acceptance criteria), the latest plan, and the full thread (rejections and earlier feedback are context).
+2. Check the plan against the review checklist below, and verify its claims: every cited path exists, every named function/API matches the code (read AGENTS.md and the named files), every acceptance criterion maps to a concrete test.
+
+Then record exactly one verdict (never move the card with mv/handoff, never run kanban approve/reject — the human owns the gate):
+- Pass: kanban plan-review ${task.id} --pass --message "<1-3 sentences on why it is executable>" --author pi-plan-reviewer
+- Block: kanban plan-review ${task.id} --block --message "<summary>" --finding "<checklist hit>" [--finding "<…>" …] --author pi-plan-reviewer
+
+Block only for checklist hits, never taste; up to 2 rounds happen automatically, then a human steps in. If you cannot evaluate the plan at all (files missing, repo unreadable), post kanban comment ${task.id} "cannot evaluate the plan — <why>" --author pi-plan-reviewer and stop.
+Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate.
+Your last line: a one-sentence verdict.
 
 --- plan template and review checklist ---
 ${PLAN_TEMPLATE.trim()}`;
@@ -214,7 +238,8 @@ Never move the card with mv. If a finding looks wrong, say so in the handoff mes
 export function agentFlags(role: AgentRole, cfg: AgentConfig | null): string[] {
   const envModel = process.env.KANBAN_AUTOREVIEW_MODEL?.trim();
   const envThinking = process.env.KANBAN_AUTOREVIEW_THINKING;
-  let thinking = envThinking?.trim() || cfg?.thinking || (role === "reviewer" || role === "planner" ? "max" : "");
+  let thinking =
+    envThinking?.trim() || cfg?.thinking || (role === "reviewer" || role === "planner" || role === "plan-reviewer" ? "max" : "");
   if (envThinking === "") thinking = ""; // explicitly disabled via env
   const args: string[] = [];
   if (cfg?.provider) args.push("--provider", cfg.provider);
@@ -294,6 +319,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const spawnFn = opts.spawnFn ?? defaultSpawn;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBlocks = opts.maxBlocks ?? DEFAULT_MAX_BLOCKS;
+  const maxPlanBlocks = opts.maxPlanBlocks ?? DEFAULT_MAX_PLAN_BLOCKS;
 
   const queue: AgentJob[] = [];
   const inFlight = new Set<string>();
@@ -303,11 +329,30 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   let draining = false;
   let stopped = false;
 
-  /** What the card needs right now: a planner, a reviewer, a builder (two flavors), or nothing. */
-  const roleFor = (task: Task): AgentRole | "capped" | null => {
+  /** What the card needs right now: a planner, a plan reviewer, a reviewer, a builder (two flavors), or nothing. */
+  const roleFor = (task: Task): AgentRole | "capped" | "plan-capped" | null => {
     const thread = db.comments(task.id);
     const last = thread.at(-1);
-    if (task.laneId === "plan" && last?.author !== PLANNER_AUTHOR) return "planner";
+    if (task.laneId === "plan") {
+      if (last?.author === PLANNER_AUTHOR) return last.kind === "handoff" ? "plan-reviewer" : null;
+      if (last?.author === PLAN_REVIEWER_AUTHOR) {
+        const blocked = last.kind === "review" && last.body.startsWith(KanbanDb.PLAN_REVIEW_BLOCK);
+        if (!blocked) return null; // pass, question, failure or cap comment — waiting on a human
+        // blocks since the last human (non-agent) comment: their reply resets the budget
+        let humanAt = -1;
+        for (let i = thread.length - 1; i >= 0; i--) {
+          if (!thread[i]!.author.startsWith("pi-")) {
+            humanAt = i;
+            break;
+          }
+        }
+        const blocks = thread.slice(humanAt + 1).filter(
+          (c) => c.author === PLAN_REVIEWER_AUTHOR && c.kind === "review" && c.body.startsWith(KanbanDb.PLAN_REVIEW_BLOCK),
+        ).length;
+        return blocks < maxPlanBlocks ? "planner" : "plan-capped";
+      }
+      return "planner"; // fresh card, human comment, or rejection
+    }
     if (task.laneId === "review" && last?.author !== REVIEWER_AUTHOR) return "reviewer";
     if (task.laneId === "implement") {
       if (last?.kind === "review" && last?.author === REVIEWER_AUTHOR) {
@@ -332,6 +377,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     for (const task of db.tasks()) {
       const role = roleFor(task);
       if (role === "planner") enqueue({ task, role, prompt: plannerPrompt(task) });
+      else if (role === "plan-reviewer") enqueue({ task, role, prompt: planReviewerPrompt(task) });
       else if (role === "reviewer") enqueue({ task, role, prompt: reviewerPrompt(task) });
       else if (role === "builder") {
         const plan = db.comments(task.id).at(-1)?.kind === "approval";
@@ -344,6 +390,14 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           body: `auto-review stopped: block cycles reached the cap of ${maxBlocks} — needs a human. Findings are on the note.`,
         });
         log(`cap reached on ${task.id} — leaving it for a human`);
+      } else if (role === "plan-capped") {
+        // same one-shot disarm: the comment flips the last author, so this fires once
+        db.createComment(task.id, {
+          author: PLAN_REVIEWER_AUTHOR,
+          kind: "comment",
+          body: `plan review cap reached: blocked ${maxPlanBlocks}× since the last human comment — the latest plan waits at the gate with open findings. kanban reject ${task.id} --message <feedback> to re-plan, or comment to re-run the review.`,
+        });
+        log(`plan-review cap reached on ${task.id} — leaving it for a human`);
       }
     }
     void drain();
@@ -409,12 +463,21 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     if (!task) return;
     const last = db.comments(task.id).at(-1);
     if (job.role === "planner") {
-      if (last?.author === PLANNER_AUTHOR) log(`planner ${task.id}: plan attached — waiting on the gate`);
+      if (last?.author === PLANNER_AUTHOR) log(`planner ${task.id}: plan attached — over to plan review`);
       else {
         db.createComment(task.id, {
           author: PLANNER_AUTHOR,
           kind: "comment",
           body: `auto-plan ${code !== 0 ? `failed (exit ${code})` : "ended without attaching a plan"} — comment on this card to re-trigger.`,
+        });
+      }
+    } else if (job.role === "plan-reviewer") {
+      if (last?.author === PLAN_REVIEWER_AUTHOR) log(`plan-reviewer ${task.id}: verdict recorded — waiting on the gate`);
+      else {
+        db.createComment(task.id, {
+          author: PLAN_REVIEWER_AUTHOR,
+          kind: "comment",
+          body: `plan review ${code !== 0 ? `failed (exit ${code})` : "ended without a verdict"} — approve or reject the plan directly, or comment on this card to re-run the review.`,
         });
       }
     } else if (job.role === "reviewer") {
