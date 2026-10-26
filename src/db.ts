@@ -244,7 +244,11 @@ export class KanbanDb {
     this.migratePlansTable();
   }
 
+  private watchers = new Set<() => void>();
+
   close(): void {
+    for (const stop of this.watchers) stop();
+    this.watchers.clear();
     this.db.close();
   }
 
@@ -263,7 +267,12 @@ export class KanbanDb {
       }
     }, intervalMs);
     timer.unref();
-    return () => clearInterval(timer);
+    const stop = () => {
+      clearInterval(timer);
+      this.watchers.delete(stop);
+    };
+    this.watchers.add(stop); // close() stops the pollers so a closed db can't throw later
+    return stop;
   }
 
   private q(sql: string): ReturnType<Database["prepare"]> {
