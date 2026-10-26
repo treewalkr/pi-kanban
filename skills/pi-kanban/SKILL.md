@@ -46,17 +46,27 @@ For every non-trivial unit of work:
 
 ## Auto-plan loop
 
-With `kanban serve --auto-review`, a pi planner also watches the Plan lane: every card there
-gets a planning session that explores the repo and attaches a versioned plan, then comments
-to disarm. **The human owns the gate** — never run `kanban approve`/`reject` as an agent.
+With `kanban serve --auto-review`, pi agents also watch the Plan lane: a **planner** writes a
+versioned plan for every card, a **plan reviewer** checks it against the shared checklist, and
+the card then waits at the gate. **The human owns the gate** — never run
+`kanban approve`/`reject` as an agent.
 
-- **Planning**: don't hand-write plans for Plan-lane cards in auto mode — the planner does it.
-  To re-plan, `kanban reject <id> --message <what to change>` (or any human comment re-arms it);
-  the next version lands as plan v2, v1 stays on the card.
+- **Planning**: don't hand-write plans for Plan-lane cards in auto mode — the planner does it,
+  using the shared template (`plan-template.md` next to this skill): every section filled or
+  `N/A — reason`, every acceptance criterion mapped to concrete tests. If an answer would
+  genuinely change the plan, the planner posts a `question` comment (each question with a
+  recommended default) and stops; any human reply re-arms it — "use the defaults" counts.
+  To force a re-plan: `kanban reject <id> --message <what to change>`; the next version lands
+  as plan v2, v1 stays on the card.
+- **Plan review**: the planner's handoff comment arms `pi-plan-reviewer`, which checks the plan
+  against the template checklist and records exactly one verdict — `kanban plan-review <id>
+  --pass --message …` (card waits at the human gate) or `--block --message … --finding …`
+  (planner re-plans with the findings). After 2 blocks without a human comment in between it
+  caps out and leaves the card for you.
 - **Approving** (`kanban approve <id>`, or ✓ in the web card): approval comment + move to
   Implement; a `pi-builder` session builds the attached plan, runs tests, and hands off to
   Review, where the reviewer loop takes over.
-- **Each planner cycle needs a human action** — no rejections, no planner runs.
+- **Each planner or plan-review cycle needs a human action** — no human comment, no re-runs.
 
 ## Auto-review loop
 
@@ -133,7 +143,8 @@ kanban help | version                                                 # CLI help
   section in the card detail — the plan lives on the card, not in a scratch
   file. Search matches plan text too.
 - **Threads**: every card carries a comment thread — the card *is* the forum.
-  Kinds: `comment` (default), `review`, `handoff`. `--author` names the writer:
+  Kinds: `comment` (default), `review`, `handoff`, `question` (agent asking you something),
+`approval`, `rejection` (gate verdicts, human-only). `--author` names the writer:
   agents pass their name (`--author pi`), humans and the web UI default to
   `user`. The web card detail shows the thread live.
 - **`--json`**: append to any command for machine-readable output; on error the

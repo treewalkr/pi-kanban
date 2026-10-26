@@ -39,8 +39,10 @@ search: ranks titles, checklist lines, note text, then plans — same results as
 hierarchy: --parent nests a card (epic → story → subtask, max depth 3).
 threads: comment/handoff/review append to the card thread; brief prints full pickup context.
 auto-review: serve --auto-review spawns a pi reviewer for cards in Review (thinking max; block → pi-builder works the findings, max 3 cycles; agents configurable in the web ui → ⚙).
-auto-plan: the same flag runs a pi planner for cards in Plan — it attaches a versioned plan and
-disarms; the human gate is kanban approve (arms a plan-build pi-builder) or kanban reject
+auto-plan: the same flag runs a pi planner for cards in Plan — it writes the plan from the shared
+template, asks open questions (kind question) when an answer would change the plan, then hands off
+to a pi plan-reviewer that checks the plan against the template checklist (max 2 block rounds per
+human comment); the human gate is kanban approve (arms a plan-build pi-builder) or kanban reject
 --message (re-plans with the feedback).`;
 
 interface Parsed {
