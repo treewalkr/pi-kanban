@@ -284,6 +284,25 @@ export function sessionIdFor(job: AgentJob, now: number = Date.now()): string {
   return `kanban-${job.task.id}-${job.role}-${now.toString(36)}`;
 }
 
+/** "8s" / "59s" / "1 min" / "20 min" */
+export function durationFor(secs: number): string {
+  return secs < 60 ? `${secs}s` : `${Math.round(secs / 60)} min`;
+}
+
+/** The "why" for a death comment, from the spawn result plus what the session actually emitted. */
+export function deathReason(result: SpawnResult, secs: number, sessionLog: string[]): string {
+  const dur = durationFor(secs);
+  if (result.timedOut) return `timed out after ${dur}`;
+  const lines = (result.stderrTail ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const compact = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 200);
+  const last = lines.length > 0 ? compact(lines.at(-1)!) : "";
+  if (result.code !== 0) return `failed (exit ${result.code}${last ? ` — ${last}` : ""}) after ${dur}`;
+  if (!sessionLog.some((l) => l.startsWith("text: "))) {
+    return `ended without a verdict after ${dur} — model returned no output`;
+  }
+  return `ended without a verdict after ${dur}`;
+}
+
 const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }) => {
   const proc = Bun.spawn({
     // json mode streams JSONL events while the session runs (--print waits for the end)
@@ -528,7 +547,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         inFlight.delete(job.task.id);
         if (!stopped) {
           try {
-            afterJob(job, result);
+            afterJob(job, result, session);
           } catch (err) {
             log(`${job.role} ${job.task.id}: ${err instanceof Error ? err.message : String(err)}`);
           }
@@ -541,18 +560,19 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   }
 
   /** Log the outcome; if the session died without leaving a trace, say so on the card. */
-  function afterJob(job: AgentJob, result: SpawnResult): void {
-    const code = result.code;
+  function afterJob(job: AgentJob, result: SpawnResult, session: AgentSessionInfo): void {
     const task = db.tasks().find((t) => t.id === job.task.id);
     if (!task) return;
     const last = db.comments(task.id).at(-1);
+    const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
+    const reason = deathReason(result, secs, session.log);
     if (job.role === "planner") {
       if (last?.author === PLANNER_AUTHOR) log(`planner ${task.id}: plan attached — over to plan review`);
       else {
         db.createComment(task.id, {
           author: PLANNER_AUTHOR,
           kind: "comment",
-          body: `auto-plan ${code !== 0 ? `failed (exit ${code})` : "ended without attaching a plan"} — comment on this card to re-trigger.`,
+          body: `${KanbanDb.SESSION_DIED_PREFIX}auto-plan ${reason} — comment on this card to re-trigger.`,
         });
       }
     } else if (job.role === "plan-reviewer") {
@@ -561,7 +581,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         db.createComment(task.id, {
           author: PLAN_REVIEWER_AUTHOR,
           kind: "comment",
-          body: `plan review ${code !== 0 ? `failed (exit ${code})` : "ended without a verdict"} — approve or reject the plan directly, or comment on this card to re-run the review.`,
+          body: `${KanbanDb.SESSION_DIED_PREFIX}plan review ${reason} — approve or reject the plan directly, or comment on this card to re-run the review.`,
         });
       }
     } else if (job.role === "reviewer") {
@@ -572,7 +592,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         db.createComment(task.id, {
           author: REVIEWER_AUTHOR,
           kind: "comment",
-          body: `auto-review ${code !== 0 ? `failed (exit ${code})` : "ended without a verdict"} — comment on this card to re-trigger.`,
+          body: `${KanbanDb.SESSION_DIED_PREFIX}auto-review ${reason}; comment on this card to re-trigger.`,
         });
       }
     } else {
@@ -582,7 +602,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         db.createComment(task.id, {
           author: BUILDER_AUTHOR,
           kind: "comment",
-          body: `auto-builder ${code !== 0 ? `failed (exit ${code})` : "ended without a handoff"} — findings unaddressed, needs a human.`,
+          body: `${KanbanDb.SESSION_DIED_PREFIX}auto-builder ${reason} — findings unaddressed, needs a human.`,
         });
       }
     }

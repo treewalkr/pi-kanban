@@ -14,6 +14,8 @@ import {
   activitySnapshot,
   agentFlags,
   builderPlanPrompt,
+  deathReason,
+  durationFor,
   formatPiEvent,
   plannerPrompt,
   planReviewerPrompt,
@@ -420,6 +422,73 @@ describe("auto-review", () => {
     expect(formatPiEvent('{"type":"whatever","errorMessage":"boom"}')).toBe("⚠ whatever: boom");
     expect(formatPiEvent('{"type":"whatever"}')).toBeNull();
     expect(formatPiEvent('{"type":"whatever","errorMessage":"   "}')).toBeNull();
+  });
+
+  test("durationFor rounds seconds and minutes accurately", () => {
+    expect(durationFor(8)).toBe("8s");
+    expect(durationFor(59)).toBe("59s");
+    expect(durationFor(60)).toBe("1 min");
+    expect(durationFor(1200)).toBe("20 min");
+  });
+
+  test("deathReason names timeouts, exit codes and silent clean exits", () => {
+    expect(deathReason({ code: 1, timedOut: true }, 1200, [])).toBe("timed out after 20 min");
+    expect(
+      deathReason({ code: 1, stderrTail: "line\nError: ECONNREFUSED" }, 4, []),
+    ).toBe("failed (exit 1 — Error: ECONNREFUSED) after 4s");
+    expect(deathReason({ code: 0 }, 8, [])).toBe(
+      "ended without a verdict after 8s — model returned no output",
+    );
+    expect(deathReason({ code: 0 }, 30, ["session started", "text: looks good"])).toBe(
+      "ended without a verdict after 30s",
+    );
+  });
+
+  test("stderr tail is captured on exit 0 and lands in the session attachment", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const spawnFn: SpawnFn = (_job, context) => {
+      context.emit("session started");
+      return Promise.resolve({ code: 0, stderrTail: "provider: usage limit reached (HTTP 429)" });
+    };
+    start(spawnFn, dbFile);
+    await sleep(30);
+    const logs = db!.attachments(card.id, "session");
+    expect(logs.length).toBe(1);
+    expect(logs[0]!.content).toContain("stderr tail:");
+    expect(logs[0]!.content).toContain("provider: usage limit reached (HTTP 429)");
+  });
+
+  test("reviewer death comment names exit code, stderr line and duration", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const spawnFn: SpawnFn = () =>
+      Promise.resolve({ code: 1, stderrTail: "line\nError: ECONNREFUSED" });
+    start(spawnFn, dbFile);
+    await sleep(30);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(REVIEWER_AUTHOR);
+    expect(last.body).toStartWith(
+      "session died: auto-review failed (exit 1 — Error: ECONNREFUSED) after",
+    );
+    expect(last.body).toEndWith("; comment on this card to re-trigger.");
+  });
+
+  test("simulated spawn exiting 0 without a verdict leaves a reason comment and a diagnostic attachment", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const spawnFn: SpawnFn = () =>
+      Promise.resolve({ code: 0, stderrTail: "quota exceeded" });
+    start(spawnFn, dbFile);
+    await sleep(30);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.body).toContain("session died: auto-review ended without a verdict after");
+    expect(last.body).toContain("model returned no output");
+    expect(last.body).toContain("; comment on this card to re-trigger.");
+    const logs = db!.attachments(card.id, "session");
+    expect(logs.length).toBe(1);
+    expect(logs[0]!.content).toContain("stderr tail:");
+    expect(logs[0]!.content).toContain("quota exceeded");
   });
 
   test("finished sessions save their log on the card; silent ones save nothing", async () => {

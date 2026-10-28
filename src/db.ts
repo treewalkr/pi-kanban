@@ -784,6 +784,8 @@ export class KanbanDb {
   static readonly PLAN_REVIEW_BLOCK = "plan review: block";
   /** Prefix of the plan-review cap comment body — autoreview builds its body from this. */
   static readonly PLAN_REVIEW_CAP = "plan review cap reached";
+  /** Prefix of agent session-death failure comments — board waiting state keys on this. */
+  static readonly SESSION_DIED_PREFIX = "session died: ";
 
   /** The plan reviewer's verdict: pass leaves the card at the human gate, block sends it back to the planner. Never moves the card. */
   planReview(
