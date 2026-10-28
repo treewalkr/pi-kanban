@@ -3,7 +3,7 @@ import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type Attachment, type Board, type Comment, type Lane, type Task } from "./db";
 import { activitySnapshot } from "./autoreview";
 import { listPiModels } from "./models";
-import { devWatchRestart, serveRestart, shareToken } from "./restart";
+import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
 
@@ -92,7 +92,13 @@ export const createApp = (
         { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } },
       );
     })
-    .get("/health", () => ({ ok: true, booted, shareToken }))
+    .get("/health", ({ headers }) => {
+      // a respawn child presents the one-shot token its parent minted; the
+      // incumbent vouches exactly once. The token itself never crosses the wire.
+      const presented = headers["x-kanban-share-token"];
+      const vouched = typeof presented === "string" && consumeShareToken(presented);
+      return { ok: true, booted, share: vouched ? ("granted" as const) : undefined };
+    })
     .post(
       "/restart",
       ({ request, status, query }) => {

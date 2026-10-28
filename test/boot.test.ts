@@ -1,42 +1,110 @@
 import { describe, expect, test } from "bun:test";
-import { shareDecision } from "../src/index";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { app } from "../src/app";
+import { boot, type IncumbentHealth } from "../src/index";
+import { consumeShareToken, mintShareToken } from "../src/restart";
 
-const base = { occupied: false, requested: false, force: false, health: null, token: undefined };
+// ---- seams ------------------------------------------------------------------
 
-describe("shareDecision (occupied-port guard)", () => {
-  test("free port always binds", () => {
-    expect(shareDecision(base)).toEqual({ allow: true });
-    expect(shareDecision({ ...base, requested: true })).toEqual({ allow: true });
-  });
+const probeFree = async () => false;
+const probeOccupied = async () => true;
+const health = (h: IncumbentHealth | null) => async () => h;
 
-  test("occupied port without the share flag refuses (original guard)", () => {
-    const d = shareDecision({ ...base, occupied: true, health: { ok: true } });
-    expect(d.allow).toBe(false);
-    expect(d.error).toContain("stop it first");
-  });
+// refusal paths throw before any binding, so they never touch the app routes;
+// accept paths bind an ephemeral port — run those LAST, then stop the app.
 
-  test("self-respawn child: matching share token is allowed through", () => {
-    expect(
-      shareDecision({ ...base, occupied: true, requested: true, health: { ok: true, shareToken: "t" }, token: "t" }),
-    ).toEqual({ allow: true });
-  });
-
-  test("cargo-culted KANBAN_SHARE_PORT against a foreign kanban board refuses (10/29 incident)", () => {
-    const d = shareDecision({ ...base, occupied: true, requested: true, health: { ok: true, shareToken: "theirs" }, token: undefined });
-    expect(d.allow).toBe(false);
-    expect(d.error).toContain("another kanban board");
-    expect(d.error).toContain("repro.sh");
-  });
-
-  test("share flag against a non-kanban listener refuses too", () => {
-    const d = shareDecision({ ...base, occupied: true, requested: true, health: null });
-    expect(d.allow).toBe(false);
-    expect(d.error).toContain("unknown listener");
-  });
-
-  test("KANBAN_SHARE_FORCE overrides everything (explicit human escape hatch)", () => {
-    expect(
-      shareDecision({ ...base, occupied: true, requested: true, force: true, health: { ok: true, shareToken: "x" }, token: "y" }),
-    ).toEqual({ allow: true });
+describe("one-shot share token (restart.ts)", () => {
+  test("a mint vouches exactly once, then it is spent", () => {
+    const token = mintShareToken();
+    expect(consumeShareToken(token)).toBe(true);
+    expect(consumeShareToken(token)).toBe(false); // spent — a leak cannot vouch twice
+    expect(consumeShareToken("not-the-token")).toBe(false);
   });
 });
+
+describe("boot() occupied-port guard (seams per plan AC3)", () => {
+  test("E1: share flag against a healthy foreign kanban is refused", async () => {
+    const foreign = health({ ok: true, booted: Date.now() });
+    await expect(
+      boot({ port: 4600, sharePort: true, probePort: probeOccupied, checkHealth: foreign, dist: emptyDist() }),
+    ).rejects.toThrow(/held by a healthy kanban server \(booted .*\) — refusing to share/);
+  });
+
+  test("E1 error names the repro playbook and the force escape hatch", async () => {
+    const foreign = health({ ok: true, booted: Date.now() });
+    try {
+      await boot({ port: 4600, sharePort: true, probePort: probeOccupied, checkHealth: foreign, dist: emptyDist() });
+      expect.unreachable();
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain("scripts/repro.sh");
+      expect(msg).toContain("KANBAN_SHARE_FORCE=1");
+    }
+  });
+
+  test("E2: share flag against a non-kanban listener is refused", async () => {
+    await expect(
+      boot({ port: 4600, sharePort: true, probePort: probeOccupied, checkHealth: health({ ok: false }), dist: emptyDist() }),
+    ).rejects.toThrow(/held by a non-kanban server — refusing to share/);
+  });
+
+  test("E3: no share flag + occupied port is refused (base guard)", async () => {
+    await expect(
+      boot({ port: 4600, probePort: probeOccupied, checkHealth: health(null), dist: emptyDist() }),
+    ).rejects.toThrow(/already has a server — stop it first/);
+  });
+
+  test("free port binds (first accept test — app stopped after)", async () => {
+    const dist = emptyDist();
+    try {
+      await boot({ port: 0, probePort: probeFree, checkHealth: health(null), dist });
+      const port = app.server!.port;
+      expect(port).toBeGreaterThan(0);
+      // real request through the bound socket — same stack production uses
+      const res = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(await res.json()).toMatchObject({ ok: true });
+      const spa = await fetch(`http://127.0.0.1:${port}/some/spa/route`);
+      expect(await spa.text()).toContain("<title>t</title>");
+    } finally {
+      app.stop();
+      rmSync(dist, { recursive: true, force: true });
+    }
+  });
+
+  test("respawn race: occupant dies between probe and health check → bind anyway", async () => {
+    const dist = emptyDist();
+    try {
+      await boot({ port: 0, sharePort: true, probePort: probeOccupied, checkHealth: health(null), dist });
+      expect(app.server!.port).toBeGreaterThan(0);
+    } finally {
+      app.stop();
+      rmSync(dist, { recursive: true, force: true });
+    }
+  });
+
+  test("vouched share: incumbent granted → bind (self-respawn child path)", async () => {
+    const dist = emptyDist();
+    try {
+      await boot({
+        port: 0,
+        sharePort: true,
+        probePort: probeOccupied,
+        checkHealth: health({ ok: true, share: "granted" }),
+        dist,
+      });
+      expect(app.server!.port).toBeGreaterThan(0);
+    } finally {
+      app.stop();
+      rmSync(dist, { recursive: true, force: true });
+    }
+  });
+});
+
+/** A dist stand-in so route registration is exercised without web/dist. */
+function emptyDist(): string {
+  const dir = mkdtempSync(join(tmpdir(), "kanban-bootdist-"));
+  Bun.write(join(dir, "index.html"), "<!doctype html><title>t</title>");
+  return dir;
+}

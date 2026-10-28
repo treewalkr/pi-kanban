@@ -3,13 +3,30 @@ import { runShutdown } from "./shutdown";
 
 let running = false;
 
+/** The current one-shot share token, if one has been minted and not yet spent. */
+let shareToken: string | null = null;
+
 /**
- * Per-process random token: /health exposes it, and a self-respawn child
- * carries it in KANBAN_SHARE_TOKEN. boot() only lets a sharer bind when the
- * occupying server's token matches, so a cargo-culted KANBAN_SHARE_PORT=1
- * can never stack a second board on the production port (10/29 incident).
+ * Mint the one-shot token the respawn child presents to the incumbent's
+ * /health. serveRestart only — a cargo-culted KANBAN_SHARE_PORT=1 can never
+ * mint one, so only a genuine respawn child can be vouched (10/29 incident).
  */
-export const shareToken = crypto.randomUUID();
+export function mintShareToken(): string {
+  shareToken = crypto.randomUUID();
+  return shareToken;
+}
+
+/** Consume a presented token: true exactly once per mint (then the mint is spent). /health only. */
+export function consumeShareToken(token: string): boolean {
+  if (shareToken === null || token !== shareToken) return false;
+  shareToken = null; // spent — a leaked token can never vouch twice
+  return true;
+}
+
+/** Env for the detached respawn child: shares the port and carries the one-shot token. */
+export function respawnChildEnv(): Record<string, string | undefined> {
+  return { ...process.env, KANBAN_SHARE_PORT: "1", KANBAN_SHARE_TOKEN: mintShareToken() };
+}
 
 /**
  * Rebuild web/dist so a restarted server serves fresh assets. Returns false on
@@ -68,13 +85,7 @@ export async function serveRestart(): Promise<void> {
       stdin: "ignore",
       stdout: "inherit",
       stderr: "inherit",
-      env: {
-        ...process.env,
-        // the replacement may bind while we exit — sharing the port is safe here,
-        // and the token proves to the child that WE are who it is replacing
-        KANBAN_SHARE_PORT: "1",
-        KANBAN_SHARE_TOKEN: shareToken,
-      },
+      env: respawnChildEnv(), // shares the port and carries the one-shot vouch token
     });
     setTimeout(() => process.exit(0), 150); // give the spawn a beat to take
   } finally {
