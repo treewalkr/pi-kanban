@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { JSDOM } from "jsdom";
 
 // dompurify reads `window` at import time — install a DOM before importing markdown.ts
@@ -266,3 +268,41 @@ describe("renderMarkdown", () => {
     expect(toggleTaskLine(src, Number.NaN)).toBe(src);
   });
 });
+
+const appCssPath = join(import.meta.dir, "..", "web", "src", "app.css");
+const appCss = readFileSync(appCssPath, "utf-8");
+
+describe("markdown code blocks (app.css cascade)", () => {
+  test("plan pane code blocks wrap long lines", () => {
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor detail"><div class="detail-body"><details class="detail-plan" open><div class="detail-note md"><pre><code class="hljs language-ts">const x = 1;</code></pre></div></details></div></div></body></html>`,
+    );
+    const code = dom.window.document.querySelector("code")!;
+    const style = dom.window.getComputedStyle(code);
+    expect(style.whiteSpace).toBe("pre-wrap");
+    expect(style.overflowWrap).toBe("anywhere");
+  });
+
+  test("note and comment code blocks share the wrap rule", () => {
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="detail-note md"><pre><code>const a = 1;</code></pre></div><div class="comment-body md"><pre><code>const b = 2;</code></pre></div></body></html>`,
+    );
+    const codes = dom.window.document.querySelectorAll("code");
+    expect(codes.length).toBe(2);
+    for (const code of codes) {
+      const style = dom.window.getComputedStyle(code);
+      expect(style.whiteSpace).toBe("pre-wrap");
+      expect(style.overflowWrap).toBe("anywhere");
+    }
+  });
+
+  test("pre keeps the horizontal scroll fallback", () => {
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor detail"><div class="detail-body"><details class="detail-plan" open><div class="detail-note md"><pre><code class="hljs language-ts">const x = 1;</code></pre></div></details></div></div></body></html>`,
+    );
+    const pre = dom.window.document.querySelector("pre")!;
+    const style = dom.window.getComputedStyle(pre);
+    expect(style.overflowX).toBe("auto");
+  });
+});
+
