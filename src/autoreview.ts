@@ -97,7 +97,8 @@ export function activitySnapshot(): AgentSessionInfo[] {
 
 /**
  * One pi JSONL event (`--mode json`) → one short log line, or null for noise
- * (usage churn, text deltas). Unknown events are dropped, not errors.
+ * (usage churn, text deltas). Unknown events carrying errorMessage render as
+ * warnings; the rest are dropped.
  */
 export function formatPiEvent(line: string): string | null {
   let ev: Record<string, any>;
@@ -112,6 +113,9 @@ export function formatPiEvent(line: string): string | null {
       return "session started";
     case "message_end": {
       if (ev.message?.role !== "assistant") return null;
+      if (ev.message?.stopReason === "error") {
+        return `✗ model error: ${compact(String(ev.message.errorMessage ?? "unknown error"))}`;
+      }
       const text = (ev.message.content ?? [])
         .filter((b: any) => b?.type === "text")
         .map((b: any) => b.text ?? "")
@@ -129,12 +133,18 @@ export function formatPiEvent(line: string): string | null {
     }
     case "auto_retry_start":
       return `retry ${ev.attempt}/${ev.maxAttempts}: ${compact(String(ev.errorMessage ?? ""))}`;
+    case "auto_retry_end":
+      return ev.success === false ? `retries exhausted: ${compact(String(ev.finalError ?? "unknown error"))}` : null;
     case "compaction_start":
       return `compacting (${ev.reason})`;
+    case "compaction_end":
+      return ev.errorMessage ? `✗ compaction failed: ${compact(String(ev.errorMessage))}` : null;
     case "agent_settled":
-      return "settled";
+      return ev.aborted ? "settled (aborted)" : "settled";
     default:
-      return null;
+      return typeof ev.errorMessage === "string" && ev.errorMessage.trim()
+        ? `⚠ ${ev.type}: ${compact(ev.errorMessage)}`
+        : null;
   }
 }
 

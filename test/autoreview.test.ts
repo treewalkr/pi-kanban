@@ -394,6 +394,34 @@ describe("auto-review", () => {
     expect(formatPiEvent(`{"type":"tool_execution_start","toolName":"bash","args":{"command":"${long}"}}`)!.length).toBeLessThanOrEqual(220);
   });
 
+  test("formatPiEvent renders model errors, exhausted retries and unknown error events", () => {
+    expect(
+      formatPiEvent(
+        '{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"usage limit reached"}}',
+      ),
+    ).toBe("✗ model error: usage limit reached");
+    expect(
+      formatPiEvent('{"type":"message_end","message":{"role":"assistant","stopReason":"error"}}'),
+    ).toBe("✗ model error: unknown error");
+    expect(
+      formatPiEvent('{"type":"auto_retry_end","success":false,"finalError":"429 quota exceeded"}'),
+    ).toBe("retries exhausted: 429 quota exceeded");
+    expect(
+      formatPiEvent('{"type":"auto_retry_end","success":true}'),
+    ).toBeNull();
+    expect(
+      formatPiEvent('{"type":"compaction_end","errorMessage":"disk full"}'),
+    ).toBe("✗ compaction failed: disk full");
+    expect(
+      formatPiEvent('{"type":"compaction_end"}'),
+    ).toBeNull();
+    expect(formatPiEvent('{"type":"agent_settled","aborted":true}')).toBe("settled (aborted)");
+    expect(formatPiEvent('{"type":"agent_settled","aborted":false}')).toBe("settled");
+    expect(formatPiEvent('{"type":"whatever","errorMessage":"boom"}')).toBe("⚠ whatever: boom");
+    expect(formatPiEvent('{"type":"whatever"}')).toBeNull();
+    expect(formatPiEvent('{"type":"whatever","errorMessage":"   "}')).toBeNull();
+  });
+
   test("finished sessions save their log on the card; silent ones save nothing", async () => {
     const { dbFile, writer: w } = setup();
     const card = cardInReview(w);
