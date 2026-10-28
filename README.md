@@ -87,7 +87,9 @@ every card that lands in Review — approve → Done, block → findings land as
 and a `pi-builder` session works them and hands the card back (stops after 3 block cycles and
 leaves a comment for you). Every step is a thread comment, and each spawn is logged in the serve
 terminal under `[autoreview]`. Each agent spawn gets its own fresh pi session — the card thread
-(`kanban brief`) is the only shared context.
+(`kanban brief`) is the only shared context. If a session dies (model error, quota limit, timeout, or
+silent exit), the reason and duration are posted to the card thread, an `✗ session died` badge marks
+the card on the board, and any diagnostic stderr tail is saved in the session attachment.
 
 Configure all four agents in the web UI (⚙ in the topbar) — settings apply to the next session
 without restarting serve:
