@@ -4,6 +4,14 @@ import { runShutdown } from "./shutdown";
 let running = false;
 
 /**
+ * Per-process random token: /health exposes it, and a self-respawn child
+ * carries it in KANBAN_SHARE_TOKEN. boot() only lets a sharer bind when the
+ * occupying server's token matches, so a cargo-culted KANBAN_SHARE_PORT=1
+ * can never stack a second board on the production port (10/29 incident).
+ */
+export const shareToken = crypto.randomUUID();
+
+/**
  * Rebuild web/dist so a restarted server serves fresh assets. Returns false on
  * failure — the running server is left alone and the errors land in its log.
  */
@@ -62,8 +70,10 @@ export async function serveRestart(): Promise<void> {
       stderr: "inherit",
       env: {
         ...process.env,
-        // the replacement may bind while we exit — sharing the port is safe here
+        // the replacement may bind while we exit — sharing the port is safe here,
+        // and the token proves to the child that WE are who it is replacing
         KANBAN_SHARE_PORT: "1",
+        KANBAN_SHARE_TOKEN: shareToken,
       },
     });
     setTimeout(() => process.exit(0), 150); // give the spawn a beat to take

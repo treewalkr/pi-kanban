@@ -3,7 +3,7 @@ import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type Attachment, type Board, type Comment, type Lane, type Task } from "./db";
 import { activitySnapshot } from "./autoreview";
 import { listPiModels } from "./models";
-import { devWatchRestart, serveRestart } from "./restart";
+import { devWatchRestart, serveRestart, shareToken } from "./restart";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
 
@@ -92,7 +92,7 @@ export const createApp = (
         { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } },
       );
     })
-    .get("/health", () => ({ ok: true, booted }))
+    .get("/health", () => ({ ok: true, booted, shareToken }))
     .post(
       "/restart",
       ({ request, status, query }) => {
