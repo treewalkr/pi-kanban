@@ -22,16 +22,38 @@ fi
 DB="$(mktemp -t kanban-repro)"
 TTL="${REPRO_TTL:-1800}"
 PIDFILE="/tmp/kanban-repro-$PORT.pid"
-EXTRA=""
-[ "${REPRO_AGENTS:-0}" = "1" ] && EXTRA="KANBAN_AUTO_REVIEW=1"
+WATCHDOG_PID=""
 
-# TTL watchdog (macOS has no GNU timeout(1)): kills the server after REPRO_TTL seconds
-watchdog() { sleep "$1"; [ -f "$2" ] && kill "$(cat "$2")" 2>/dev/null || true; }
+AGENTS="${REPRO_AGENTS:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    --agents|-a) AGENTS=1 ;;
+    *) echo "repro: unknown flag $arg (supported: --agents|-a)" >&2; exit 1 ;;
+  esac
+done
 
-echo "repro board → http://127.0.0.1:$PORT  (db $DB, ttl ${TTL}s, agents ${REPRO_AGENTS:-0})"
+# sanitize: a repro must never inherit the production server's identity — no
+# shared port, no live share token, no agent loop, no production DB
+unset KANBAN_SHARE_PORT KANBAN_SHARE_TOKEN KANBAN_AUTO_REVIEW KANBAN_DB
+EXTRA="KANBAN_DB=$DB"
+[ "$AGENTS" = "1" ] && EXTRA="KANBAN_AUTO_REVIEW=1 $EXTRA"
+
+# TTL watchdog (macOS has no GNU timeout(1)). Identity-checked: it only kills
+# the server it was spawned for, never a later repro that reused the pidfile.
+watchdog() {
+  local ttl="$1" pidfile="$2" guarded="$3"
+  sleep "$ttl"
+  if [ -f "$pidfile" ] && [ "$(cat "$pidfile")" = "$guarded" ]; then
+    kill "$guarded" 2>/dev/null || true
+  fi
+}
+
+echo "repro board → http://127.0.0.1:$PORT  (db $DB, ttl ${TTL}s, agents $AGENTS)"
 echo "stop early: kill \$(cat $PIDFILE)"
 
 cleanup() {
+  # kill the watchdog before the server so it can never outlive this script
+  [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null || true
   if [ -f "$PIDFILE" ]; then
     kill "$(cat "$PIDFILE")" 2>/dev/null || true
     rm -f "$PIDFILE"
@@ -40,7 +62,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-env KANBAN_DB="$DB" PORT="$PORT" $EXTRA bun run src/index.ts &
+env PORT="$PORT" $EXTRA bun run src/index.ts &
 echo $! > "$PIDFILE"
-watchdog "$TTL" "$PIDFILE" &
+watchdog "$TTL" "$PIDFILE" "$(cat "$PIDFILE")" &
+WATCHDOG_PID=$!
 wait "$(cat "$PIDFILE")" || true
