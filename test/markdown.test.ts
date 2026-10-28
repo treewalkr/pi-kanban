@@ -273,36 +273,47 @@ const appCssPath = join(import.meta.dir, "..", "web", "src", "app.css");
 const appCss = readFileSync(appCssPath, "utf-8");
 
 describe("markdown code blocks (app.css cascade)", () => {
-  test("plan pane code blocks wrap long lines", () => {
+  test("plan pane code blocks stay one-line", () => {
     const dom = new JSDOM(
       `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor detail"><div class="detail-body"><details class="detail-plan" open><div class="detail-note md"><pre><code class="hljs language-ts">const x = 1;</code></pre></div></details></div></div></body></html>`,
     );
+    const pre = dom.window.document.querySelector("pre")!;
+    const preStyle = dom.window.getComputedStyle(pre);
+    expect(preStyle.whiteSpace).toBe("pre");
+    expect(preStyle.overflowX).toBe("auto");
     const code = dom.window.document.querySelector("code")!;
-    const style = dom.window.getComputedStyle(code);
-    expect(style.whiteSpace).toBe("pre-wrap");
-    expect(style.overflowWrap).toBe("anywhere");
+    const codeStyle = dom.window.getComputedStyle(code);
+    expect(codeStyle.whiteSpace).not.toBe("pre-wrap");
+    expect(codeStyle.overflowWrap).toBe("normal");
   });
 
-  test("note and comment code blocks share the wrap rule", () => {
+  test("note and comment code blocks share the one-line contract", () => {
     const dom = new JSDOM(
       `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="detail-note md"><pre><code>const a = 1;</code></pre></div><div class="comment-body md"><pre><code>const b = 2;</code></pre></div></body></html>`,
     );
+    const pres = dom.window.document.querySelectorAll("pre");
+    expect(pres.length).toBe(2);
+    for (const pre of pres) {
+      const style = dom.window.getComputedStyle(pre);
+      expect(style.whiteSpace).toBe("pre");
+      expect(style.overflowX).toBe("auto");
+    }
     const codes = dom.window.document.querySelectorAll("code");
     expect(codes.length).toBe(2);
     for (const code of codes) {
       const style = dom.window.getComputedStyle(code);
-      expect(style.whiteSpace).toBe("pre-wrap");
-      expect(style.overflowWrap).toBe("anywhere");
+      expect(style.whiteSpace).not.toBe("pre-wrap");
     }
   });
 
-  test("pre keeps the horizontal scroll fallback", () => {
+  test("pre keeps a horizontal scrollbar (auto, thin)", () => {
     const dom = new JSDOM(
       `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor detail"><div class="detail-body"><details class="detail-plan" open><div class="detail-note md"><pre><code class="hljs language-ts">const x = 1;</code></pre></div></details></div></div></body></html>`,
     );
     const pre = dom.window.document.querySelector("pre")!;
     const style = dom.window.getComputedStyle(pre);
     expect(style.overflowX).toBe("auto");
+    expect(style.scrollbarWidth).toBe("thin");
   });
 });
 
