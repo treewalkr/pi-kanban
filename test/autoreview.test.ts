@@ -668,6 +668,29 @@ describe("auto-plan", () => {
     expect(db!.resolveTask(card.id).laneId).toBe("plan");
   });
 
+  test("a plan attached outside the loop routes to the plan reviewer, not a re-plan", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "planned in chat", lane: "plan" });
+    w.attach(card.id, "plan", "# Plan v1\nwritten in a chat session at the human's direction");
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("plan-reviewer");
+  });
+
+  test("a fresh external plan after a rejection goes to review, not a re-plan", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInPlan(w);
+    await w.createComment(card.id, { author: PLANNER_AUTHOR, body: "plan v1 attached" });
+    await w.rejectTask(card.id, "tighten step 2");
+    await sleep(5); // keep the v2 attachment strictly newer than the rejection
+    await w.attach(card.id, "plan", "# Plan v2\naddresses the rejection");
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("plan-reviewer");
+  });
+
   const PASS = "plan review: pass";
   const BLOCK = "plan review: block";
 

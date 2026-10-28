@@ -464,11 +464,20 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       // non-verdict plan-reviewer comment (session failed, cannot-evaluate, or
       // cap) means the plan itself never failed, so the human comment re-runs
       // the reviewer on the attached plan as-is; anything else re-arms the planner.
+      let decidedBy: (typeof thread)[number] | null = null;
       for (let i = thread.length - 1; i >= 0; i--) {
         const c = thread[i]!;
-        if (c.kind === "rejection") return "planner"; // explicit human intent: re-plan with the feedback
-        if (c.author.startsWith("pi-")) return c.author === PLAN_REVIEWER_AUTHOR && c.kind === "comment" ? "plan-reviewer" : "planner";
+        if (c.kind === "rejection" || c.author.startsWith("pi-")) {
+          decidedBy = c;
+          break;
+        }
       }
+      if (decidedBy?.author === PLAN_REVIEWER_AUTHOR && decidedBy.kind === "comment") return "plan-reviewer";
+      // a plan attached after that deciding event was authored outside the
+      // loop (a chat session attaching it at the human's direction): it is
+      // fresh and unreviewed — review it, don't re-plan over it
+      const plan = db.attachment(task.id, "plan");
+      if (plan && plan.createdAt > (decidedBy?.createdAt ?? 0)) return "plan-reviewer";
       return "planner"; // fresh card, or only human comments so far
     }
     if (task.laneId === "review" && last?.author !== REVIEWER_AUTHOR) return "reviewer";
