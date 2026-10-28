@@ -52,8 +52,17 @@ export interface SpawnContext {
   track: (kill: () => void) => () => void;
 }
 
-/** Runs one agent session; resolves with the child's exit code (non-zero = failure). */
-export type SpawnFn = (job: AgentJob, ctx: SpawnContext) => Promise<number>;
+/** How a spawned session ended: code plus the diagnostics a number can't carry. */
+export interface SpawnResult {
+  /** Child exit code; non-zero = failure. */
+  code: number;
+  /** True when the timeout killer fired (quota exits masquerade as 0, but timeouts masquerade as 1). */
+  timedOut?: boolean;
+  /** Trailing stderr text if the child wrote any — the diagnostic tail, ≤1500 chars. */
+  stderrTail?: string;
+}
+
+export type SpawnFn = (job: AgentJob, ctx: SpawnContext) => Promise<SpawnResult>;
 
 export interface AutoReviewOptions {
   db: KanbanDb;
@@ -307,12 +316,16 @@ const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }
 
   return proc.exited.finally(untrack).then(async (code) => {
     clearTimeout(timer);
+    const tail = (await stderr).trim();
     if (timedOut) log(`${job.role} ${job.task.id}: timed out after ${Math.round(timeoutMs / 60_000)} min, killed`);
     else if (code !== 0) {
-      const tail = (await stderr).trim();
       if (tail) log(`${job.role} ${job.task.id}: exited ${code}, stderr tail:\n${tail.slice(-1500)}`);
     }
-    return timedOut ? 1 : (code ?? 1);
+    return {
+      code: timedOut ? 1 : (code ?? 1),
+      timedOut: timedOut || undefined,
+      stderrTail: tail ? tail.slice(-1500) : undefined,
+    };
   });
 };
 
@@ -469,12 +482,16 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
             untrack();
           };
         };
-        let code = 0;
+        let result: SpawnResult = { code: 1 };
         try {
-          code = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track: jobTrack });
+          result = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track: jobTrack });
+          if (result.timedOut) emit("timed out — killed");
+          if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
         } catch (err) {
           log(`${job.role} ${job.task.id}: spawn error ${(err as Error).message}`);
-          code = 1;
+          result = { code: 1, stderrTail: `spawn error: ${(err as Error).message}` };
+          if (result.timedOut) emit("timed out — killed");
+          if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
         } finally {
           for (const untrack of jobKills) untrack();
           jobKills.clear();
@@ -501,7 +518,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         inFlight.delete(job.task.id);
         if (!stopped) {
           try {
-            afterJob(job, code);
+            afterJob(job, result);
           } catch (err) {
             log(`${job.role} ${job.task.id}: ${err instanceof Error ? err.message : String(err)}`);
           }
@@ -514,7 +531,8 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   }
 
   /** Log the outcome; if the session died without leaving a trace, say so on the card. */
-  function afterJob(job: AgentJob, code: number): void {
+  function afterJob(job: AgentJob, result: SpawnResult): void {
+    const code = result.code;
     const task = db.tasks().find((t) => t.id === job.task.id);
     if (!task) return;
     const last = db.comments(task.id).at(-1);

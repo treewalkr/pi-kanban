@@ -23,6 +23,7 @@ import {
   type AgentJob,
   type SpawnContext,
   type SpawnFn,
+  type SpawnResult,
 } from "../src/autoreview";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -45,9 +46,9 @@ function withAgentEnv(env: Record<string, string>, run: () => void): void {
 
 /** Records every spawn; the test resolves each one when its "agent" is done. */
 function fakeSpawn() {
-  const calls: Array<{ job: AgentJob; finish: (code: number) => void }> = [];
+  const calls: Array<{ job: AgentJob; finish: (result: SpawnResult) => void }> = [];
   const spawnFn: SpawnFn = (job) =>
-    new Promise<number>((resolve) => calls.push({ job, finish: resolve }));
+    new Promise<SpawnResult>((resolve) => calls.push({ job, finish: resolve }));
   return { calls, spawnFn };
 }
 
@@ -107,7 +108,7 @@ describe("auto-review", () => {
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
     await w.handoff(card.id, "done", { kind: "review", author: REVIEWER_AUTHOR, message: "approved" });
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     w.createTask({ title: "noise" }); // unrelated write kicks the watcher
     await sleep(150);
@@ -127,7 +128,7 @@ describe("auto-review", () => {
       message: "found issues",
       findings: ["src/a.ts:1 off by one"],
     });
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     expect(calls.length).toBe(2);
     expect(calls[1].job.role).toBe("builder");
@@ -136,14 +137,14 @@ describe("auto-review", () => {
 
     // builder fixes and hands back to review
     await w.handoff(card.id, "review", { author: BUILDER_AUTHOR, message: "fixed, tests green" });
-    calls[1].finish(0);
+    calls[1].finish({ code: 0 });
     await sleep(20);
     expect(calls.length).toBe(3);
     expect(calls[2].job.role).toBe("reviewer");
 
     // second pass approves
     await w.handoff(card.id, "done", { kind: "review", author: REVIEWER_AUTHOR, message: "approved" });
-    calls[2].finish(0);
+    calls[2].finish({ code: 0 });
     await sleep(20);
     w.createTask({ title: "noise" });
     await sleep(150);
@@ -183,7 +184,7 @@ describe("auto-review", () => {
     const card = cardInReview(w);
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
-    calls[0].finish(1);
+    calls[0].finish({ code: 1 });
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(REVIEWER_AUTHOR);
@@ -198,7 +199,7 @@ describe("auto-review", () => {
     const card = cardInReview(w);
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(REVIEWER_AUTHOR);
@@ -216,7 +217,7 @@ describe("auto-review", () => {
       kind: "comment",
       body: "could not locate the work in this repo — needs manual review",
     });
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     expect(db!.comments(card.id).length).toBe(before + 1);
   });
@@ -240,7 +241,7 @@ describe("auto-review", () => {
     expect(calls.length).toBe(1);
     const firstId = calls[0].job.task.id;
     await w.handoff(firstId, "done", { kind: "review", author: REVIEWER_AUTHOR, message: "approved" });
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     expect(calls.length).toBe(2);
     expect(calls[1].job.task.id).not.toBe(firstId);
@@ -257,10 +258,10 @@ describe("auto-review", () => {
       message: "found issues",
       findings: ["x"],
     });
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     expect(calls.length).toBe(2);
-    calls[1].finish(1);
+    calls[1].finish({ code: 1 });
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(BUILDER_AUTHOR);
@@ -342,7 +343,7 @@ describe("auto-review", () => {
     const seen: Array<{ flags: string[]; timeoutMs: number }> = [];
     const spawnFn: SpawnFn = (job, ctx) => {
       seen.push({ flags: agentFlags(job.role, ctx.config), timeoutMs: ctx.timeoutMs });
-      return Promise.resolve(1); // session "fails": no verdict, so the loop stops here
+      return Promise.resolve({ code: 1 }); // session "fails": no verdict, so the loop stops here
     };
     start(spawnFn, dbFile);
     await sleep(20);
@@ -402,7 +403,7 @@ describe("auto-review", () => {
         context.emit("session started");
         context.emit("→ bash: bun test");
       }
-      return Promise.resolve(talkative ? 0 : 1);
+      return Promise.resolve({ code: talkative ? 0 : 1 });
     };
     start(spawnFn, dbFile);
     await sleep(20);
@@ -423,10 +424,10 @@ describe("auto-review", () => {
     const { dbFile, writer: w } = setup();
     const card = cardInReview(w);
     let ctx!: SpawnContext;
-    let finish!: (code: number) => void;
+    let finish!: (result: SpawnResult) => void;
     const spawnFn: SpawnFn = (job, context) => {
       ctx = context;
-      return new Promise<number>((resolve) => (finish = resolve));
+      return new Promise<SpawnResult>((resolve) => (finish = resolve));
     };
     start(spawnFn, dbFile);
     expect(activitySnapshot().map((s) => s.taskId)).toEqual([card.id]);
@@ -435,7 +436,7 @@ describe("auto-review", () => {
     const snap = activitySnapshot()[0]!;
     expect(snap.role).toBe("reviewer");
     expect(snap.log).toEqual(["session started", "→ bash: bun test"]);
-    finish(0);
+    finish({ code: 0 });
     await sleep(20);
     expect(activitySnapshot().some((s) => s.taskId === card.id)).toBe(false);
   });
@@ -443,7 +444,7 @@ describe("auto-review", () => {
   test("activity registry: stop() clears sessions even with a pending spawn", () => {
     const { dbFile, writer: w } = setup();
     cardInReview(w);
-    const spawnFn: SpawnFn = () => new Promise<number>(() => {});
+    const spawnFn: SpawnFn = () => new Promise<SpawnResult>(() => {});
     const handle = start(spawnFn, dbFile);
     expect(activitySnapshot().length).toBe(1);
     handle.stop();
@@ -472,7 +473,7 @@ describe("auto-plan", () => {
     // planner finishes: attaches a plan and comments → disarmed
     w.attach(card.id, "plan", "# v2");
     await w.createComment(card.id, { author: PLANNER_AUTHOR, body: "plan v2 attached" });
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     w.createTask({ title: "noise" });
     await sleep(150);
@@ -524,7 +525,7 @@ describe("auto-plan", () => {
     expect(calls[0].job.prompt).toContain("Never move the card");
 
     await planVerdict(w, card, "pass", `${PASS} — executable`);
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     w.createTask({ title: "noise" });
     await sleep(150);
@@ -537,7 +538,7 @@ describe("auto-plan", () => {
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
     await planVerdict(w, card, "block", `${BLOCK} — vague tests\n- AC2 has no test`);
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     expect(calls.length).toBe(2);
     expect(calls[1].job.role).toBe("planner");
@@ -552,16 +553,16 @@ describe("auto-plan", () => {
     start(spawnFn, dbFile);
     // block 1 → planner
     await planVerdict(w, card, "block", `${BLOCK} — 1`);
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     expect(calls[1]!.job.role).toBe("planner");
     await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v2 attached — over to pi-plan-reviewer" });
-    calls[1].finish(0);
+    calls[1].finish({ code: 0 });
     await sleep(20);
     expect(calls[2]!.job.role).toBe("plan-reviewer");
     // block 2 → cap, not a third planner run
     await planVerdict(w, card, "block", `${BLOCK} — 2`);
-    calls[2].finish(0);
+    calls[2].finish({ code: 0 });
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
@@ -578,11 +579,11 @@ describe("auto-plan", () => {
     start(spawnFn, dbFile);
     for (let round = 1; round <= 2; round++) {
       await planVerdict(w, card, "block", `${BLOCK} — ${round}`);
-      calls.at(-1)!.finish(0);
+      calls.at(-1)!.finish({ code: 0 });
       await sleep(20);
       if (round === 1) {
         await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v2 — over to pi-plan-reviewer" });
-        calls.at(-1)!.finish(0);
+        calls.at(-1)!.finish({ code: 0 });
         await sleep(20);
       }
     }
@@ -592,10 +593,10 @@ describe("auto-plan", () => {
     await sleep(200);
     expect(calls.at(-1)!.job.role).toBe("planner");
     await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v3 — over to pi-plan-reviewer" });
-    calls.at(-1)!.finish(0);
+    calls.at(-1)!.finish({ code: 0 });
     await sleep(20);
     await planVerdict(w, card, "block", `${BLOCK} — after reset`);
-    calls.at(-1)!.finish(0);
+    calls.at(-1)!.finish({ code: 0 });
     await sleep(20);
     expect(calls.at(-1)!.job.role).toBe("planner"); // 1 block since the human comment — not capped
     expect(db!.comments(card.id).at(-1)!.body).not.toContain("cap");
@@ -606,7 +607,7 @@ describe("auto-plan", () => {
     const card = planReady(w);
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
-    calls[0].finish(1);
+    calls[0].finish({ code: 1 });
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
@@ -621,7 +622,7 @@ describe("auto-plan", () => {
     const card = planReady(w);
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
-    calls[0].finish(1);
+    calls[0].finish({ code: 1 });
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
@@ -648,7 +649,7 @@ describe("auto-plan", () => {
       kind: "comment",
       body: "cannot evaluate the plan — repo unreadable",
     });
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     expect(db!.comments(card.id).length).toBe(threadBefore + 1);
 
@@ -665,17 +666,17 @@ describe("auto-plan", () => {
     start(spawnFn, dbFile);
     // block 1 → planner
     await planVerdict(w, card, "block", `${BLOCK} — 1`);
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     expect(calls[1]!.job.role).toBe("planner");
     await w.attach(card.id, "plan", "# plan v2\nrevised");
     await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v2 attached — over to pi-plan-reviewer" });
-    calls[1].finish(0);
+    calls[1].finish({ code: 0 });
     await sleep(20);
     expect(calls[2]!.job.role).toBe("plan-reviewer");
     // block 2 → cap
     await planVerdict(w, card, "block", `${BLOCK} — 2`);
-    calls[2].finish(0);
+    calls[2].finish({ code: 0 });
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
@@ -698,7 +699,7 @@ describe("auto-plan", () => {
     expect(calls[0].job.role).toBe("plan-reviewer");
 
     await planVerdict(w, card, "pass", `${PASS} — executable`);
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     w.createTask({ title: "noise" });
     await sleep(150);
@@ -715,7 +716,7 @@ describe("auto-plan", () => {
     const card = planReady(w);
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
-    calls[0].finish(1);
+    calls[0].finish({ code: 1 });
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
@@ -748,7 +749,7 @@ describe("auto-plan", () => {
 
     // builder builds and hands off to review → reviewer takes over
     await w.handoff(card.id, "review", { author: BUILDER_AUTHOR, message: "built, tests green" });
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     expect(calls.length).toBe(2);
     expect(calls[1].job.role).toBe("reviewer");
@@ -774,7 +775,7 @@ describe("auto-plan", () => {
 
     // planner asks instead of attaching a plan → waiting on the human, no failure comment
     await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "question", body: "Q1: SSE or polling? default: SSE" });
-    calls[0].finish(0);
+    calls[0].finish({ code: 0 });
     await sleep(20);
     w.createTask({ title: "noise" });
     await sleep(150);
@@ -793,7 +794,7 @@ describe("auto-plan", () => {
     const card = w.createTask({ title: "doomed", lane: "plan" });
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
-    calls[0].finish(1);
+    calls[0].finish({ code: 1 });
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(PLANNER_AUTHOR);
@@ -869,10 +870,10 @@ test("stop kills in-flight children and releases the lease", async () => {
   let spawns = 0;
   const spawnFn: SpawnFn = (_job, ctx) => {
     spawns += 1;
-    return new Promise<number>((resolve) => {
+    return new Promise<SpawnResult>((resolve) => {
       ctx.track(() => {
         kills.push(1);
-        resolve(143);
+        resolve({ code: 143 });
       });
     });
   };
@@ -907,7 +908,7 @@ test("lease released after a session finishes normally", async () => {
   };
   await sleep(300);
   expect(fake.calls.length).toBe(1);
-  fake.calls[0]!.finish(0);
+  fake.calls[0]!.finish({ code: 0 });
   await sleep(200);
   expect(writer.leaseFor(card.id)).toBeNull();
 });
@@ -921,8 +922,8 @@ test("session finish untracks kill handle so stop() does not invoke it", async (
     ctx.track(() => {
       killCalled = true;
     });
-    return new Promise<number>((resolve) => {
-      finishSession = () => resolve(0);
+    return new Promise<SpawnResult>((resolve) => {
+      finishSession = () => resolve({ code: 0 });
     });
   };
   const dbA = new KanbanDb(dbFile);
