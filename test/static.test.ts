@@ -53,6 +53,7 @@ describe("distResponse (per-request static serving)", () => {
       expect(distResponse(dist, "/../secret.txt")).toBeNull();
       expect(distResponse(dist, "/assets/../../secret.txt")).toBeNull();
       expect(distResponse(dist, "/assets/")).toBeNull();
+      expect(distResponse(dist, "/assets")).toBeNull(); // bare dir, no trailing slash — EISDIR guard
       expect(distResponse(dist, "/assets/never-built.js")).toBeNull();
     } finally {
       rmSync(dist, { recursive: true, force: true });

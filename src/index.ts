@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { app } from "./app";
 import { startAutoReview } from "./autoreview";
@@ -27,7 +27,8 @@ export function distResponse(dist: string, urlPath: string): Response | null {
   const clean = urlPath.split("?")[0].replace(/^\/+/, "") || "index.html"; // "/" → SPA entry
   if (clean.includes("..") || clean.endsWith("/")) return null;
   const file = resolve(dist, clean);
-  if (!file.startsWith(resolve(dist) + sep) || !existsSync(file)) return null;
+  // isFile, not existsSync: a bare directory path (/assets) would pass and throw EISDIR when served
+  if (!file.startsWith(resolve(dist) + sep) || !statSync(file, { throwIfNoEntry: false })?.isFile()) return null;
   const dot = clean.lastIndexOf(".");
   const type = dot === -1 ? undefined : MIME[clean.slice(dot)];
   return new Response(Bun.file(file), type ? { headers: { "content-type": type } } : {});
@@ -40,45 +41,33 @@ export interface BootOptions {
   autoReview?: boolean;
   /** Overrides the dist directory (tests point this at a temp dir). */
   dist?: string;
+  /** Test seam for the TCP probe (default: portInUse). */
+  probePort?: (port: number) => Promise<boolean>;
+  /** Test seam for the incumbent health check (default: fetchIncumbentHealth). */
+  checkHealth?: (port: number, token: string | undefined) => Promise<IncumbentHealth | null>;
 }
 
-export interface HealthInfo {
+export interface IncumbentHealth {
   ok: boolean;
-  shareToken?: string;
+  booted?: number;
+  share?: "granted";
 }
 
-/** Pure verdict for the occupied-port guard — unit-tested without sockets. */
-export function shareDecision(opts: {
-  occupied: boolean;
-  requested: boolean; // KANBAN_SHARE_PORT / opts.sharePort
-  force: boolean; // KANBAN_SHARE_FORCE=1 — explicit human override
-  health: HealthInfo | null; // GET /health of the occupying listener, if it speaks kanban
-  token?: string; // our KANBAN_SHARE_TOKEN — the self-respawn parent passes its own
-}): { allow: boolean; error?: string } {
-  if (!opts.occupied) return { allow: true };
-  if (!opts.requested) {
-    return {
-      allow: false,
-      error: `port already has a kanban server — stop it first (lsof -nP -iTCP:<port> -sTCP:LISTEN), or set KANBAN_SHARE_PORT=1 to share deliberately`,
-    };
-  }
-  if (opts.force) return { allow: true };
-  if (opts.health?.ok && opts.health.shareToken === opts.token) return { allow: true }; // self-respawn
-  return {
-    allow: false,
-    error:
-      `port is already serving ${opts.health?.ok ? "another kanban board" : "an unknown listener"} — ` +
-      `KANBAN_SHARE_PORT belongs to the self-respawn flow only. Stop it first ` +
-      `(lsof -nP -iTCP:<port> -sTCP:LISTEN), use a scratch port (scripts/repro.sh), ` +
-      `or set KANBAN_SHARE_FORCE=1 to share deliberately`,
-  };
-}
-
-/** Ask the occupying listener whether it is one of us (750 ms — a stuck port should not hang boot). */
-async function healthOf(port: number): Promise<HealthInfo | null> {
+/**
+ * Ask the port's incumbent whether it is one of us and whether it vouches for
+ * us: a respawn child presents the one-shot token its parent minted, and the
+ * incumbent answers share:"granted" exactly once (restart.ts). Unreachable →
+ * null; a responder that is not a kanban /health → { ok: false }.
+ */
+export async function fetchIncumbentHealth(port: number, token: string | undefined): Promise<IncumbentHealth | null> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(750) });
-    return (await res.json()) as HealthInfo;
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: token ? { "x-kanban-share-token": token } : {},
+      signal: AbortSignal.timeout(2000),
+    });
+    const body = await res.json().catch(() => null);
+    if (body && typeof body === "object" && "ok" in body) return body as IncumbentHealth;
+    return { ok: false };
   } catch {
     return null;
   }
@@ -99,19 +88,42 @@ export async function boot(opts: BootOptions = {}): Promise<void> {
 
   // single-server guard: SO_REUSEPORT would stack N silent listeners on one
   // port (each with its own agent loop — the concurrent-session incident), so
-  // probe before binding and refuse to share — KANBAN_SHARE_PORT only works
-  // for the self-respawn child, whose parent handed it a matching share token
-  const occupied = await portInUse(port);
-  const decision = shareDecision({
-    occupied,
-    requested: opts.sharePort || process.env.KANBAN_SHARE_PORT === "1",
-    force: process.env.KANBAN_SHARE_FORCE === "1",
-    health: occupied ? await healthOf(port) : null,
-    token: process.env.KANBAN_SHARE_TOKEN,
-  });
-  if (!decision.allow) throw new Error(`port ${port} ${decision.error}`);
-  if (occupied && decision.allow) {
-    console.warn(`[boot] sharing port ${port} with a live listener (deliberate) — boards will alternate`);
+  // probe before binding; sharing is vouched one-shot by the self-respawn
+  // parent's minted token — anything else that asks to share gets refused
+  const probePort = opts.probePort ?? portInUse;
+  const checkHealth = opts.checkHealth ?? fetchIncumbentHealth;
+  const sharing = opts.sharePort === true || process.env.KANBAN_SHARE_PORT === "1";
+  const forced = process.env.KANBAN_SHARE_FORCE === "1";
+  if (sharing && !forced) {
+    if (await probePort(port)) {
+      const health = await checkHealth(port, process.env.KANBAN_SHARE_TOKEN);
+      if (health === null) {
+        // occupant unreachable — the respawn race: the parent may exit between
+        // our TCP probe and this health check. Binding is correct, not risky.
+        console.warn(`[boot] port ${port} probe hit a dying listener — binding anyway`);
+      } else if (health.share === "granted") {
+        console.warn(`[boot] port ${port} vouched by the incumbent — self-respawn share`);
+      } else if (health.ok) {
+        const iso = typeof health.booted === "number" ? new Date(health.booted).toISOString() : "unknown";
+        throw new Error(
+          `port ${port} is held by a healthy kanban server (booted ${iso}) — refusing to share; ` +
+            `for board repros use a scratch port (scripts/repro.sh), stop it first ` +
+            `(lsof -nP -iTCP:${port} -sTCP:LISTEN), or set KANBAN_SHARE_PORT=1 KANBAN_SHARE_FORCE=1 to force`,
+        );
+      } else {
+        throw new Error(
+          `port ${port} is held by a non-kanban server — refusing to share; use another PORT, ` +
+            `or set KANBAN_SHARE_PORT=1 KANBAN_SHARE_FORCE=1 to force`,
+        );
+      }
+    }
+  } else if (!sharing) {
+    if (await probePort(port)) {
+      throw new Error(
+        `port ${port} already has a server — stop it first (lsof -nP -iTCP:${port} -sTCP:LISTEN), ` +
+          `or set KANBAN_SHARE_PORT=1 KANBAN_SHARE_FORCE=1 to share deliberately`,
+      );
+    }
   }
 
   const server = app;
@@ -152,4 +164,11 @@ export async function boot(opts: BootOptions = {}): Promise<void> {
   }
 }
 
-if (import.meta.main) await boot();
+if (import.meta.main) {
+  try {
+    await boot();
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  }
+}
