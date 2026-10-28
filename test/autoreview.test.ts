@@ -395,7 +395,7 @@ describe("auto-review", () => {
     cardInReview(w);
     w.setAgentConfig("reviewer", {
       model: "claude-opus-4-5",
-      skills: ["~/.pi/agent/skills/scrutinize"],
+      skills: [makeSkill("lens", "review with perf in mind")],
       context: "we value perf over features",
       timeoutMs: 300_000,
     });
@@ -410,6 +410,24 @@ describe("auto-review", () => {
     expect(seen[0]!.flags).toContain("--skill");
     expect(seen[0]!.flags).toContain("claude-opus-4-5");
     expect(seen[0]!.timeoutMs).toBe(300_000);
+  });
+
+  test("spawn injects configured skills into the session's system prompt", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w);
+    const skillDir = makeSkill("caveman", "Answer first. Keep every fact. Cut the fluff.");
+    w.setAgentConfig("reviewer", { skills: [skillDir] });
+    const seen: string[][] = [];
+    const spawnFn: SpawnFn = (job, ctx) => {
+      seen.push(agentFlags(job.role, ctx.config));
+      return Promise.resolve({ code: 1 });
+    };
+    start(spawnFn, dbFile);
+    await sleep(20);
+    const appended = seen[0]![seen[0]!.indexOf("--append-system-prompt") + 1]!;
+    expect(appended).toContain(`<skill name="caveman" location="${join(skillDir, "SKILL.md")}">`);
+    expect(appended).toContain("Answer first. Keep every fact. Cut the fluff.");
+    expect(appended).toContain("</skill>");
   });
 
   test("sessionIdFor: fresh per role and per spawn, valid pi session id", () => {
