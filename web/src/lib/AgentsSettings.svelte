@@ -179,7 +179,7 @@
 
   <section class="settings-general-section">
     <h3 class="settings-general-heading">Skills</h3>
-    <p class="settings-general-description">One path per line, passed to pi as --skill.</p>
+    <p class="settings-general-description">One path per line — each skill's SKILL.md is injected into the session's system prompt at spawn (and still passed as --skill).</p>
     <div class="settings-form">
       <label>
         skills
