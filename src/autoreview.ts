@@ -618,6 +618,20 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       stopped = true;
       stopWatch();
       activityProviders.delete(provide);
+      // a restart/shutdown kill must not leave the board silent — trace it on
+      // every in-flight card (the 10/29 incident: force-restart killed a
+      // planner and the card looked untouched, "is it done?" was unanswerable)
+      for (const session of sessions.values()) {
+        try {
+          db.createComment(session.taskId, {
+            author: AUTHOR_BY_ROLE[session.role],
+            kind: "comment",
+            body: `${KanbanDb.SESSION_DIED_PREFIX}session killed by server restart/shutdown — comment on this card to re-run.`,
+          });
+        } catch {
+          /* db may already be closed */
+        }
+      }
       sessions.clear();
       queue.length = 0;
       // graceful shutdown: terminate in-flight children so they stop writing,

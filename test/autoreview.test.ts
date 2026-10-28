@@ -104,6 +104,19 @@ describe("auto-review", () => {
     expect(calls[0].job.prompt).toContain("--author pi-reviewer");
   });
 
+  test("stop() traces the kill on every in-flight card (restart kill must not be silent)", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const { spawnFn } = fakeSpawn(); // never resolves — the session stays in flight
+    const handle = start(spawnFn, dbFile);
+    await sleep(150); // let the drain loop spawn the reviewer
+    handle.stop();
+    const last = w.comments(card.id).at(-1)!;
+    expect(last.author).toBe(REVIEWER_AUTHOR);
+    expect(last.body).toContain(`${KanbanDb.SESSION_DIED_PREFIX}session killed by server restart/shutdown`);
+    expect(last.body).toContain("comment on this card to re-run");
+  });
+
   test("approve ends the loop: no re-spawn on later board writes", async () => {
     const { dbFile, writer: w } = setup();
     const card = cardInReview(w);
@@ -990,7 +1003,10 @@ test("stop kills in-flight children and releases the lease", async () => {
   await sleep(100);
   expect(kills.length).toBe(1); // child terminated, not orphaned
   expect(writer.leaseFor(card.id)).toBeNull(); // lease released on shutdown
-  expect(writer.comments(card.id).length).toBe(0); // stopped session posts no exit 143 failure comment
+  const stopped = writer.comments(card.id);
+  expect(stopped.length).toBe(1); // stop traces the kill on the card (zqued)
+  expect(stopped[0]!.body).toContain("session killed by server restart/shutdown");
+  expect(stopped[0]!.body).not.toContain("143"); // …but no exit-143 failure comment
 });
 
 test("lease released after a session finishes normally", async () => {
