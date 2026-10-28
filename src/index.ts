@@ -1,17 +1,45 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import staticPlugin from "@elysiajs/static";
+import { join, resolve, sep } from "node:path";
 import { app } from "./app";
 import { startAutoReview } from "./autoreview";
 import { KanbanDb, defaultDbPath } from "./db";
 import { registerShutdown, runShutdown } from "./shutdown";
 import "./dev-reload"; // watch marker: rewritten by POST /restart to trigger a bun --watch reload
 
+const MIME: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json",
+  ".map": "application/json",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8",
+  ".woff2": "font/woff2",
+};
+
+/**
+ * Serve one file from dist per request — no boot-time route table, so a
+ * rebuilt dist (new asset hashes) is picked up live instead of 404-ing the
+ * fresh index.html into a white page (the 10/29 incident).
+ */
+export function distResponse(dist: string, urlPath: string): Response | null {
+  const clean = urlPath.split("?")[0].replace(/^\/+/, "") || "index.html"; // "/" → SPA entry
+  if (clean.includes("..") || clean.endsWith("/")) return null;
+  const file = resolve(dist, clean);
+  if (!file.startsWith(resolve(dist) + sep) || !existsSync(file)) return null;
+  const dot = clean.lastIndexOf(".");
+  const type = dot === -1 ? undefined : MIME[clean.slice(dot)];
+  return new Response(Bun.file(file), type ? { headers: { "content-type": type } } : {});
+}
+
 export interface BootOptions {
   port?: number;
   /** Skip the occupied-port guard — used by the self-respawn restart flow. */
   sharePort?: boolean;
   autoReview?: boolean;
+  /** Overrides the dist directory (tests point this at a temp dir). */
+  dist?: string;
 }
 
 async function portInUse(port: number): Promise<boolean> {
@@ -26,7 +54,6 @@ async function portInUse(port: number): Promise<boolean> {
 
 export async function boot(opts: BootOptions = {}): Promise<void> {
   const port = opts.port ?? Number(process.env.PORT ?? 4600);
-  const dist = join(import.meta.dir, "..", "web", "dist");
 
   // single-server guard: SO_REUSEPORT would stack N silent listeners on one
   // port (each with its own agent loop — the concurrent-session incident), so
@@ -41,13 +68,13 @@ export async function boot(opts: BootOptions = {}): Promise<void> {
   }
 
   const server = app;
+  const dist = opts.dist ?? join(import.meta.dir, "..", "web", "dist");
   if (existsSync(dist)) {
-    // alwaysStatic registers one route per built file (no catch-all), leaving the SPA fallback to us
-    const staticRoutes = await staticPlugin({ assets: dist, prefix: "/", alwaysStatic: true, indexHTML: false });
     const index = () => new Response(Bun.file(join(dist, "index.html")));
-    server.use(staticRoutes);
     server.get("/", index);
-    server.get("/*", ({ path }) => (path.includes(".") ? new Response("not found", { status: 404 }) : index()));
+    // SPA fallback: real files (hashed assets, favicon) serve per request so a
+    // rebuilt dist never strands index.html referencing routes that no longer exist
+    server.get("/*", ({ path }) => distResponse(dist, path) ?? (path.includes(".") ? new Response("not found", { status: 404 }) : index()));
   }
 
   server.listen({ port, hostname: "127.0.0.1" });
