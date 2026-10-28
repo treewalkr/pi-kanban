@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { readFileSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { KanbanDb, PLAN_REVIEWER_AUTHOR, type AgentConfig, type AgentRole, type LeaseOwner, type Task } from "./db";
 
 export type { AgentRole };
@@ -251,12 +252,56 @@ export function builderPrompt(task: Task): string {
 Never move the card with mv. If a finding looks wrong, say so in the handoff message instead of silently skipping it.`;
 }
 
+/** Max characters of a SKILL.md body injected into the system prompt (argv safety). */
+export const MAX_SKILL_CHARS = 64 * 1024;
+
+function stripFrontmatter(content: string): string {
+  return content.replace(/^---\n[\s\S]*?\n---\n?/, "");
+}
+
+/**
+ * Reads every configured skill path (directory → its SKILL.md, or the file
+ * itself; `~` expanded), strips YAML frontmatter, and wraps the body in pi's
+ * own <skill> block shape — the format `/skill:name` expands to, mirroring
+ * pi's _expandSkillCommand — so the skill is active from the first token
+ * instead of waiting for the model to open it. Unreadable paths warn via
+ * onWarn and are skipped; a spawn never dies on a skill.
+ */
+export function skillActivationPrompt(skills: string[], onWarn?: (message: string) => void): string {
+  const blocks: string[] = [];
+  for (const raw of skills) {
+    const base = raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
+    let filePath = base;
+    try {
+      if (statSync(base).isDirectory()) filePath = join(base, "SKILL.md");
+    } catch {
+      onWarn?.(`skill ${raw} not found — skipped`);
+      continue;
+    }
+    let content: string;
+    try {
+      content = readFileSync(filePath, "utf8");
+    } catch (err) {
+      onWarn?.(`skill ${raw} unreadable (${(err as Error).message}) — skipped`);
+      continue;
+    }
+    const stripped = stripFrontmatter(content).trim();
+    const body = stripped.slice(0, MAX_SKILL_CHARS);
+    if (body.length < stripped.length) onWarn?.(`skill ${raw} truncated at ${MAX_SKILL_CHARS} chars`);
+    const name = /^name:\s*(.+)$/m.exec(content)?.[1]?.trim() ?? basename(dirname(filePath));
+    blocks.push(`<skill name="${name}" location="${filePath}">\nReferences are relative to ${dirname(filePath)}.\n\n${body}\n</skill>`);
+  }
+  return blocks.join("\n\n");
+}
+
 /**
  * pi flags for a role: env (KANBAN_AUTOREVIEW_MODEL / KANBAN_AUTOREVIEW_THINKING)
  * beats the board config, which beats the built-in default (reviewer thinks max;
- * setting the thinking env var to "" disables thinking entirely).
+ * setting the thinking env var to "" disables thinking entirely). Configured
+ * skills are activated by injecting their SKILL.md into the appended system
+ * prompt (skillActivationPrompt); warnings from that go to onWarn.
  */
-export function agentFlags(role: AgentRole, cfg: AgentConfig | null): string[] {
+export function agentFlags(role: AgentRole, cfg: AgentConfig | null, onWarn?: (message: string) => void): string[] {
   const envModel = process.env.KANBAN_AUTOREVIEW_MODEL?.trim();
   const envThinking = process.env.KANBAN_AUTOREVIEW_THINKING;
   let thinking =
@@ -268,7 +313,9 @@ export function agentFlags(role: AgentRole, cfg: AgentConfig | null): string[] {
   if (model) args.push("--model", model);
   if (thinking) args.push("--thinking", thinking);
   for (const skill of cfg?.skills ?? []) args.push("--skill", skill);
-  if (cfg?.context) args.push("--append-system-prompt", cfg.context);
+  const activated = skillActivationPrompt(cfg?.skills ?? [], onWarn);
+  const appended = [cfg?.context, activated].filter(Boolean).join("\n\n");
+  if (appended) args.push("--append-system-prompt", appended);
   if (cfg?.tools) args.push("--tools", cfg.tools);
   args.push(...(cfg?.extraArgs ?? []));
   return args;
@@ -306,7 +353,7 @@ export function deathReason(result: SpawnResult, secs: number, sessionLog: strin
 const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }) => {
   const proc = Bun.spawn({
     // json mode streams JSONL events while the session runs (--print waits for the end)
-    cmd: ["pi", "--mode", "json", "--session-id", sessionIdFor(job), ...agentFlags(job.role, config), job.prompt],
+    cmd: ["pi", "--mode", "json", "--session-id", sessionIdFor(job), ...agentFlags(job.role, config, log), job.prompt],
     cwd,
     stdin: "ignore",
     stdout: "pipe",

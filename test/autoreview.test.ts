@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb } from "../src/db";
@@ -14,13 +14,16 @@ import {
   activitySnapshot,
   agentFlags,
   builderPlanPrompt,
+  builderPrompt,
   deathReason,
   durationFor,
   formatPiEvent,
+  MAX_SKILL_CHARS,
   plannerPrompt,
   planReviewerPrompt,
   reviewerPrompt,
   sessionIdFor,
+  skillActivationPrompt,
   startAutoReview,
   type AgentJob,
   type SpawnContext,
@@ -45,6 +48,19 @@ function withAgentEnv(env: Record<string, string>, run: () => void): void {
     }
   }
 }
+
+/** A temp skill dir with a frontmatter'd SKILL.md — cleaned up in afterEach. */
+const skillDirs: string[] = [];
+function makeSkill(name: string, body: string): string {
+  const skillDir = mkdtempSync(join(tmpdir(), "kanban-skill-"));
+  writeFileSync(join(skillDir, "SKILL.md"), `---\nname: ${name}\ndescription: test skill\n---\n\n${body}`);
+  skillDirs.push(skillDir);
+  return skillDir;
+}
+
+afterEach(() => {
+  for (const d of skillDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 /** Records every spawn; the test resolves each one when its "agent" is done. */
 function fakeSpawn() {
@@ -90,6 +106,33 @@ function cardInReview(w: KanbanDb, title = "ship it") {
   w.createComment(card.id, { author: "pi-builder", kind: "handoff", body: "done, please review" });
   return card;
 }
+
+describe("skillActivationPrompt", () => {
+  test("wraps each SKILL.md body in pi's skill block (dir or file path, frontmatter stripped)", () => {
+    const skillDir = makeSkill("demo", "# Rules\nBe terse.");
+    const expected = `<skill name="demo" location="${join(skillDir, "SKILL.md")}">\nReferences are relative to ${skillDir}.\n\n# Rules\nBe terse.\n</skill>`;
+    expect(skillActivationPrompt([skillDir])).toBe(expected);
+    expect(skillActivationPrompt([join(skillDir, "SKILL.md")])).toBe(expected);
+  });
+
+  test("missing paths warn and skip — a spawn never dies on a skill", () => {
+    const warns: string[] = [];
+    const empty = mkdtempSync(join(tmpdir(), "kanban-skill-empty-"));
+    skillDirs.push(empty);
+    expect(skillActivationPrompt(["/nope/definitely-not", empty], (m) => warns.push(m))).toBe("");
+    expect(warns[0]).toBe("skill /nope/definitely-not not found — skipped");
+    expect(warns[1]).toContain(`skill ${empty} unreadable (`);
+    expect(warns[1]).toContain("— skipped");
+  });
+
+  test("caps a giant skill body at MAX_SKILL_CHARS", () => {
+    const warns: string[] = [];
+    const out = skillActivationPrompt([makeSkill("big", "x".repeat(MAX_SKILL_CHARS + 5_000))], (m) => warns.push(m));
+    const body = out.slice(out.indexOf("\n\n") + 2).replace(/\n<\/skill>$/, "");
+    expect(body.length).toBe(MAX_SKILL_CHARS);
+    expect(warns[0]).toContain("truncated");
+  });
+});
 
 describe("auto-review", () => {
   test("reviewer spawns for a card waiting in review", () => {
@@ -302,14 +345,15 @@ describe("auto-review", () => {
     });
   });
 
-  test("agentFlags: board config maps onto pi flags", () => {
+  test("agentFlags: board config maps onto pi flags, skills activated into the system prompt", () => {
+    const skillDir = makeSkill("demo", "# Rules\nBe terse.");
     withAgentEnv({}, () => {
       expect(
         agentFlags("reviewer", {
           provider: "anthropic",
           model: "claude-opus-4-5",
           thinking: "high",
-          skills: ["~/.pi/agent/skills/scrutinize"],
+          skills: [skillDir],
           context: "we value perf",
           tools: "-edit",
           extraArgs: ["--no-mcp"],
@@ -322,9 +366,9 @@ describe("auto-review", () => {
         "--thinking",
         "high",
         "--skill",
-        "~/.pi/agent/skills/scrutinize",
+        skillDir,
         "--append-system-prompt",
-        "we value perf",
+        `we value perf\n\n<skill name="demo" location="${join(skillDir, "SKILL.md")}">\nReferences are relative to ${skillDir}.\n\n# Rules\nBe terse.\n</skill>`,
         "--tools",
         "-edit",
         "--no-mcp",
