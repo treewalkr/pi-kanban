@@ -117,6 +117,19 @@ test("/board carries waiting; comment writes flip the state and notify /events",
   await reader.cancel();
 });
 
+test("/board carries dead for review-lane cards after a session death", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "r", lane: "review" });
+  db.createComment(task.id, {
+    author: "pi-reviewer",
+    kind: "comment",
+    body: "session died: auto-review failed (exit 1) after 4s; comment on this card to re-trigger.",
+  });
+  const res = await app.handle(new Request("http://localhost/board"));
+  const board = (await res.json()) as { waiting: Record<string, string> };
+  expect(board.waiting).toEqual({ [task.id]: "dead" });
+});
+
 test("GET/POST /tasks/:id/comments thread a card; unknown task 404s, bad body 4xx", async () => {
   const app = createApp(db);
   const task = db.createTask({ title: "one" });

@@ -390,6 +390,36 @@ test("waiting is null outside the plan lane whatever the thread says", () => {
   expect(db.waiting(impl.id)).toBeNull();
 });
 
+test("session-death comments mark a card dead on any lane", () => {
+  const reviewCard = db.createTask({ title: "r", lane: "review" });
+  db.createComment(reviewCard.id, {
+    author: "pi-reviewer",
+    kind: "comment",
+    body: `${KanbanDb.SESSION_DIED_PREFIX}auto-review ended without a verdict after 8s — model returned no output; comment on this card to re-trigger.`,
+  });
+  expect(db.waiting(reviewCard.id)).toBe("dead");
+  expect(db.board().waiting[reviewCard.id]).toBe("dead");
+
+  const planCard = db.createTask({ title: "p", lane: "plan" });
+  db.createComment(planCard.id, {
+    author: "pi-planner",
+    kind: "comment",
+    body: `${KanbanDb.SESSION_DIED_PREFIX}auto-plan failed (exit 1) after 4s — comment on this card to re-trigger.`,
+  });
+  expect(db.waiting(planCard.id)).toBe("dead");
+  expect(db.board().waiting[planCard.id]).toBe("dead");
+
+  // same reviewer comment without the prefix on a review-lane card → null
+  const benignReview = db.createTask({ title: "benign", lane: "review" });
+  db.createComment(benignReview.id, {
+    author: "pi-reviewer",
+    kind: "comment",
+    body: "could not locate the work in this repo — needs manual review",
+  });
+  expect(db.waiting(benignReview.id)).toBeNull();
+  expect(db.board().waiting[benignReview.id]).toBeUndefined();
+});
+
 test("board() ships a sparse waiting map keyed by task id", () => {
   const gate = db.createTask({ title: "g", lane: "plan" });
   db.attach(gate.id, "plan", "# g");

@@ -50,8 +50,8 @@ export interface Attachment {
 
 export type CommentKind = "comment" | "review" | "handoff" | "approval" | "rejection" | "question";
 
-/** Why a Plan-lane card is waiting on the human (from its thread's last comment). */
-export type WaitingState = "gate" | "question" | "rerun" | "capped";
+/** Why a Plan-lane card (or any-lane dead-session card) is waiting on the human (from its thread's last comment). */
+export type WaitingState = "gate" | "question" | "rerun" | "capped" | "dead";
 
 /** Author of plan-review verdicts/failure comments — shared by the loop and the waiting classifier. */
 export const PLAN_REVIEWER_AUTHOR = "pi-plan-reviewer";
@@ -263,14 +263,16 @@ const rowToComment = (r: CommentRow): Comment => ({
 });
 
 /**
- * The waiting state a Plan-lane card's *last* comment implies, mirroring the loop's
- * `roleFor` semantics: question kind → asking; reviewer pass verdict → gate; reviewer
- * cap comment → capped; any other reviewer comment (failed session, cannot evaluate) →
- * rerun; everything else (no comments, block verdicts, handoffs, human/planner comments)
- * → null — an agent turn is coming or nothing is owed.
+ * The waiting state a card's *last* comment implies, mirroring the loop's
+ * `roleFor` semantics: question kind → asking; session-death prefix → dead;
+ * reviewer pass verdict → gate; reviewer cap comment → capped; any other reviewer
+ * comment (failed session, cannot evaluate) → rerun; everything else (no comments,
+ * block verdicts, handoffs, human/planner comments) → null — an agent turn is coming
+ * or nothing is owed.
  */
 export function waitingFromLastComment(last: Pick<Comment, "author" | "kind" | "body">): WaitingState | null {
   if (last.kind === "question") return "question";
+  if (last.kind === "comment" && last.body.startsWith(KanbanDb.SESSION_DIED_PREFIX)) return "dead";
   if (last.author !== PLAN_REVIEWER_AUTHOR) return null;
   if (last.kind === "review" && last.body.startsWith(KanbanDb.PLAN_REVIEW_PASS)) return "gate";
   if (last.kind === "comment") {
@@ -663,29 +665,28 @@ export class KanbanDb {
 
   // ---------- waiting state ----------
 
-  /** Why this card waits on the human; null unless it is a Plan-lane card whose last comment says so. */
+  /** Why this card waits on the human; null unless it is a Plan-lane card or has a dead session. */
   waiting(taskRef: string): WaitingState | null {
     const task = this.resolveTask(taskRef);
-    if (task.laneId !== "plan") return null;
     const last = this.comments(task.id).at(-1);
-    return last ? waitingFromLastComment(last) : null;
+    const state = last ? waitingFromLastComment(last) : null;
+    return task.laneId === "plan" || state === "dead" ? state : null;
   }
 
-  /** Waiting state per Plan-lane card (non-null only), keyed by task id — the shape the board payload ships. */
+  /** Waiting state per card (non-null only, plan lane or dead session), keyed by task id — the shape the board payload ships. */
   waitingStates(): Record<string, WaitingState> {
     // MAX(rowid) picks the last-posted comment per card — comments are append-only
     const rows = this.q(
-      `SELECT t.id AS task_id, c.author, c.kind, c.body
+      `SELECT t.id AS task_id, t.lane_id, c.author, c.kind, c.body
        FROM tasks t
        JOIN (SELECT card_id, MAX(rowid) AS rid FROM comments GROUP BY card_id) m
          ON m.card_id = t.id
-       JOIN comments c ON c.rowid = m.rid
-       WHERE t.lane_id = 'plan'`,
-    ).all() as Array<{ task_id: string; author: string; kind: string; body: string }>;
+       JOIN comments c ON c.rowid = m.rid`,
+    ).all() as Array<{ task_id: string; lane_id: string; author: string; kind: string; body: string }>;
     const out: Record<string, WaitingState> = {};
     for (const r of rows) {
       const state = waitingFromLastComment({ author: r.author, kind: r.kind as CommentKind, body: r.body });
-      if (state) out[r.task_id] = state;
+      if (state && (r.lane_id === "plan" || state === "dead")) out[r.task_id] = state;
     }
     return out;
   }

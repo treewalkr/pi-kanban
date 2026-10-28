@@ -29,13 +29,23 @@ test("waitingBadge yields to the live chip and hides absent states", () => {
   // the ◌ working chip owns card-meta while an agent session is live
   expect(waitingBadge("gate", true)).toBeNull();
   expect(waitingBadge("capped", true)).toBeNull();
+  expect(waitingBadge("dead", true)).toBeNull();
   // no state → nothing to show
   expect(waitingBadge(undefined, false)).toBeNull();
   expect(waitingBadge(undefined, true)).toBeNull();
 });
 
+test("dead badge renders with the exact label and title and yields to the live chip", () => {
+  expect(waitingBadge("dead", false)).toEqual({
+    state: "dead",
+    label: "✗ session died",
+    title: "agent session died — open the thread for the reason; comment to re-run it",
+  });
+  expect(waitingBadge("dead", true)).toBeNull();
+});
+
 test("every WaitingState has badge copy (compile-time-complete map)", () => {
-  for (const state of ["gate", "question", "rerun", "capped"] as WaitingState[]) {
+  for (const state of ["gate", "question", "rerun", "capped", "dead"] as WaitingState[]) {
     expect(waitingBadge(state, false)?.state).toBe(state);
   }
 });

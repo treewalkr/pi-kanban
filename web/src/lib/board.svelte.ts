@@ -26,7 +26,7 @@ class BoardStore {
   tasks = $state<Task[]>([]);
   /** Latest plan per card, keyed by task id (board payload). */
   plans = $state<Record<string, Attachment>>({});
-  /** Plan-lane cards waiting on the human, keyed by task id (board payload, sparse). */
+  /** Cards waiting on the human (plan lane or dead session on any lane), keyed by task id (board payload, sparse). */
   waiting = $state<Record<string, WaitingState>>({});
   loading = $state(true);
   error = $state("");

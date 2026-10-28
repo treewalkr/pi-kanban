@@ -12,6 +12,11 @@ const BADGES: Record<WaitingState, WaitingBadge> = {
   question: { state: "question", label: "? needs your answer", title: "open question — your comment re-arms the planner" },
   rerun: { state: "rerun", label: "↻ comment to re-run", title: "review session ended without a verdict — comment to re-run it" },
   capped: { state: "capped", label: "⏸ needs a human", title: "review cap reached — reject to re-plan, or comment to re-run" },
+  dead: {
+    state: "dead",
+    label: "✗ session died",
+    title: "agent session died — open the thread for the reason; comment to re-run it",
+  },
 };
 
 /** The badge for a card's waiting state; null when a live session owns the slot or there is nothing to show. */
