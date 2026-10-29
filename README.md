@@ -89,7 +89,12 @@ leaves a comment for you). Every step is a thread comment, and each spawn is log
 terminal under `[autoreview]`. Each agent spawn gets its own fresh pi session — the card thread
 (`kanban brief`) is the only shared context. If a session dies (model error, quota limit, timeout, or
 silent exit), the reason and duration are posted to the card thread, an `✗ session died` badge marks
-the card on the board, and any diagnostic stderr tail is saved in the session attachment.
+the card on the board, and any diagnostic stderr tail is saved in the session attachment. When a
+session dies, a **↻ resume session** button appears on the card's detail/activity panel: clicking it
+re-spawns pi continuing the same session (`--session-id` keyed to the card's recorded session),
+re-acquiring the lease, clearing the dead badge, and streaming into the live activity log — preserving
+earlier reasoning and tokens instead of starting from scratch. Commenting on the card remains a fresh
+re-run. If the session file in `~/.pi` is missing, resume safely falls back to a fresh session under the same ID.
 
 Configure all four agents in the web UI (⚙ in the topbar) — settings apply to the next session
 without restarting serve:
