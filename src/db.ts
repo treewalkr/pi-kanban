@@ -190,6 +190,16 @@ CREATE TABLE IF NOT EXISTS board_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS card_sessions (
+  task_id TEXT PRIMARY KEY REFERENCES tasks (id),
+  role TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS resume_requests (
+  task_id TEXT PRIMARY KEY REFERENCES tasks (id),
+  requested_at INTEGER NOT NULL
+);
 `;
 
 export const DEFAULT_LANES: Array<Omit<Lane, "position">> = [
@@ -668,11 +678,15 @@ export class KanbanDb {
     const delAttachments = this.q("DELETE FROM attachments WHERE card_id = ?");
     const delComments = this.q("DELETE FROM comments WHERE card_id = ?");
     const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
+    const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
+    const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
     for (const id of [task.id, ...ids]) {
       del.run(id);
       delAttachments.run(id);
       delComments.run(id);
       delBlockedBy.run(id, id);
+      delCardSessions.run(id);
+      delResumeRequests.run(id);
     }
     return task;
   }
@@ -1013,6 +1027,8 @@ export class KanbanDb {
   static readonly PLAN_REVIEW_CAP = "plan review cap reached";
   /** Prefix of agent session-death failure comments — board waiting state keys on this. */
   static readonly SESSION_DIED_PREFIX = "session died: ";
+  /** Prefix of agent session-resumed start comments — board waiting state clears on this. */
+  static readonly SESSION_RESUMED_PREFIX = "session resumed: ";
 
   /** The plan reviewer's verdict: pass leaves the card at the human gate, block sends it back to the planner. Never moves the card. */
   planReview(
@@ -1032,6 +1048,49 @@ export class KanbanDb {
     const prefix = input.verdict === "pass" ? KanbanDb.PLAN_REVIEW_PASS : KanbanDb.PLAN_REVIEW_BLOCK;
     const body = `${prefix}${message ? ` — ${message}` : ""}${findings.map((f) => `\n- ${f}`).join("")}`;
     return this.createComment(task.id, { author: input.author, kind: "review", body });
+  }
+
+  // ---------- card sessions & resume requests ----------
+
+  cardSession(taskRef: string): { role: AgentRole; sessionId: string } | null {
+    let taskId = taskRef;
+    try {
+      taskId = this.resolveTask(taskRef).id;
+    } catch {
+      /* task may have been deleted */
+    }
+    const row = this.q("SELECT role, session_id FROM card_sessions WHERE task_id = ?").get(taskId) as
+      | { role: AgentRole; session_id: string }
+      | undefined;
+    return row ? { role: row.role, sessionId: row.session_id } : null;
+  }
+
+  setCardSession(taskId: string, role: AgentRole, sessionId: string): void {
+    const task = this.resolveTask(taskId);
+    this.q(
+      `INSERT INTO card_sessions (task_id, role, session_id, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(task_id) DO UPDATE SET role = excluded.role, session_id = excluded.session_id, updated_at = excluded.updated_at`,
+    ).run(task.id, role, sessionId, Date.now());
+  }
+
+  queueResume(taskRef: string): void {
+    const task = this.resolveTask(taskRef);
+    this.q(
+      `INSERT INTO resume_requests (task_id, requested_at) VALUES (?, ?)
+       ON CONFLICT(task_id) DO UPDATE SET requested_at = excluded.requested_at`,
+    ).run(task.id, Date.now());
+  }
+
+  resumeRequests(): Array<{ taskId: string; requestedAt: number }> {
+    const rows = this.q("SELECT task_id, requested_at FROM resume_requests ORDER BY requested_at ASC").all() as Array<{
+      task_id: string;
+      requested_at: number;
+    }>;
+    return rows.map((r) => ({ taskId: r.task_id, requestedAt: r.requested_at }));
+  }
+
+  clearResumeRequest(taskId: string): void {
+    this.q("DELETE FROM resume_requests WHERE task_id = ?").run(taskId);
   }
 
   // ---------- agent configs ----------
@@ -1199,12 +1258,16 @@ export class KanbanDb {
       const delAttachments = this.q("DELETE FROM attachments WHERE card_id = ?");
       const delComments = this.q("DELETE FROM comments WHERE card_id = ?");
       const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
+      const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
+      const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
       for (const t of this.laneTasks(lane.id)) {
         for (const id of [t.id, ...this.descendantIds(t.id)]) {
           del.run(id);
           delAttachments.run(id);
           delComments.run(id);
           delBlockedBy.run(id, id);
+          delCardSessions.run(id);
+          delResumeRequests.run(id);
         }
       }
     }

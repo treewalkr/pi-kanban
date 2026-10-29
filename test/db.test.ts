@@ -45,6 +45,25 @@ test("agentConfig: null → set → roundtrip → replace; unknown role rejected
   expect(() => db.setAgentConfig("worker", {})).toThrow(KanbanError);
 });
 
+test("setCardSession/cardSession roundtrip; deleteTask clears pointer and request", () => {
+  const task = db.createTask({ title: "session-test" });
+  expect(db.cardSession(task.id)).toBeNull();
+
+  db.setCardSession(task.id, "builder", "kanban-test-1");
+  expect(db.cardSession(task.id)).toEqual({ role: "builder", sessionId: "kanban-test-1" });
+
+  // upsert overwrites role+id
+  db.setCardSession(task.id, "reviewer", "kanban-test-2");
+  expect(db.cardSession(task.id)).toEqual({ role: "reviewer", sessionId: "kanban-test-2" });
+
+  db.queueResume(task.id);
+  expect(db.resumeRequests()).toEqual([{ taskId: task.id, requestedAt: expect.any(Number) }]);
+
+  db.deleteTask(task.id);
+  expect(db.cardSession(task.id)).toBeNull();
+  expect(db.resumeRequests()).toEqual([]);
+});
+
 test("approveTask: approval comment + move to implement; guards lane and plan", () => {
   const task = db.createTask({ title: "feature" });
   db.moveTask(task.id, "plan");
