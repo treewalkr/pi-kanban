@@ -12,6 +12,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PORT="${REPRO_PORT:-}"
+if [ -n "$PORT" ]; then
+  if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+    echo "repro: REPRO_PORT must be a number — got '$PORT'" >&2
+    exit 1
+  fi
+  if [ "$PORT" -lt 4611 ]; then
+    echo "repro: REPRO_PORT must be >= 4611 (4600 is production) — got $PORT" >&2
+    exit 1
+  fi
+fi
 if [ -z "$PORT" ]; then
   for p in 4611 4612 4613 4614 4615 4616 4617 4618 4619 4620; do
     if ! lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then PORT="$p"; break; fi
