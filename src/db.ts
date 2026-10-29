@@ -161,6 +161,13 @@ CREATE TABLE IF NOT EXISTS comments (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS comments_card ON comments (card_id, created_at);
+CREATE TABLE IF NOT EXISTS blocked_by (
+  card_id TEXT NOT NULL REFERENCES tasks (id),
+  blocker_id TEXT NOT NULL REFERENCES tasks (id),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (card_id, blocker_id)
+);
+CREATE INDEX IF NOT EXISTS blocked_by_blocker ON blocked_by (blocker_id);
 CREATE TABLE IF NOT EXISTS agent_configs (
   role TEXT PRIMARY KEY,
   config TEXT NOT NULL,
@@ -190,6 +197,9 @@ export const DEFAULT_LANES: Array<Omit<Lane, "position">> = [
 
 /** Lane priority for "what's next": Review → Test + Implement → Plan → Backlog (skill contract). */
 export const NEXT_LANE_PRIORITY = ["review", "implement", "plan", "backlog"] as const;
+
+/** Lanes where a card no longer blocks its dependents (soft blocking). */
+export const UNBLOCKED_LANES = ["done", "archive"] as const;
 
 export function defaultDbPath(): string {
   return process.env.KANBAN_DB ?? join(import.meta.dir, "..", "data", "kanban.db");
@@ -546,10 +556,12 @@ export class KanbanDb {
     const del = this.q("DELETE FROM tasks WHERE id = ?");
     const delAttachments = this.q("DELETE FROM attachments WHERE card_id = ?");
     const delComments = this.q("DELETE FROM comments WHERE card_id = ?");
+    const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
     for (const id of [task.id, ...ids]) {
       del.run(id);
       delAttachments.run(id);
       delComments.run(id);
+      delBlockedBy.run(id, id);
     }
     return task;
   }
@@ -607,6 +619,100 @@ export class KanbanDb {
       }
     }
     return out;
+  }
+
+  // ---------- blocking edges ----------
+
+  /** Direct blockers of a card (edges point dependent → blocker). */
+  blockers(ref: string): Task[] {
+    const task = this.resolveTask(ref);
+    const rows = this.q(
+      `SELECT t.* FROM tasks t
+       JOIN blocked_by b ON b.blocker_id = t.id
+       WHERE b.card_id = ?
+       ORDER BY b.rowid`,
+    ).all(task.id) as TaskRow[];
+    return rows.map(rowToTask);
+  }
+
+  /** Cards directly blocked by this one. */
+  blocking(ref: string): Task[] {
+    const task = this.resolveTask(ref);
+    const rows = this.q(
+      `SELECT t.* FROM tasks t
+       JOIN blocked_by b ON b.card_id = t.id
+       WHERE b.blocker_id = ?
+       ORDER BY b.rowid`,
+    ).all(task.id) as TaskRow[];
+    return rows.map(rowToTask);
+  }
+
+  /**
+   * Replace a card's blocker set (dedupes). Refuses self-edges and any edge that
+   * would close a dependency cycle, checked against the graph minus this card's
+   * outgoing edges; both refuse with code "conflict".
+   */
+  setBlockedBy(ref: string, blockerRefs: string[]): void {
+    const task = this.resolveTask(ref);
+    const blockerTasks = blockerRefs.map((r) => this.resolveTask(r));
+
+    const seen = new Set<string>();
+    const uniqueBlockers: Task[] = [];
+    for (const b of blockerTasks) {
+      if (!seen.has(b.id)) {
+        seen.add(b.id);
+        uniqueBlockers.push(b);
+      }
+    }
+
+    for (const b of uniqueBlockers) {
+      if (b.id === task.id) {
+        throw new KanbanError("cannot block a card with itself", "conflict");
+      }
+    }
+
+    const getBlockerIds = this.q("SELECT blocker_id FROM blocked_by WHERE card_id = ?");
+    for (const b of uniqueBlockers) {
+      const visited = new Set<string>();
+      const stack = [b.id];
+      while (stack.length > 0) {
+        const curr = stack.pop()!;
+        if (curr === task.id) {
+          throw new KanbanError(`dependency cycle detected: card '${task.id}' cannot be blocked by '${b.id}'`, "conflict");
+        }
+        if (visited.has(curr)) continue;
+        visited.add(curr);
+        const rows = getBlockerIds.all(curr) as Array<{ blocker_id: string }>;
+        for (const row of rows) {
+          if (!visited.has(row.blocker_id)) {
+            stack.push(row.blocker_id);
+          }
+        }
+      }
+    }
+
+    const del = this.q("DELETE FROM blocked_by WHERE card_id = ?");
+    const ins = this.q("INSERT INTO blocked_by (card_id, blocker_id, created_at) VALUES (?, ?, ?)");
+    const now = Date.now();
+    this.db.transaction(() => {
+      del.run(task.id);
+      for (const b of uniqueBlockers) {
+        ins.run(task.id, b.id, now);
+      }
+      this.q("UPDATE tasks SET updated_at = ? WHERE id = ?").run(now, task.id);
+    })();
+  }
+
+  /** Sparse card-id → direct blocker ids, for the board payload and CLI --json. */
+  blockedByMap(): Record<string, string[]> {
+    const rows = this.q(
+      "SELECT card_id, blocker_id FROM blocked_by ORDER BY rowid",
+    ).all() as Array<{ card_id: string; blocker_id: string }>;
+    const map: Record<string, string[]> = {};
+    for (const row of rows) {
+      (map[row.card_id] ??= []).push(row.blocker_id);
+    }
+    return map;
   }
 
   // ---------- attachments ----------
@@ -976,11 +1082,13 @@ export class KanbanDb {
       const del = this.q("DELETE FROM tasks WHERE id = ?");
       const delAttachments = this.q("DELETE FROM attachments WHERE card_id = ?");
       const delComments = this.q("DELETE FROM comments WHERE card_id = ?");
+      const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
       for (const t of this.laneTasks(lane.id)) {
         for (const id of [t.id, ...this.descendantIds(t.id)]) {
           del.run(id);
           delAttachments.run(id);
           delComments.run(id);
+          delBlockedBy.run(id, id);
         }
       }
     }
