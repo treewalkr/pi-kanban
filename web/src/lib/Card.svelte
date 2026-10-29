@@ -115,6 +115,10 @@
     {#if waiting}
       <span class="chip waiting waiting-{waiting.state}" title={waiting.title}>{waiting.label}</span>
     {/if}
+    {#if task.laneId === "waiting" && task.previousLane}
+      {@const originName = board.lanes.find((l) => l.id === task.previousLane)?.name ?? task.previousLane}
+      <span class="chip origin" title="returns to {originName} when you reply">↩ from {originName}</span>
+    {/if}
     <span class="age" title={new Date(task.updatedAt).toLocaleString()}>{timeAgo(task.updatedAt)}</span>
   </div>
   {#if open && nested.length > 0}

@@ -29,6 +29,14 @@ function loadBlockedOnly(): boolean {
   }
 }
 
+function loadWaitingOnly(): boolean {
+  try {
+    return localStorage.getItem("kanban-waiting-only") === "true";
+  } catch {
+    return false;
+  }
+}
+
 function loadView(): "board" | "list" {
   try {
     return localStorage.getItem("kanban-view") === "list" ? "list" : "board";
@@ -99,6 +107,22 @@ class BoardStore {
     }
   }
 
+  #waitingOnly = $state<boolean>(loadWaitingOnly());
+
+  get waitingOnly(): boolean {
+    return this.#waitingOnly;
+  }
+
+  set waitingOnly(v: boolean) {
+    this.#waitingOnly = v;
+    try {
+      if (!v) localStorage.removeItem("kanban-waiting-only");
+      else localStorage.setItem("kanban-waiting-only", "true");
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
   #view = $state<"board" | "list">(loadView());
 
   /** Active lens over the same data: lanes (board) or hierarchy (list). Persists as kanban-view. */
@@ -142,6 +166,7 @@ class BoardStore {
   );
 
   readonly activeCount = $derived(this.tasks.filter((t) => t.laneId !== "archive").length);
+  readonly waitingCount = $derived(this.tasks.filter((t) => t.laneId === "waiting").length);
 
   // a search that matches archived cards reveals the collapsed strip
   readonly archiveSearchHit = $derived(
@@ -196,6 +221,7 @@ class BoardStore {
     if (this.projectFilter && t.project !== this.projectFilter) return false;
     if (this.prioFilter && t.priority !== this.prioFilter) return false;
     if (this.blockedOnly && !this.isBlocked(t.id)) return false;
+    if (this.waitingOnly && t.laneId !== "waiting") return false;
     const q = this.search.trim().toLowerCase();
     return q ? `${t.title} ${t.note} ${t.id} ${t.project}`.toLowerCase().includes(q) : true;
   }

@@ -107,6 +107,13 @@
       >
         ⊘ blocked
       </button>
+      <button
+        class:active={board.waitingOnly}
+        onclick={() => (board.waitingOnly = !board.waitingOnly)}
+        title="filter cards waiting on you"
+      >
+        ☉ {board.waitingCount} waiting
+      </button>
     </div>
     <div class="meta">{board.activeCount} tasks</div>
     <button

@@ -9,7 +9,7 @@ export interface WaitingBadge {
 
 const BADGES: Record<WaitingState, WaitingBadge> = {
   gate: { state: "gate", label: "✓ ready — approve/reject", title: "plan passed review — approve or reject it" },
-  question: { state: "question", label: "? needs your answer", title: "open question — your comment re-arms the planner" },
+  question: { state: "question", label: "? needs your answer", title: "open question — your comment returns the card and re-arms its agent" },
   rerun: { state: "rerun", label: "↻ comment to re-run", title: "review session ended without a verdict — comment to re-run it" },
   capped: { state: "capped", label: "‖ needs a human", title: "review cap reached — reject to re-plan, or comment to re-run" },
   dead: {

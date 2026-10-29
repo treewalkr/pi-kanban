@@ -14,7 +14,7 @@ test("waitingBadge renders each state with the exact label and title", () => {
   expect(waitingBadge("question", false)).toEqual({
     state: "question",
     label: "? needs your answer",
-    title: "open question — your comment re-arms the planner",
+    title: "open question — your comment returns the card and re-arms its agent",
   });
   expect(waitingBadge("rerun", false)).toEqual({
     state: "rerun",

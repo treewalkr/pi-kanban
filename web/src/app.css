@@ -1467,6 +1467,11 @@ button.id-copy {
   border-color: color-mix(in srgb, #f85149 40%, var(--border));
 }
 
+.chip.origin {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
 /* ---------- priority & blocked badges ---------- */
 
 .chip.prio-high {
