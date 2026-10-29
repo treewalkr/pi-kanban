@@ -33,6 +33,7 @@ export const CATALOG: CatalogModel[] = [
 ];
 
 const LANES: Lane[] = [
+  lane({ id: "waiting", name: "Waiting on you", description: "Parked for a human answer — replying returns the card", position: 50, fixed: 1 }),
   lane({ id: "backlog", name: "Backlog", description: "Waiting work, nothing started", position: 100, fixed: 1 }),
   lane({ id: "plan", name: "Plan", description: "Scoping and design before code", position: 200 }),
   lane({ id: "implement", name: "Test + Implement", description: "Build it, test as you go", position: 300 }),
@@ -123,6 +124,17 @@ const waitingQuestion = task({
   createdAt: now() - 4 * HOUR,
   updatedAt: now() - 30 * MIN,
   note: "Planner asked SSE vs polling — the amber ? badge is on the card.",
+});
+const parkedCard = task({
+  id: "p3k1w",
+  title: "parked on your input",
+  laneId: "waiting",
+  previousLane: "plan",
+  project: "kanban",
+  position: 100,
+  createdAt: now() - 2 * HOUR,
+  updatedAt: now() - 15 * MIN,
+  note: "Parked in Waiting on you until a human replies.",
 });
 const waitingRerun = task({
   id: "r6e3n",
@@ -246,7 +258,7 @@ const archived = task({
   note: "Kept for the archive strip + dimmed card state.",
 });
 
-const TASKS: Task[] = [epic, subA, subB, docsDone, docsChild, plain, waitingQuestion, waitingRerun, waitingCapped, crossChild, working, implA, implB, prioHigh, prioLow, edgeBlocker, edgeDependent, edgeDoneDep, archived];
+const TASKS: Task[] = [parkedCard, epic, subA, subB, docsDone, docsChild, plain, waitingQuestion, waitingRerun, waitingCapped, crossChild, working, implA, implB, prioHigh, prioLow, edgeBlocker, edgeDependent, edgeDoneDep, archived];
 
 const PLAN: Attachment = {
   id: "pln1",
@@ -283,6 +295,7 @@ export const ids = {
   epic: epic.id,
   plain: plain.id,
   question: waitingQuestion.id,
+  parked: parkedCard.id,
   rerun: waitingRerun.id,
   capped: waitingCapped.id,
   docs: docsDone.id,
@@ -413,7 +426,7 @@ export function seed(): void {
   board.lanes = LANES.map((l) => ({ ...l }));
   board.tasks = TASKS.map((t) => ({ ...t }));
   board.plans = { [epic.id]: { ...PLAN } };
-  board.waiting = { [plain.id]: "gate", [waitingQuestion.id]: "question", [waitingRerun.id]: "rerun", [waitingCapped.id]: "capped" };
+  board.waiting = { [plain.id]: "gate", [waitingQuestion.id]: "question", [parkedCard.id]: "question", [waitingRerun.id]: "rerun", [waitingCapped.id]: "capped" };
   board.blockedBy = { [edgeDependent.id]: [edgeBlocker.id], [edgeDoneDep.id]: [docsChild.id] };
   board.activity = Object.fromEntries(Object.entries(ACTIVITY).map(([k, v]) => [k, { ...v, log: [...v.log] }]));
   board.loading = false;
