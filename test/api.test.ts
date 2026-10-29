@@ -519,10 +519,10 @@ test("POST /tasks/:id/resume: 202 with role+sessionId; 404/409s with exact error
 test("GET/PUT/DELETE /pools roundtrip; schema 422, semantic 400, missing 404", async () => {
   const app = createApp(db);
 
-  // empty GET → { pools: [] }
+  // empty GET → { pools: [], settings: { maxWorkers: 12 } }
   const empty = await app.handle(new Request("http://localhost/pools"));
   expect(empty.status).toBe(200);
-  expect(await empty.json()).toEqual({ pools: [] });
+  expect(await empty.json()).toEqual({ pools: [], settings: { maxWorkers: 12 } });
 
   const json = { headers: { "content-type": "application/json" } };
   const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
@@ -551,7 +551,7 @@ test("GET/PUT/DELETE /pools roundtrip; schema 422, semantic 400, missing 404", a
 
   const got = await app.handle(new Request("http://localhost/pools"));
   expect(got.status).toBe(200);
-  expect(await got.json()).toEqual({ pools: [saved] });
+  expect(await got.json()).toEqual({ pools: [saved], settings: { maxWorkers: 12 } });
 
   // Schema 422: roles: []
   const emptyRoles = await app.handle(
@@ -624,6 +624,87 @@ test("GET/PUT/DELETE /pools roundtrip; schema 422, semantic 400, missing 404", a
   const delMissing = await app.handle(new Request("http://localhost/pools/non-existent", { method: "DELETE" }));
   expect(delMissing.status).toBe(404);
   expect(await delMissing.json()).toMatchObject({ code: "not-found" });
+
+  // PUT pool (3 slots) with maxWorkers: 2 → 200 with maxWorkers: 2 and persists in GET
+  const threeSlots = [{ model: "m-0" }, { model: "m-1" }, { model: "m-2" }];
+  const putCap = await app.handle(
+    new Request("http://localhost/pools/capped", {
+      method: "PUT",
+      ...putBody({ name: "capped", roles: ["builder"], slots: threeSlots, maxWorkers: 2 }),
+    }),
+  );
+  expect(putCap.status).toBe(200);
+  const savedCap = await putCap.json();
+  expect(savedCap).toMatchObject({ id: "capped", maxWorkers: 2 });
+
+  const gotCapped = await app.handle(new Request("http://localhost/pools"));
+  const cappedInGet = ((await gotCapped.json()) as { pools: Array<{ id: string; maxWorkers?: number }> }).pools.find(
+    (p) => p.id === "capped",
+  );
+  expect(cappedInGet?.maxWorkers).toBe(2);
+
+  // maxWorkers: 4 (3 slots) → 400 { code: "invalid" }
+  const putCapTooHigh = await app.handle(
+    new Request("http://localhost/pools/capped", {
+      method: "PUT",
+      ...putBody({ name: "capped", roles: ["builder"], slots: threeSlots, maxWorkers: 4 }),
+    }),
+  );
+  expect(putCapTooHigh.status).toBe(400);
+  expect(await putCapTooHigh.json()).toMatchObject({ code: "invalid" });
+
+  // maxWorkers: 0 → 422
+  const putCapZero = await app.handle(
+    new Request("http://localhost/pools/capped", {
+      method: "PUT",
+      ...putBody({ name: "capped", roles: ["builder"], slots: threeSlots, maxWorkers: 0 }),
+    }),
+  );
+  expect(putCapZero.status).toBe(422);
+});
+
+test("PUT /pools/settings round-trips; GET /pools carries settings", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+
+  const put5 = await app.handle(
+    new Request("http://localhost/pools/settings", {
+      method: "PUT",
+      ...putBody({ maxWorkers: 5 }),
+    }),
+  );
+  expect(put5.status).toBe(200);
+  expect(await put5.json()).toEqual({ maxWorkers: 5 });
+
+  const got = await app.handle(new Request("http://localhost/pools"));
+  expect(got.status).toBe(200);
+  expect(((await got.json()) as any).settings).toEqual({ maxWorkers: 5 });
+
+  const put0 = await app.handle(
+    new Request("http://localhost/pools/settings", {
+      method: "PUT",
+      ...putBody({ maxWorkers: 0 }),
+    }),
+  );
+  expect(put0.status).toBe(422);
+
+  const put21 = await app.handle(
+    new Request("http://localhost/pools/settings", {
+      method: "PUT",
+      ...putBody({ maxWorkers: 21 }),
+    }),
+  );
+  expect(put21.status).toBe(422);
+
+  const putFraction = await app.handle(
+    new Request("http://localhost/pools/settings", {
+      method: "PUT",
+      ...putBody({ maxWorkers: 2.5 }),
+    }),
+  );
+  expect(putFraction.status).toBe(400);
+  expect(await putFraction.json()).toMatchObject({ code: "invalid" });
 });
 
 test("/activity carries the resolved model per session", async () => {

@@ -437,7 +437,25 @@ export const createApp = (
         }),
       },
     )
-    .get("/pools", (): { pools: WorkerPool[] } => ({ pools: db.pools() }))
+    .get("/pools", (): { pools: WorkerPool[]; settings: { maxWorkers: number } } => ({
+      pools: db.pools(),
+      settings: { maxWorkers: db.maxWorkers() },
+    }))
+    .put(
+      "/pools/settings",
+      ({ body, status }): { maxWorkers: number } | unknown => {
+        try {
+          return status(200, { maxWorkers: db.setMaxWorkers(body.maxWorkers) });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        body: t.Object({
+          maxWorkers: t.Number({ minimum: 1, maximum: 20 }),
+        }),
+      },
+    )
     .put(
       "/pools/:id",
       ({ params, body, status }): WorkerPool | unknown => {
@@ -454,6 +472,7 @@ export const createApp = (
           enabled: t.Optional(t.Boolean()),
           roles: t.Array(t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer"), t.Literal("elaborator")]), { minItems: 1 }),
           slots: t.Array(t.Object({ provider: t.Optional(t.String()), model: t.Optional(t.String()), thinking: t.Optional(t.Union([t.Literal(""), t.Literal("off"), t.Literal("minimal"), t.Literal("low"), t.Literal("medium"), t.Literal("high"), t.Literal("xhigh"), t.Literal("max")])) }), { minItems: 1, maxItems: 8 }),
+          maxWorkers: t.Optional(t.Number({ minimum: 1 })),
         }),
       },
     )
