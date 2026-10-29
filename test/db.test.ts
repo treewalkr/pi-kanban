@@ -63,7 +63,7 @@ test("pools: set → list → replace → delete; caps and field trimming", () =
     name: "heavy",
     enabled: true,
     roles: ["builder"],
-    slots: [{ provider: "anthropic", model: "claude-3-5-sonnet", thinking: "max" }],
+    slots: [{ provider: "anthropic", model: "claude-3-5-sonnet", thinking: "max" }, {}],
     updatedAt: expect.any(Number),
   });
 
@@ -98,14 +98,18 @@ test("pools: set → list → replace → delete; caps and field trimming", () =
     db.setPool("p1", { name: "p1", roles: [], slots: [{ model: "m" }] }),
   ).toThrow(new KanbanError("pool 'p1' must serve 1-4 known roles", "invalid"));
 
-  // Validation: 0 slots after trim
+  // Fully-inherit slots are valid parallel lanes; only field values trim
+  const inheritOnly = db.setPool("p1", {
+    name: "p1",
+    roles: ["builder"],
+    slots: [{ provider: "", model: " ", thinking: "" }],
+  });
+  expect(inheritOnly.slots).toEqual([{}]);
+
+  // Validation: empty slots array
   expect(() =>
-    db.setPool("p1", {
-      name: "p1",
-      roles: ["builder"],
-      slots: [{ provider: "", model: " ", thinking: "" }],
-    }),
-  ).toThrow(new KanbanError("pool 'p1' must have 1-8 slots", "invalid"));
+    db.setPool("p-empty", { name: "p-empty", roles: ["builder"], slots: [] }),
+  ).toThrow(new KanbanError("pool 'p-empty' must have 1-8 slots", "invalid"));
 
   // Validation: 9 slots
   const nineSlots = Array.from({ length: 9 }, (_, i) => ({ model: `m-${i}` }));

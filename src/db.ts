@@ -1372,9 +1372,8 @@ export class KanbanDb {
       if (s.provider?.trim()) cleanSlot.provider = s.provider.trim();
       if (s.model?.trim()) cleanSlot.model = s.model.trim();
       if (s.thinking) cleanSlot.thinking = s.thinking;
-      if (cleanSlot.provider !== undefined || cleanSlot.model !== undefined || cleanSlot.thinking !== undefined) {
-        cleanSlots.push(cleanSlot);
-      }
+      // fully-inherit slots are valid: they run as lanes on the role's own config
+      cleanSlots.push(cleanSlot);
     }
     if (cleanSlots.length === 0 || cleanSlots.length > 8) {
       throw new KanbanError(`pool '${id}' must have 1-8 slots`, "invalid");
