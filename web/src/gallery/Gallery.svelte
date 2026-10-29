@@ -104,7 +104,7 @@
       aria-label="toggle theme"
       title="toggle theme"
     >
-      {theme.name === "dark" ? "☀" : "☾"}
+      {theme.name === "dark" ? "○" : "●"}
     </button>
   </header>
 
@@ -206,7 +206,7 @@
         <Frame title="waiting: rerun" note="↻ badge — muted">
           <CardView task={byId(ids.rerun)} />
         </Frame>
-        <Frame title="waiting: capped" note="⏸ badge — muted">
+        <Frame title="waiting: capped" note="‖ badge — muted">
           <CardView task={byId(ids.capped)} />
         </Frame>
         <Frame title="markdown note" note="checklist · fenced code · disclosure + nested child">

@@ -20,7 +20,7 @@ test("waitingBadge renders each state with the exact label and title", () => {
   });
   expect(waitingBadge("capped", false)).toEqual({
     state: "capped",
-    label: "⏸ needs a human",
+    label: "‖ needs a human",
     title: "review cap reached — reject to re-plan, or comment to re-run",
   });
 });

@@ -115,7 +115,7 @@
       aria-label="settings"
       title="settings"
     >
-      ⚙
+      ≡
     </button>
     <button
       class="theme-toggle"
@@ -123,7 +123,7 @@
       aria-label="toggle theme"
       title="toggle theme"
     >
-      {theme.name === "dark" ? "☀" : "☾"}
+      {theme.name === "dark" ? "○" : "●"}
     </button>
   </header>
 

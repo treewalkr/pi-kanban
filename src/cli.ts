@@ -42,7 +42,7 @@ task ids: any unique prefix works. add --json for machine-readable output.
 search: ranks titles, checklist lines, note text, then plans — same results as the web dropdown.
 hierarchy: --parent nests a card (epic → story → subtask, max depth 3).
 threads: comment/handoff/review append to the card thread; brief prints full pickup context.
-auto-review: serve --auto-review spawns a pi reviewer for cards in Review (thinking max; block → pi-builder works the findings, max 3 cycles; agents configurable in the web ui → ⚙).
+auto-review: serve --auto-review spawns a pi reviewer for cards in Review (thinking max; block → pi-builder works the findings, max 3 cycles; agents configurable in the web ui → ≡).
 auto-plan: the same flag runs a pi planner for cards in Plan — it writes the plan from the shared
 template, asks open questions (kind question) when an answer would change the plan, then hands off
 to a pi plan-reviewer that checks the plan against the template checklist (max 2 block rounds per
