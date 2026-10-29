@@ -13,6 +13,22 @@ function loadProjectFilter(): string {
   }
 }
 
+function loadPrioFilter(): "high" | "" {
+  try {
+    return localStorage.getItem("kanban-prio") === "high" ? "high" : "";
+  } catch {
+    return "";
+  }
+}
+
+function loadBlockedOnly(): boolean {
+  try {
+    return localStorage.getItem("kanban-blocked-only") === "true";
+  } catch {
+    return false;
+  }
+}
+
 function loadView(): "board" | "list" {
   try {
     return localStorage.getItem("kanban-view") === "list" ? "list" : "board";
@@ -28,6 +44,8 @@ class BoardStore {
   plans = $state<Record<string, Attachment>>({});
   /** Cards waiting on the human (plan lane or dead session on any lane), keyed by task id (board payload, sparse). */
   waiting = $state<Record<string, WaitingState>>({});
+  /** Sparse card-id → direct blocker ids (board payload). */
+  blockedBy = $state<Record<string, string[]>>({});
   loading = $state(true);
   error = $state("");
   search = $state("");
@@ -46,6 +64,38 @@ class BoardStore {
       else localStorage.setItem("kanban-project", v);
     } catch {
       /* storage unavailable — the filter still works for this session */
+    }
+  }
+
+  #prioFilter = $state<"high" | "">(loadPrioFilter());
+
+  get prioFilter(): "high" | "" {
+    return this.#prioFilter;
+  }
+
+  set prioFilter(v: "high" | "") {
+    this.#prioFilter = v;
+    try {
+      if (v === "") localStorage.removeItem("kanban-prio");
+      else localStorage.setItem("kanban-prio", v);
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
+  #blockedOnly = $state<boolean>(loadBlockedOnly());
+
+  get blockedOnly(): boolean {
+    return this.#blockedOnly;
+  }
+
+  set blockedOnly(v: boolean) {
+    this.#blockedOnly = v;
+    try {
+      if (!v) localStorage.removeItem("kanban-blocked-only");
+      else localStorage.setItem("kanban-blocked-only", "true");
+    } catch {
+      /* storage unavailable */
     }
   }
 
@@ -142,8 +192,20 @@ class BoardStore {
   /** True when the task passes the current search/project filter. */
   matches(t: Task): boolean {
     if (this.projectFilter && t.project !== this.projectFilter) return false;
+    if (this.prioFilter && t.priority !== this.prioFilter) return false;
+    if (this.blockedOnly && !this.isBlocked(t.id)) return false;
     const q = this.search.trim().toLowerCase();
     return q ? `${t.title} ${t.note} ${t.id} ${t.project}`.toLowerCase().includes(q) : true;
+  }
+
+  /** A card is blocked if any direct blocker is outside done or archive (soft blocking). */
+  isBlocked(id: string): boolean {
+    const blockers = this.blockedBy[id];
+    if (!blockers || blockers.length === 0) return false;
+    return blockers.some((bid) => {
+      const bTask = this.taskById(bid);
+      return !bTask || (bTask.laneId !== "done" && bTask.laneId !== "archive");
+    });
   }
 
   /** True when the task renders nested under its parent (same lane, parent visible). */
@@ -217,6 +279,7 @@ class BoardStore {
     this.tasks = data.tasks;
     this.plans = data.plans;
     this.waiting = data.waiting ?? {}; // guards the dev-restart window against a pre-change API payload
+    this.blockedBy = data.blockedBy ?? {};
     this.loading = false;
     // a stored project whose tag no longer exists (renamed, or its last card dropped the tag)
     // resets to "all" — an active filter with no visible chip would be a silent empty board

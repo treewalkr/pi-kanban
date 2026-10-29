@@ -25,6 +25,7 @@
 <div
   class="card"
   class:child
+  class:blocked={board.isBlocked(task.id)}
   class:dragging={board.dragging === task.id}
   draggable="true"
   data-card={task.id}
@@ -84,6 +85,14 @@
   {#if task.note}<div class="card-note md">{@html renderMarkdown(task.note)}</div>{/if}
   <div class="card-meta">
     <IdChip id={task.id} />
+    {#if task.priority === "high"}
+      <span class="chip prio-high">▲ high</span>
+    {:else if task.priority === "low"}
+      <span class="chip prio-low">▼ low</span>
+    {/if}
+    {#if board.isBlocked(task.id)}
+      <span class="chip blocked">⛔ blocked</span>
+    {/if}
     {#if task.project}<span class="chip">{task.project}</span>{/if}
     {#if board.activity[task.id]}
       <span class="chip working" title="pi agent working — open the card for live output">

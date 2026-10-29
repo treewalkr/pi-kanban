@@ -1461,6 +1461,28 @@ button.id-copy {
   border-color: color-mix(in srgb, #f85149 40%, var(--border));
 }
 
+/* ---------- priority & blocked badges ---------- */
+
+.chip.prio-high {
+  color: #f85149;
+  border-color: color-mix(in srgb, #f85149 40%, var(--border));
+}
+
+.chip.prio-low {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.chip.blocked {
+  color: #d29922;
+  border-color: color-mix(in srgb, #d29922 40%, var(--border));
+}
+
+.card.blocked {
+  opacity: 0.65;
+  filter: saturate(0.7);
+}
+
 @keyframes working-pulse {
   0%,
   100% {

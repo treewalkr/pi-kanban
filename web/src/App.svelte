@@ -93,6 +93,20 @@
           {p}
         </button>
       {/each}
+      <button
+        class:active={board.prioFilter === "high"}
+        onclick={() => (board.prioFilter = board.prioFilter === "high" ? "" : "high")}
+        title="filter high priority"
+      >
+        ▲ high
+      </button>
+      <button
+        class:active={board.blockedOnly}
+        onclick={() => (board.blockedOnly = !board.blockedOnly)}
+        title="filter blocked only"
+      >
+        ⛔ blocked
+      </button>
     </div>
     <div class="meta">{board.activeCount} tasks</div>
     <button
