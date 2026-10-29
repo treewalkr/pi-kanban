@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { waitingBadge } from "../web/src/lib/waiting";
+import { canResume, waitingBadge } from "../web/src/lib/waiting";
 import type { WaitingState } from "../src/db";
 
 test("waitingBadge renders each state with the exact label and title", () => {
@@ -48,4 +48,15 @@ test("every WaitingState has badge copy (compile-time-complete map)", () => {
   for (const state of ["gate", "question", "rerun", "capped", "dead"] as WaitingState[]) {
     expect(waitingBadge(state, false)?.state).toBe(state);
   }
+});
+
+test("canResume is true only for dead-and-not-busy", () => {
+  expect(canResume("dead", false)).toBe(true);
+  for (const state of ["gate", "question", "rerun", "capped"] as WaitingState[]) {
+    expect(canResume(state, false)).toBe(false);
+    expect(canResume(state, true)).toBe(false);
+  }
+  expect(canResume("dead", true)).toBe(false);
+  expect(canResume(undefined, false)).toBe(false);
+  expect(canResume(undefined, true)).toBe(false);
 });

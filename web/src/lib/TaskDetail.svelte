@@ -7,6 +7,7 @@
   import { copyText } from "./copy";
   import { renderMarkdown, toggleTaskLine } from "./markdown";
   import { laneColor, timeAgo } from "./util";
+  import { canResume } from "./waiting";
 
   const task = board.editing!;
 
@@ -274,6 +275,15 @@
               <div class="line">{line}</div>
             {/each}
           </div>
+        </div>
+      {/if}
+      {#if canResume(board.waiting[me.id], !!board.activity[me.id])}
+        <div class="detail-activity resume-offer">
+          <div class="children-head">last session died — its context is one click away</div>
+          <button
+            class="resume-btn"
+            title="continue the dead pi session where it left off (a comment re-runs fresh)"
+            onclick={() => board.resumeSession(me.id)}>↻ resume session</button>
         </div>
       {/if}
       {#if sessionLogs.length > 0}

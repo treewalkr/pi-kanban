@@ -1587,6 +1587,35 @@ button.id-copy {
   border-color: color-mix(in srgb, var(--text-dim) 40%, var(--border));
 }
 
+.detail-activity.resume-offer {
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--error) 6%, var(--bg-subtle));
+  border: 1px dashed color-mix(in srgb, var(--error) 35%, var(--border));
+  border-radius: var(--radius-small);
+}
+
+.resume-btn {
+  align-self: flex-start;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border));
+  border-radius: var(--radius-small);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.resume-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .activity-log {
   max-height: 180px;
   overflow-y: auto;

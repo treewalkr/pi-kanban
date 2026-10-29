@@ -25,3 +25,7 @@ export function waitingBadge(state: WaitingState | undefined, busy: boolean): Wa
   if (!state) return null;
   return BADGES[state];
 }
+
+export function canResume(state: WaitingState | undefined, busy: boolean): boolean {
+  return state === "dead" && !busy;
+}

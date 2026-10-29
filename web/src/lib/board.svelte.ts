@@ -328,6 +328,13 @@ class BoardStore {
     await this.refresh();
   }
 
+  async resumeSession(id: string): Promise<void> {
+    const { error } = await api.tasks({ id }).resume.post({});
+    if (error) return this.fail(error);
+    await this.pollActivity();
+    await this.refresh();
+  }
+
   async addLane(name: string): Promise<boolean> {
     const { error } = await api.lanes.post({ name });
     if (error) {
