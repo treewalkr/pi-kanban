@@ -1,6 +1,6 @@
 ---
 name: pi-kanban
-description: Track and manage task state on the Kanban board (Backlog → Plan → Test + Implement → Review → Done → Archive) using the kanban CLI. Use when starting, planning, or finishing a unit of work; when the user mentions tasks, the board, kanban, backlog, "what's next", or moving work forward; and to review what's in flight.
+description: Track and manage task state on the Kanban board (Waiting on you → Backlog → Plan → Test + Implement → Review → Done → Archive) using the kanban CLI. Use when starting, planning, or finishing a unit of work; when the user mentions tasks, the board, kanban, backlog, "what's next", or moving work forward; and to review what's in flight.
 ---
 
 # Kanban board
@@ -13,12 +13,15 @@ directly — the web server does **not** need to be running.
 
 Keep the board truthful as you work. Lanes and their meaning, in order:
 
-1. **Backlog** — captured but not started
-2. **Plan** — scoping/design before code
-3. **Test + Implement** — actively building (test as you go)
-4. **Review** — code done, verifying / awaiting user acceptance
-5. **Done** — finished
-6. **Archive** — kept for reference, out of the active board
+1. **Waiting on you** — HITL tickets parked for a human answer; replying returns them
+2. **Backlog** — captured but not started
+3. **Plan** — scoping/design before code
+4. **Test + Implement** — actively building (test as you go)
+5. **Review** — code done, verifying / awaiting user acceptance
+6. **Done** — finished
+7. **Archive** — kept for reference, out of the active board
+
+The HITL rule: HITL tickets never resolve without the human — the agent never answers its own questions. When an agent needs human direction or a plan decision, it asks with `kanban comment <id> "<problem + recommended default>" --kind question` (each question with a recommended default). Posting a `question` comment atomically parks the card in **Waiting on you** (saving its home lane). Any human comment (author not `pi-*`, kind not `question`) atomically returns the card to its home lane at the end. Agents never move parked cards. Gates require the card back in Plan — reply first to return it, then approve or reject.
 
 For every non-trivial unit of work:
 
@@ -102,12 +105,12 @@ review your own work in that mode unless asked.
 
 ```
 kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--top]  # new card (Backlog by default; --parent nests it)
-kanban ls [lane] [--project <tag>] [--json]                           # board overview / one lane (children indented; ▲▼ priority, ⊘ blocked)
-kanban next [--project <tag>] [--json]                           # what's next: lane priority, then card priority, then oldest; skips blocked (prints count)
+kanban ls [lane] [--project <tag>] [--json]                           # board overview / one lane (children indented; ▲▼ priority, ⊘ blocked, ☉ waiting)
+kanban next [--project <tag>] [--json]                           # what's next: lane priority, then card priority, then oldest; skips blocked (prints blocked & waiting counts)
 kanban search <query…> [--project <tag>] [--json]                     # ranked matches: titles, checklist lines, notes, plans
-kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers
+kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers, from-lane
 kanban attach <id> <plan-file>                                        # attach/version a plan; show prints the latest
-kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff>]  # append to the card's thread
+kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]  # append to the card's thread (question parks the card)
 kanban comments <id>                                                  # read the thread, oldest first
 kanban handoff <id> <lane> --message <text> [--author <name>]         # atomic move + thread record (the baton pass)
 kanban review <id> (--approve | --block --message <text> [--finding <text>]…)  # approve → Done; block → Implement + findings
@@ -169,7 +172,7 @@ kanban help | version                                                 # CLI help
   section in the card detail — the plan lives on the card, not in a scratch
   file. Search matches plan text too.
 - **Threads**: every card carries a comment thread — the card *is* the forum.
-  Kinds: `comment` (default), `review`, `handoff`, `question` (agent asking you something),
+  Kinds: `comment` (default), `review`, `handoff`, `question` (agent asking you something — parks the card in Waiting on you; any human reply returns it),
 `approval`, `rejection` (gate verdicts, human-only). `--author` names the writer:
   agents pass their name (`--author pi`), humans and the web UI default to
   `user`. The web card detail shows the thread live.
@@ -182,9 +185,10 @@ kanban help | version                                                 # CLI help
   Archive shows as a collapsed strip at the end of the board — click to expand,
   or drag a card onto it to archive.
 - First run of a command creates `data/kanban.db` in the app repo and seeds the
-  six default lanes (Backlog / Plan / Test + Implement / Review / Done /
-  Archive). Lanes are customizable — `lane add`/`rename`/`rm` — but keep
-  `backlog` and `done` at the ends; they are fixed, as is `archive`.
+  seven default lanes (Waiting on you / Backlog / Plan / Test + Implement /
+  Review / Done / Archive). Lanes are customizable — `lane add`/`rename`/`rm` —
+  but waiting comes first, done and archive stay last; they are fixed, as is
+  `backlog`.
 
 ## When the user asks "what's next" / to plan the day
 
@@ -193,6 +197,8 @@ it prints the proposed card — first match by lane priority (Review →
 Test + Implement → Plan → Backlog); within the lane, `high` beats `normal`
 beats `low`, then oldest first. Cards with unfinished blockers are skipped
 and the count printed — unblock them (finish the blocker) or pick from
-`kanban ls`. Done, Archive and custom lanes are never proposed; an empty
-answer means the board is clear. `kanban brief <id>` picks the proposal up
-from there. For a fuller picture, run `kanban ls` and summarize per lane.
+`kanban ls`. Done, Archive, custom lanes, and Waiting on you are never proposed;
+an empty answer means the board is clear. When cards are parked, `next` prints
+`☉ N waiting on you` (human work, not agent work). `kanban brief <id>` picks
+the proposal up from there. For a fuller picture, run `kanban ls` and summarize
+per lane.
