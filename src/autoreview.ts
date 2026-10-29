@@ -459,6 +459,7 @@ export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, lo
     // json mode streams JSONL events while the session runs (--print waits for the end)
     cmd: ["pi", "--mode", "json", "--session-id", job.sessionId ?? sessionIdFor(job), ...agentFlags(job.role, config, log), job.prompt],
     cwd,
+    env: process.env,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

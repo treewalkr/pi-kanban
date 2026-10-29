@@ -18,6 +18,7 @@ import {
   builderPlanPrompt,
   builderPrompt,
   deathReason,
+  defaultSpawn,
   durationFor,
   formatPiEvent,
   killAgentSessions,
@@ -108,6 +109,20 @@ afterEach(() => {
   writer = null;
   dir = "";
 });
+
+function withFakePi<T>(scriptBody: string, run: () => Promise<T>): Promise<T> {
+  const fakeDir = mkdtempSync(join(tmpdir(), "fake-pi-"));
+  const fakePi = join(fakeDir, "pi");
+  writeFileSync(fakePi, `#!${process.execPath}\n${scriptBody}\n`, { mode: 0o755 });
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${fakeDir}:${oldPath}`;
+  return Promise.resolve()
+    .then(run)
+    .finally(() => {
+      process.env.PATH = oldPath;
+      rmSync(fakeDir, { recursive: true, force: true });
+    });
+}
 
 function start(spawnFn: SpawnFn, dbFile: string) {
   db = new KanbanDb(dbFile);
@@ -1003,6 +1018,92 @@ describe("auto-review", () => {
     expect(last.body).toStartWith("session died: auto-review stalled after");
     expect(last.body).toContain("no output for 10 min");
     expect(last.body).toEndWith("; comment on this card to re-trigger.");
+  });
+
+  test("defaultSpawn kills a silent session at the stall window and reports stalled", async () => {
+    await withFakePi(
+      `console.log(JSON.stringify({ type: "session" }));\nawait Bun.sleep(60_000);`,
+      async () => {
+        const { dbFile, writer: w } = setup();
+        const card = cardInReview(w);
+        const logs: string[] = [];
+        const emitted: string[] = [];
+        const job: AgentJob = { task: card, role: "reviewer", prompt: "review" };
+        const ctx: SpawnContext = {
+          cwd: dir,
+          timeoutMs: 30_000,
+          stallMs: 500,
+          config: null,
+          log: (msg) => logs.push(msg),
+          emit: (line) => emitted.push(line),
+          track: () => () => {},
+        };
+        const start = Date.now();
+        const result = await defaultSpawn(job, ctx);
+        expect(Date.now() - start).toBeLessThan(5000);
+        expect(result.code).toBe(1);
+        expect(result.stalled).toBe(true);
+        expect(result.stalledAfterMs).toBe(500);
+        expect(result.timedOut).toBeUndefined();
+        expect(logs.some((l) => l.includes("stalled — no output for 0.5s, killed"))).toBe(true);
+      },
+    );
+  });
+
+  test("defaultSpawn lets a continuously streaming session finish naturally", async () => {
+    await withFakePi(
+      `for (let i = 0; i < 12; i++) {\n  console.log(JSON.stringify({ type: "message_update" }));\n  await Bun.sleep(100);\n}\nprocess.exit(0);`,
+      async () => {
+        const { dbFile, writer: w } = setup();
+        const card = cardInReview(w);
+        const logs: string[] = [];
+        const emitted: string[] = [];
+        const job: AgentJob = { task: card, role: "reviewer", prompt: "review" };
+        const ctx: SpawnContext = {
+          cwd: dir,
+          timeoutMs: 30_000,
+          stallMs: 500,
+          config: null,
+          log: (msg) => logs.push(msg),
+          emit: (line) => emitted.push(line),
+          track: () => () => {},
+        };
+        const start = Date.now();
+        const result = await defaultSpawn(job, ctx);
+        expect(Date.now() - start).toBeGreaterThanOrEqual(1000);
+        expect(result.code).toBe(0);
+        expect(result.stalled).toBeUndefined();
+        expect(result.timedOut).toBeUndefined();
+      },
+    );
+  });
+
+  test("defaultSpawn still kills an endless stream at the total cap", async () => {
+    await withFakePi(
+      `while (true) {\n  console.log(JSON.stringify({ type: "message_update" }));\n  await Bun.sleep(50);\n}`,
+      async () => {
+        const { dbFile, writer: w } = setup();
+        const card = cardInReview(w);
+        const logs: string[] = [];
+        const emitted: string[] = [];
+        const job: AgentJob = { task: card, role: "reviewer", prompt: "review" };
+        const ctx: SpawnContext = {
+          cwd: dir,
+          timeoutMs: 800,
+          stallMs: 5_000,
+          config: null,
+          log: (msg) => logs.push(msg),
+          emit: (line) => emitted.push(line),
+          track: () => () => {},
+        };
+        const start = Date.now();
+        const result = await defaultSpawn(job, ctx);
+        expect(Date.now() - start).toBeLessThan(5000);
+        expect(result.code).toBe(1);
+        expect(result.timedOut).toBe(true);
+        expect(result.stalled).toBeUndefined();
+      },
+    );
   });
 
   test("simulated spawn exiting 0 without a verdict leaves a reason comment and a diagnostic attachment", async () => {
