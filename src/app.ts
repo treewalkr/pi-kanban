@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type AgentRole, type Attachment, type Board, type Comment, type Lane, type Task } from "./db";
+import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type AgentRole, type Attachment, type Board, type Comment, type Lane, type Task, type WorkerPool } from "./db";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
@@ -431,6 +431,40 @@ export const createApp = (
           extraArgs: t.Optional(t.Array(t.String({ minLength: 1 }))),
           timeoutMs: t.Optional(t.Number({ minimum: 60_000, maximum: 3_600_000 })),
         }),
+      },
+    )
+    .get("/pools", (): { pools: WorkerPool[] } => ({ pools: db.pools() }))
+    .put(
+      "/pools/:id",
+      ({ params, body, status }): WorkerPool | unknown => {
+        try {
+          return status(200, db.setPool(params.id, body));
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Object({
+          name: t.String({ minLength: 1, maxLength: 60 }),
+          enabled: t.Optional(t.Boolean()),
+          roles: t.Array(t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer")]), { minItems: 1 }),
+          slots: t.Array(t.Object({ provider: t.Optional(t.String()), model: t.Optional(t.String()), thinking: t.Optional(t.Union([t.Literal(""), t.Literal("off"), t.Literal("minimal"), t.Literal("low"), t.Literal("medium"), t.Literal("high"), t.Literal("xhigh"), t.Literal("max")])) }), { minItems: 1, maxItems: 8 }),
+        }),
+      },
+    )
+    .delete(
+      "/pools/:id",
+      ({ params, status }): { ok: true } | unknown => {
+        try {
+          db.deletePool(params.id);
+          return { ok: true as const };
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String() }),
       },
     )
     .delete(

@@ -505,3 +505,113 @@ test("POST /tasks/:id/resume: 202 with role+sessionId; 404/409s with exact error
   });
   expect(db.resumeRequests()).toEqual([{ taskId: task.id, requestedAt: expect.any(Number) }]);
 });
+
+test("GET/PUT/DELETE /pools roundtrip; schema 422, semantic 400, missing 404", async () => {
+  const app = createApp(db);
+
+  // empty GET → { pools: [] }
+  const empty = await app.handle(new Request("http://localhost/pools"));
+  expect(empty.status).toBe(200);
+  expect(await empty.json()).toEqual({ pools: [] });
+
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+
+  // PUT valid body → 200 + saved pool reflected in GET
+  const validPut = await app.handle(
+    new Request("http://localhost/pools/heavy", {
+      method: "PUT",
+      ...putBody({
+        name: "heavy pool",
+        enabled: true,
+        roles: ["builder"],
+        slots: [{ provider: "anthropic", model: "claude-3-5-sonnet", thinking: "high" }],
+      }),
+    }),
+  );
+  expect(validPut.status).toBe(200);
+  const saved = await validPut.json();
+  expect(saved).toMatchObject({
+    id: "heavy",
+    name: "heavy pool",
+    enabled: true,
+    roles: ["builder"],
+    slots: [{ provider: "anthropic", model: "claude-3-5-sonnet", thinking: "high" }],
+  });
+
+  const got = await app.handle(new Request("http://localhost/pools"));
+  expect(got.status).toBe(200);
+  expect(await got.json()).toEqual({ pools: [saved] });
+
+  // Schema 422: roles: []
+  const emptyRoles = await app.handle(
+    new Request("http://localhost/pools/p1", {
+      method: "PUT",
+      ...putBody({ name: "p1", roles: [], slots: [{ model: "m" }] }),
+    }),
+  );
+  expect(emptyRoles.status).toBe(422);
+
+  // Schema 422: 9 slots
+  const nineSlots = Array.from({ length: 9 }, (_, i) => ({ model: `m-${i}` }));
+  const tooManySlots = await app.handle(
+    new Request("http://localhost/pools/p1", {
+      method: "PUT",
+      ...putBody({ name: "p1", roles: ["builder"], slots: nineSlots }),
+    }),
+  );
+  expect(tooManySlots.status).toBe(422);
+
+  // Schema 422: unknown role string
+  const badRole = await app.handle(
+    new Request("http://localhost/pools/p1", {
+      method: "PUT",
+      ...putBody({ name: "p1", roles: ["unknown-role"], slots: [{ model: "m" }] }),
+    }),
+  );
+  expect(badRole.status).toBe(422);
+
+  // Schema 422: empty name
+  const emptyName = await app.handle(
+    new Request("http://localhost/pools/p1", {
+      method: "PUT",
+      ...putBody({ name: "", roles: ["builder"], slots: [{ model: "m" }] }),
+    }),
+  );
+  expect(emptyName.status).toBe(422);
+
+  // Semantic 400 { code: "invalid" }: PUT making a 13th enabled slot
+  // Current enabled slots: 1 (from heavy). Set up 8 slots on pool 1, then attempt 5 slots on pool 2:
+  const eightSlots = Array.from({ length: 8 }, (_, i) => ({ model: `m-${i}` }));
+  const put8 = await app.handle(
+    new Request("http://localhost/pools/p1", {
+      method: "PUT",
+      ...putBody({ name: "p1", enabled: true, roles: ["builder"], slots: eightSlots }),
+    }),
+  );
+  expect(put8.status).toBe(200);
+
+  const fiveSlots = Array.from({ length: 5 }, (_, i) => ({ model: `m2-${i}` }));
+  const putOver12 = await app.handle(
+    new Request("http://localhost/pools/p2", {
+      method: "PUT",
+      ...putBody({ name: "p2", enabled: true, roles: ["reviewer"], slots: fiveSlots }),
+    }),
+  );
+  expect(putOver12.status).toBe(400);
+  expect(await putOver12.json()).toMatchObject({ code: "invalid" });
+
+  // DELETE → 200 and gone from GET
+  const del = await app.handle(new Request("http://localhost/pools/heavy", { method: "DELETE" }));
+  expect(del.status).toBe(200);
+  expect(await del.json()).toEqual({ ok: true });
+
+  const afterDel = await app.handle(new Request("http://localhost/pools"));
+  const afterDelList = ((await afterDel.json()) as { pools: Array<{ id: string }> }).pools;
+  expect(afterDelList.map((p) => p.id)).not.toContain("heavy");
+
+  // DELETE unknown id → 404 { code: "not-found" }
+  const delMissing = await app.handle(new Request("http://localhost/pools/non-existent", { method: "DELETE" }));
+  expect(delMissing.status).toBe(404);
+  expect(await delMissing.json()).toMatchObject({ code: "not-found" });
+});
