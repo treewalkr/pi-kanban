@@ -464,6 +464,11 @@ describe("auto-review", () => {
     expect(prompt).toContain(`kanban comment abc12 "<concern>" --author pi-reviewer`);
   });
 
+  test("builder prompt allows challenging findings that cite no proof", () => {
+    const task = { id: "abc12", title: "proof", laneId: "implement" } as never;
+    expect(builderPrompt(task)).toContain("A finding that cites no proof may be challenged");
+  });
+
   test("agentFlags: reviewer defaults to thinking max, builder to nothing", () => {
     withAgentEnv({}, () => {
       expect(agentFlags("reviewer", null)).toEqual(["--thinking", "max"]);

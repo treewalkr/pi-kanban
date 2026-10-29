@@ -311,7 +311,7 @@ export function builderPrompt(task: Task): string {
 3. Rewrite the note with the findings checked off: kanban edit ${task.id} --note "<full updated note with '- [x]' lines>".
 4. Hand the card back: kanban handoff ${task.id} review --message "<what you fixed · test status>" --author pi-builder
 
-Never move the card with mv. If a finding looks wrong, say so in the handoff message instead of silently skipping it.`;
+Never move the card with mv. If a finding looks wrong, say so in the handoff message instead of silently skipping it. A finding that cites no proof may be challenged: quote what you checked and why it still holds.`;
 }
 
 /** Max characters of a SKILL.md body injected into the system prompt (argv safety). */
