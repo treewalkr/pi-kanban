@@ -433,3 +433,33 @@ test("next --json: Task object; null and exit 0 when nothing to pull forward", a
   expect(emptyHuman.stdout.trim()).toBe("nothing to pull forward");
 });
 
+
+test("stop: SIGTERMs a live kanban server and frees the port; quiet when none", async () => {
+  const port = 4690 + (Date.now() % 200);
+  const server = Bun.spawn(["bun", "src/index.ts"], {
+    cwd: root,
+    env: { ...process.env, KANBAN_DB: join(dir, "stop.db"), PORT: String(port) },
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  let up = false;
+  for (let i = 0; i < 50 && !up; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(500) });
+      up = (await res.json()).ok === true;
+    } catch {
+      /* still booting */
+    }
+  }
+  expect(up).toBe(true);
+
+  const stopped = await cli("stop", "--port", String(port));
+  expect(stopped.code).toBe(0);
+  expect(stopped.stdout).toContain(`stopped the kanban server on port ${port}`);
+  expect(await server.exited).toBe(0);
+
+  const none = await cli("stop", "--port", String(port));
+  expect(none.code).toBe(0);
+  expect(none.stdout).toContain("no server listening");
+}, 15_000);

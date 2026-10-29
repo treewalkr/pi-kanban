@@ -32,6 +32,7 @@ usage:
   kanban rm <id> [--force]                   (deleting a parent needs --force)
   kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force]
   kanban serve [--port <n>] [--open] [--auto-review]
+  kanban stop [--port <n>]                     (SIGTERM the kanban server; graceful — traces in-flight agents)
   kanban help | version
 
 lane refs: slug (backlog), prefix (imp), name prefix (Rev), or ordinal (1..n)
@@ -113,6 +114,18 @@ function laneById(db: KanbanDb, id: string): string {
   return lane.id;
 }
 
+/** PIDs with a TCP listener on `port` (lsof — the same probe repro.sh uses). pid 0 must be
+ * dropped: lsof's trailing empty line becomes Number("") === 0, and kill(0) signals the
+ * caller's whole process group — suicide. */
+function listenerPids(port: number): number[] {
+  const out = Bun.spawnSync(["lsof", "-t", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN"]);
+  return out.stdout
+    .toString()
+    .split("\n")
+    .map((l) => Number(l.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+
 async function main(): Promise<number> {
   const argv = Bun.argv.slice(2);
   const [cmd, ...rest] = argv;
@@ -141,6 +154,41 @@ async function main(): Promise<number> {
     const { boot } = await import("./index");
     await boot(); // resolves after listen; the listener keeps the process alive
     return 0;
+  }
+
+  if (cmd === "stop") {
+    const port = Number(str(flags, "port") ?? process.env.PORT ?? 4600);
+    const pids = listenerPids(port);
+    if (pids.length === 0) {
+      console.log(`no server listening on port ${port}`);
+      return 0;
+    }
+    // never signal something we cannot vouch for (same spirit as the boot guard)
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1500) });
+      const body = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+      if (!body || body.ok !== true) throw new Error("not kanban");
+    } catch {
+      throw new KanbanError(
+        `port ${port} is held by a non-kanban server — stop it yourself (lsof -nP -iTCP:${port} -sTCP:LISTEN)`,
+        "conflict",
+      );
+    }
+    for (const pid of pids) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        /* already gone */
+      }
+    }
+    for (let i = 0; i < 50 && listenerPids(port).length > 0; i++) await new Promise((r) => setTimeout(r, 100));
+    const stopped = listenerPids(port).length === 0;
+    console.log(
+      stopped
+        ? `stopped the kanban server on port ${port}`
+        : `signaled port ${port}; still listening — it may be draining, retry in a moment`,
+    );
+    return stopped ? 0 : 1;
   }
 
   const db = new KanbanDb(defaultDbPath());
