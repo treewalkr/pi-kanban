@@ -48,6 +48,7 @@ export interface AgentJob {
 export interface SpawnContext {
   cwd: string;
   timeoutMs: number;
+  stallMs: number;
   config: AgentConfig | null;
   log: (message: string) => void;
   /** Streams one formatted output line from the running session. */
@@ -62,6 +63,10 @@ export interface SpawnResult {
   code: number;
   /** True when the timeout killer fired (quota exits masquerade as 0, but timeouts masquerade as 1). */
   timedOut?: boolean;
+  /** True when the stall watchdog fired (no output for stallMs). */
+  stalled?: boolean;
+  /** The stall window that fired, in milliseconds. */
+  stalledAfterMs?: number;
   /** Trailing stderr text if the child wrote any — the diagnostic tail, ≤1500 chars. */
   stderrTail?: string;
 }
@@ -73,6 +78,7 @@ export interface AutoReviewOptions {
   cwd: string;
   spawnFn?: SpawnFn;
   timeoutMs?: number;
+  stallMs?: number;
   maxBlocks?: number;
   /** Plan-review blocks allowed since the last human comment before the card goes to the human (default 2). */
   maxPlanBlocks?: number;
@@ -80,7 +86,8 @@ export interface AutoReviewOptions {
   log?: (message: string) => void;
 }
 
-const DEFAULT_TIMEOUT_MS = 40 * 60_000;
+export const DEFAULT_TIMEOUT_MS = 2 * 60 * 60_000;
+export const DEFAULT_STALL_MS = 10 * 60_000;
 const DEFAULT_MAX_BLOCKS = 3;
 const DEFAULT_MAX_PLAN_BLOCKS = 2;
 const MAX_LOG_LINES = 150;
@@ -435,6 +442,7 @@ export function durationFor(secs: number): string {
 /** The "why" for a death comment, from the spawn result plus what the session actually emitted. */
 export function deathReason(result: SpawnResult, secs: number, sessionLog: string[]): string {
   const dur = durationFor(secs);
+  if (result.stalled) return `stalled after ${dur} — no output for ${durationFor((result.stalledAfterMs ?? 0) / 1000)}`;
   if (result.timedOut) return `timed out after ${dur}`;
   const lines = (result.stderrTail ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
   const compact = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -446,7 +454,7 @@ export function deathReason(result: SpawnResult, secs: number, sessionLog: strin
   return `ended without a verdict after ${dur}`;
 }
 
-const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }) => {
+export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, log, emit, track }) => {
   const proc = Bun.spawn({
     // json mode streams JSONL events while the session runs (--print waits for the end)
     cmd: ["pi", "--mode", "json", "--session-id", job.sessionId ?? sessionIdFor(job), ...agentFlags(job.role, config, log), job.prompt],
@@ -458,11 +466,33 @@ const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }
   const untrack = track(() => proc.kill());
   const stderr = new Response(proc.stderr).text();
   let timedOut = false;
+  let stalled = false;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearTimers = () => {
+    clearTimeout(timer);
+    if (stallTimer) clearTimeout(stallTimer);
+  };
+
   const timer = setTimeout(() => {
     timedOut = true;
+    if (stallTimer) clearTimeout(stallTimer);
     proc.kill();
   }, timeoutMs);
   timer.unref?.();
+
+  const resetStallTimer = () => {
+    if (timedOut || stalled) return;
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      stalled = true;
+      clearTimeout(timer);
+      proc.kill();
+    }, stallMs);
+    stallTimer.unref?.();
+  };
+
+  resetStallTimer();
 
   // stream events as they arrive: manual LF split (readline mis-splits unicode)
   void (async () => {
@@ -473,6 +503,9 @@ const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (value && value.byteLength > 0) {
+          resetStallTimer();
+        }
         buf += decoder.decode(value, { stream: true });
         let nl: number;
         while ((nl = buf.indexOf("\n")) >= 0) {
@@ -487,14 +520,17 @@ const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }
   })();
 
   return proc.exited.finally(untrack).then(async (code) => {
-    clearTimeout(timer);
+    clearTimers();
     const tail = (await stderr).trim();
-    if (timedOut) log(`${job.role} ${job.task.id}: timed out after ${Math.round(timeoutMs / 60_000)} min, killed`);
+    if (stalled) log(`${job.role} ${job.task.id}: stalled — no output for ${durationFor(stallMs / 1000)}, killed`);
+    else if (timedOut) log(`${job.role} ${job.task.id}: timed out after ${Math.round(timeoutMs / 60_000)} min, killed`);
     else if (code !== 0) {
       if (tail) log(`${job.role} ${job.task.id}: exited ${code}, stderr tail:\n${tail.slice(-1500)}`);
     }
     return {
-      code: timedOut ? 1 : (code ?? 1),
+      code: (timedOut || stalled) ? 1 : (code ?? 1),
+      stalled: stalled || undefined,
+      stalledAfterMs: stalled ? stallMs : undefined,
       timedOut: timedOut || undefined,
       stderrTail: tail ? tail.slice(-1500) : undefined,
     };
@@ -522,6 +558,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     };
   };
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const stallMs = opts.stallMs ?? DEFAULT_STALL_MS;
   const maxBlocks = opts.maxBlocks ?? DEFAULT_MAX_BLOCKS;
   const maxPlanBlocks = opts.maxPlanBlocks ?? DEFAULT_MAX_PLAN_BLOCKS;
   const maxParallel = Math.min(8, Math.max(1, parseInt(process.env.KANBAN_AUTOREVIEW_MAX_PARALLEL ?? "", 10) || 1));
@@ -803,12 +840,14 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       };
       let result: SpawnResult = { code: 1 };
       try {
-        result = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track: jobTrack });
+        result = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, stallMs, config, log, emit, track: jobTrack });
+        if (result.stalled) emit(`stalled — no output for ${durationFor((result.stalledAfterMs ?? 0) / 1000)}, killed`);
         if (result.timedOut) emit("timed out — killed");
         if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
       } catch (err) {
         log(`${job.role} ${job.task.id}: spawn error ${(err as Error).message}`);
         result = { code: 1, stderrTail: `spawn error: ${(err as Error).message}` };
+        if (result.stalled) emit(`stalled — no output for ${durationFor((result.stalledAfterMs ?? 0) / 1000)}, killed`);
         if (result.timedOut) emit("timed out — killed");
         if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
       } finally {
@@ -948,7 +987,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   }
 
   const stopWatch = db.watch(() => scan(), opts.watchIntervalMs ?? 300);
-  log(`enabled — agents run in ${opts.cwd}, timeout ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}${maxParallel > 1 ? `, up to ${maxParallel} parallel` : ""}`);
+  log(`enabled — agents run in ${opts.cwd}, stall ${Math.round(stallMs / 60_000)} min / cap ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}${maxParallel > 1 ? `, up to ${maxParallel} parallel` : ""}`);
   scan(); // cards already waiting get picked up right away
 
   return {

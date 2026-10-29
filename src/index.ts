@@ -83,6 +83,13 @@ async function portInUse(port: number): Promise<boolean> {
   }
 }
 
+function envMs(name: string): number | undefined {
+  const val = process.env[name]?.trim();
+  if (!val) return undefined;
+  const n = Number(val);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 export async function boot(opts: BootOptions = {}): Promise<void> {
   const port = opts.port ?? Number(process.env.PORT ?? 4600);
 
@@ -144,10 +151,14 @@ export async function boot(opts: BootOptions = {}): Promise<void> {
   if (opts.autoReview ?? process.env.KANBAN_AUTO_REVIEW === "1") {
     // own connection, like the CLI — the reviewer/builder children talk to the
     // board through the kanban CLI, never through this process
+    const timeoutMs = envMs("KANBAN_AUTOREVIEW_TIMEOUT_MS");
+    const stallMs = envMs("KANBAN_AUTOREVIEW_STALL_MS");
     const handle = startAutoReview({
       db: new KanbanDb(defaultDbPath()),
       cwd: process.cwd(),
       log: (message) => console.log(`[autoreview] ${message}`),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(stallMs !== undefined ? { stallMs } : {}),
     });
     registerShutdown(() => handle.stop());
   }

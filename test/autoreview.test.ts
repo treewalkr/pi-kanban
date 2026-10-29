@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { KanbanDb } from "../src/db";
 import {
   BUILDER_AUTHOR,
+  DEFAULT_STALL_MS,
+  DEFAULT_TIMEOUT_MS,
   PLANNER_AUTHOR,
   PLAN_REVIEWER_AUTHOR,
   PLAN_SECTIONS,
@@ -777,6 +779,11 @@ describe("auto-review", () => {
     });
   });
 
+  test("defaults: 2h total cap, 10 min stall window", () => {
+    expect(DEFAULT_TIMEOUT_MS).toBe(7_200_000);
+    expect(DEFAULT_STALL_MS).toBe(600_000);
+  });
+
   test("spawn carries the board config: context, skills and timeout reach the session", async () => {
     const { dbFile, writer: w } = setup();
     cardInReview(w);
@@ -797,6 +804,38 @@ describe("auto-review", () => {
     expect(seen[0]!.flags).toContain("--skill");
     expect(seen[0]!.flags).toContain("claude-opus-4-5");
     expect(seen[0]!.timeoutMs).toBe(300_000);
+  });
+
+  test("spawn context carries stallMs from loop options", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w);
+    w.setAgentConfig("reviewer", { timeoutMs: 300_000 });
+    let seenCtx: SpawnContext | null = null;
+    const spawnFn: SpawnFn = (_job, ctx) => {
+      seenCtx = ctx;
+      return Promise.resolve({ code: 1 });
+    };
+    db = new KanbanDb(dbFile);
+    const handle = startAutoReview({ db, cwd: dir, spawnFn, stallMs: 123_456, watchIntervalMs: 50 });
+    stop = () => handle.stop();
+    await sleep(20);
+    expect(seenCtx).not.toBeNull();
+    expect(seenCtx!.stallMs).toBe(123_456);
+    expect(seenCtx!.timeoutMs).toBe(300_000);
+  });
+
+  test("spawn context uses DEFAULT_STALL_MS when stallMs is omitted", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w);
+    let seenCtx: SpawnContext | null = null;
+    const spawnFn: SpawnFn = (_job, ctx) => {
+      seenCtx = ctx;
+      return Promise.resolve({ code: 1 });
+    };
+    start(spawnFn, dbFile);
+    await sleep(20);
+    expect(seenCtx).not.toBeNull();
+    expect(seenCtx!.stallMs).toBe(DEFAULT_STALL_MS);
   });
 
   test("spawn injects configured skills into the session's system prompt", async () => {
@@ -907,6 +946,9 @@ describe("auto-review", () => {
   });
 
   test("deathReason names timeouts, exit codes and silent clean exits", () => {
+    expect(deathReason({ code: 1, stalled: true, stalledAfterMs: 600_000 }, 720, [])).toBe(
+      "stalled after 12 min — no output for 10 min",
+    );
     expect(deathReason({ code: 1, timedOut: true }, 1200, [])).toBe("timed out after 20 min");
     expect(
       deathReason({ code: 1, stderrTail: "line\nError: ECONNREFUSED" }, 4, []),
@@ -946,6 +988,20 @@ describe("auto-review", () => {
     expect(last.body).toStartWith(
       "session died: auto-review failed (exit 1 — Error: ECONNREFUSED) after",
     );
+    expect(last.body).toEndWith("; comment on this card to re-trigger.");
+  });
+
+  test("reviewer death comment names a stall kill", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const spawnFn: SpawnFn = () =>
+      Promise.resolve({ code: 1, stalled: true, stalledAfterMs: 600_000 });
+    start(spawnFn, dbFile);
+    await sleep(30);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(REVIEWER_AUTHOR);
+    expect(last.body).toStartWith("session died: auto-review stalled after");
+    expect(last.body).toContain("no output for 10 min");
     expect(last.body).toEndWith("; comment on this card to re-trigger.");
   });
 
