@@ -117,6 +117,19 @@ function laneById(db: KanbanDb, id: string): string {
   return lane.id;
 }
 
+/** Soft done-warning: children still in active lanes after their parent reached Done — advisory only. */
+function warnActiveChildren(db: KanbanDb, task: Task): void {
+  const active = db.activeChildren(task.id);
+  if (active.length > 0) {
+    console.log(
+      c.hex(
+        "#d29922",
+        `warning: ${active.length} children still active (${active.map((t) => t.id).join(", ")}) — advance or archive them if the work is done`,
+      ),
+    );
+  }
+}
+
 /** PIDs with a TCP listener on `port` (lsof — the same probe repro.sh uses). pid 0 must be
  * dropped: lsof's trailing empty line becomes Number("") === 0, and kill(0) signals the
  * caller's whole process group — suicide. */
@@ -349,7 +362,10 @@ async function main(): Promise<number> {
         }
         const result = db.handoff(idRef, laneRef, { message, author: str(flags, "author") });
         if (json) jsonOut(result);
-        else console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+        else {
+          console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+          if (result.task.laneId === "done") warnActiveChildren(db, result.task);
+        }
         return 0;
       }
 
@@ -371,7 +387,10 @@ async function main(): Promise<number> {
           ? db.handoff(idRef, laneById(db, "done"), { message: message ?? "approved", author: str(flags, "author"), kind: "review" })
           : db.handoff(idRef, laneById(db, "implement"), { message: message!, author: str(flags, "author"), kind: "review", findings });
         if (json) jsonOut(result);
-        else console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+        else {
+          console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+          if (result.task.laneId === "done") warnActiveChildren(db, result.task);
+        }
         return 0;
       }
 
@@ -431,6 +450,7 @@ async function main(): Promise<number> {
         if (json) jsonOut(moved);
         else {
           console.log(taskLine(db, moved));
+          if (moved.laneId === "done") warnActiveChildren(db, moved);
           if (moved.laneId === "plan" || moved.laneId === "implement") {
             const blockers = db.blockers(moved.id).filter((b) => !UNBLOCKED_LANES.includes(b.laneId as any));
             if (blockers.length > 0) {
@@ -470,7 +490,10 @@ async function main(): Promise<number> {
         const task = db.resolveTask(positional[0] ?? "");
         const moved = db.moveTask(task.id, laneById(db, "done"));
         if (json) jsonOut(moved);
-        else console.log(taskLine(db, moved));
+        else {
+          console.log(taskLine(db, moved));
+          warnActiveChildren(db, moved);
+        }
         return 0;
       }
 

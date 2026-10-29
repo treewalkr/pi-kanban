@@ -660,3 +660,70 @@ test("add --elaborate queues elaboration; elaborate re-queues; unknown id fails"
     inspectDb.close();
   }
 });
+
+test("moving a parent into done with active children warns, never blocks", async () => {
+  const pRes = await cli("add", "parent card", "--json");
+  const parent = JSON.parse(pRes.stdout) as Task;
+  const cRes = await cli("add", "child card", "--parent", parent.id, "--json");
+  const child = JSON.parse(cRes.stdout) as Task;
+
+  const doneRes = await cli("done", parent.id);
+  expect(doneRes.code).toBe(0);
+  expect(doneRes.stdout).toContain(`warning: 1 children still active (${child.id}) — advance or archive them if the work is done`);
+
+  const showRes = await cli("show", parent.id, "--json");
+  expect(showRes.code).toBe(0);
+  expect((JSON.parse(showRes.stdout) as Task).laneId).toBe("done");
+});
+
+test("done warning fires for mv, handoff and review --approve into done", async () => {
+  // mv into done
+  const p1 = JSON.parse((await cli("add", "p1", "--json")).stdout) as Task;
+  const c1 = JSON.parse((await cli("add", "c1", "--parent", p1.id, "--json")).stdout) as Task;
+  const mvRes = await cli("mv", p1.id, "done");
+  expect(mvRes.code).toBe(0);
+  expect(mvRes.stdout).toContain(`warning: 1 children still active (${c1.id}) — advance or archive them if the work is done`);
+
+  // handoff into done
+  const p2 = JSON.parse((await cli("add", "p2", "--json")).stdout) as Task;
+  const c2 = JSON.parse((await cli("add", "c2", "--parent", p2.id, "--json")).stdout) as Task;
+  const handoffRes = await cli("handoff", p2.id, "done", "--message", "done work");
+  expect(handoffRes.code).toBe(0);
+  expect(handoffRes.stdout).toContain(`warning: 1 children still active (${c2.id}) — advance or archive them if the work is done`);
+
+  // review --approve into done
+  const p3 = JSON.parse((await cli("add", "p3", "--lane", "review", "--json")).stdout) as Task;
+  const c3 = JSON.parse((await cli("add", "c3", "--parent", p3.id, "--json")).stdout) as Task;
+  const reviewRes = await cli("review", p3.id, "--approve");
+  expect(reviewRes.code).toBe(0);
+  expect(reviewRes.stdout).toContain(`warning: 1 children still active (${c3.id}) — advance or archive them if the work is done`);
+
+  // verify children untouched
+  const c1Show = JSON.parse((await cli("show", c1.id, "--json")).stdout) as Task;
+  const c2Show = JSON.parse((await cli("show", c2.id, "--json")).stdout) as Task;
+  const c3Show = JSON.parse((await cli("show", c3.id, "--json")).stdout) as Task;
+  expect(c1Show.laneId).toBe(c1.laneId);
+  expect(c2Show.laneId).toBe(c2.laneId);
+  expect(c3Show.laneId).toBe(c3.laneId);
+});
+
+test("no done warning for childless cards or children in done/archive", async () => {
+  // childless card
+  const childless = JSON.parse((await cli("add", "childless", "--json")).stdout) as Task;
+  const res1 = await cli("done", childless.id);
+  expect(res1.code).toBe(0);
+  expect(res1.stdout).not.toContain("warning:");
+
+  // parent whose children are in Done and Archive
+  const parent = JSON.parse((await cli("add", "parent-clean", "--json")).stdout) as Task;
+  const cDone = JSON.parse((await cli("add", "cdone", "--parent", parent.id, "--lane", "done", "--json")).stdout) as Task;
+  const cArchive = JSON.parse((await cli("add", "carchive", "--parent", parent.id, "--lane", "archive", "--json")).stdout) as Task;
+
+  const res2 = await cli("done", parent.id);
+  expect(res2.code).toBe(0);
+  expect(res2.stdout).not.toContain("warning:");
+
+  const pShow = JSON.parse((await cli("show", parent.id, "--json")).stdout) as Task;
+  expect(pShow.laneId).toBe("done");
+});
+
