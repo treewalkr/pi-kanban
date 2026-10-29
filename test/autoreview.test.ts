@@ -36,7 +36,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Run with the agent env vars cleared, then set from `env`, restoring after. */
 function withAgentEnv(env: Record<string, string>, run: () => void): void {
-  const keys = ["KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING"];
+  const keys = ["KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING", "KANBAN_AUTOREVIEW_MAX_PARALLEL"];
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   try {
     for (const k of keys) delete process.env[k];
@@ -347,6 +347,67 @@ describe("auto-review", () => {
     await sleep(20);
     expect(calls.length).toBe(2);
     expect(calls[1].job.task.id).not.toBe(firstId);
+  });
+
+  test("KANBAN_AUTOREVIEW_MAX_PARALLEL=2 runs two reviewers at once; the queued third starts when a slot frees", async () => {
+    const { dbFile, writer: w } = setup();
+    const first = cardInReview(w, "first");
+    await sleep(2);
+    const second = cardInReview(w, "second");
+    await sleep(2);
+    const third = cardInReview(w, "third");
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({ KANBAN_AUTOREVIEW_MAX_PARALLEL: "2" }, () => start(spawnFn, dbFile));
+    expect(calls.length).toBe(2);
+    expect(new Set(calls.map((c) => c.job.task.id))).toEqual(new Set([first.id, second.id]));
+
+    calls[0].finish({ code: 0 });
+    await sleep(50);
+
+    expect(calls.length).toBe(3);
+    expect(calls[2].job.task.id).toBe(third.id);
+
+    const last = db!.comments(first.id).at(-1)!;
+    expect(last.author).toBe(REVIEWER_AUTHOR);
+    expect(last.body).toContain("auto-review");
+  });
+
+  test("KANBAN_AUTOREVIEW_MAX_PARALLEL=0 stays serial", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w, "first");
+    cardInReview(w, "second");
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({ KANBAN_AUTOREVIEW_MAX_PARALLEL: "0" }, () => start(spawnFn, dbFile));
+    expect(calls.length).toBe(1);
+    const firstId = calls[0].job.task.id;
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.task.id).not.toBe(firstId);
+  });
+
+  test("non-numeric KANBAN_AUTOREVIEW_MAX_PARALLEL stays serial", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w, "first");
+    cardInReview(w, "second");
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({ KANBAN_AUTOREVIEW_MAX_PARALLEL: "banana" }, () => start(spawnFn, dbFile));
+    expect(calls.length).toBe(1);
+    const firstId = calls[0].job.task.id;
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.task.id).not.toBe(firstId);
+  });
+
+  test("KANBAN_AUTOREVIEW_MAX_PARALLEL=99 caps at 8 concurrent sessions", async () => {
+    const { dbFile, writer: w } = setup();
+    for (let i = 1; i <= 9; i++) {
+      cardInReview(w, `card-${i}`);
+    }
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({ KANBAN_AUTOREVIEW_MAX_PARALLEL: "99" }, () => start(spawnFn, dbFile));
+    expect(calls.length).toBe(8);
   });
 
   test("builder crash posts a failure comment, not another builder spawn", async () => {
