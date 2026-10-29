@@ -76,7 +76,7 @@
           {:else if task.priority === "low"}
             <span class="chip prio-low" title="low priority">▼</span>
           {/if}
-          {#if board.isBlocked(task.id)}<span class="chip blocked" title="blocked by unfinished work">⛔</span>{/if}
+          {#if board.isBlocked(task.id)}<span class="chip blocked" title="blocked by unfinished work">⊘</span>{/if}
           {#if row.total > 0}
             <span class="progress" class:complete={row.done === row.total}>
               {row.done}/{row.total} ✓

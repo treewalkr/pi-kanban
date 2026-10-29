@@ -102,7 +102,7 @@ review your own work in that mode unless asked.
 
 ```
 kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--top]  # new card (Backlog by default; --parent nests it)
-kanban ls [lane] [--project <tag>] [--json]                           # board overview / one lane (children indented; ▲▼ priority, ⛔ blocked)
+kanban ls [lane] [--project <tag>] [--json]                           # board overview / one lane (children indented; ▲▼ priority, ⊘ blocked)
 kanban next [--project <tag>] [--json]                           # what's next: lane priority, then card priority, then oldest; skips blocked (prints count)
 kanban search <query…> [--project <tag>] [--json]                     # ranked matches: titles, checklist lines, notes, plans
 kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers
@@ -151,7 +151,7 @@ kanban help | version                                                 # CLI help
   (repeatable; on `edit` it **replaces** the set, `--clear-blocked-by` empties
   it). Blocking is soft: a card is blocked while any blocker sits outside Done
   or Archive; finishing the blocker unblocks it (the edge stays, for history).
-  Self-edges and cycles are refused. Blocked cards print ⛔ in `ls`/`show` and
+  Self-edges and cycles are refused. Blocked cards print ⊘ in `ls`/`show` and
   dim in the web UI; `mv` into Plan/Implement warns but never refuses;
   `next` skips them and prints how many. Edges map dependencies — they don't
   gate moves or auto-finish anything.

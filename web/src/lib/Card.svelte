@@ -91,7 +91,7 @@
       <span class="chip prio-low">▼ low</span>
     {/if}
     {#if board.isBlocked(task.id)}
-      <span class="chip blocked">⛔ blocked</span>
+      <span class="chip blocked">⊘ blocked</span>
     {/if}
     {#if task.project}<span class="chip">{task.project}</span>{/if}
     {#if board.activity[task.id]}

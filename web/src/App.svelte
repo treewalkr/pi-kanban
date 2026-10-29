@@ -105,7 +105,7 @@
         onclick={() => (board.blockedOnly = !board.blockedOnly)}
         title="filter blocked only"
       >
-        ⛔ blocked
+        ⊘ blocked
       </button>
     </div>
     <div class="meta">{board.activeCount} tasks</div>

@@ -542,10 +542,10 @@ test("triage: priority and blocked-by CLI flags, mv warning, ls glyphs, and show
   expect(mvPlan.code).toBe(0);
   expect(mvPlan.stdout).toContain(`⚠ blocked by: ${b1Json.id}, ${b2Json.id}`);
 
-  // ls glyphs: ▲ before title, ⛔ after title
+  // ls glyphs: ▲ before title, ⊘ after title
   const lsOut = await cli("ls", "plan", "--project", proj);
   expect(lsOut.code).toBe(0);
-  expect(lsOut.stdout).toContain("▲ urgent dependent ⛔");
+  expect(lsOut.stdout).toContain("▲ urgent dependent ⊘");
 
   // ls --json carries priority and blockedBy
   const lsJson = JSON.parse((await cli("ls", "plan", "--project", proj, "--json")).stdout) as Array<

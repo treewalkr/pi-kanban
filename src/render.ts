@@ -54,7 +54,7 @@ export function listLanes(db: KanbanDb, laneRef?: string, project?: string): str
         const titleWidth = Math.max(20, width - 10 - chip.length - depth * 4);
         const lead = depth === 0 ? "  " : `${"  ".repeat(depth)}└ `;
         const prio = t.priority === "high" ? `${c.red("▲")} ` : t.priority === "low" ? `${c.dim("▼")} ` : "";
-        const blocked = db.isBlocked(t.id) ? ` ${c.hex("#d29922", "⛔")}` : "";
+        const blocked = db.isBlocked(t.id) ? ` ${c.hex("#d29922", "⊘")}` : "";
         out.push(`${lead}${c.dim(t.id)}  ${prio}${truncate(t.title, titleWidth)}${blocked}${chip}`);
         for (const child of db.childrenOf(t.id)) {
           if (visible.has(child.id)) emit(child, depth + 1);
