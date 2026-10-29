@@ -88,6 +88,8 @@ export interface Board {
   plans: Record<string, Attachment>;
   /** Plan-lane cards waiting on the human, keyed by task id (sparse — absent key = not waiting). */
   waiting: Record<string, WaitingState>;
+  /** Sparse card-id → direct blocker ids. */
+  blockedBy: Record<string, string[]>;
 }
 
 export interface TaskPatch {
@@ -97,6 +99,7 @@ export interface TaskPatch {
   lane?: string; // lane ref: id, id prefix, name prefix, or 1-based ordinal
   parent?: string | null; // task ref to attach under; null detaches
   priority?: Priority;
+  blockedBy?: string[];
   index?: number; // 0-based position within the target lane; omit to append
 }
 
@@ -508,7 +511,13 @@ export class KanbanDb {
     const tasks = this.tasks().sort(
       (a, b) => (laneOrder.get(a.laneId) ?? 0) - (laneOrder.get(b.laneId) ?? 0) || a.position - b.position,
     );
-    return { lanes: this.lanes(), tasks, plans: this.latestPlans(), waiting: this.waitingStates() };
+    return {
+      lanes: this.lanes(),
+      tasks,
+      plans: this.latestPlans(),
+      waiting: this.waitingStates(),
+      blockedBy: this.blockedByMap(),
+    };
   }
 
   laneTasks(laneId: string): Task[] {
@@ -572,6 +581,7 @@ export class KanbanDb {
     project?: string;
     parent?: string | null;
     priority?: string;
+    blockedBy?: string[];
     index?: number;
   }): Task {
     const title = input.title.trim();
@@ -588,12 +598,18 @@ export class KanbanDb {
     for (let attempt = 0; attempt < 5; attempt++) {
       const id = newId();
       try {
-        this.q(
-          "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ).run(id, title, input.note ?? "", lane.id, input.project ?? "", parent?.id ?? null, priority, position, now, now);
+        this.db.transaction(() => {
+          this.q(
+            "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          ).run(id, title, input.note ?? "", lane.id, input.project ?? "", parent?.id ?? null, priority, position, now, now);
+          if (input.blockedBy !== undefined) {
+            this.setBlockedBy(id, input.blockedBy);
+          }
+        })();
         this.renormalizeIfTight(lane.id);
         return this.resolveTask(id);
       } catch (err) {
+        if (err instanceof KanbanError) throw err;
         if (!(err instanceof Error && err.message.includes("UNIQUE"))) throw err;
       }
     }
@@ -632,6 +648,9 @@ export class KanbanDb {
       task.id,
     );
     this.renormalizeIfTight(laneId);
+    if (patch.blockedBy !== undefined) {
+      this.setBlockedBy(task.id, patch.blockedBy);
+    }
     return this.resolveTask(task.id);
   }
 

@@ -2,8 +2,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KanbanDb, KanbanError, PRIORITIES, UNBLOCKED_LANES } from "../src/db";
+import { KanbanDb, KanbanError, PRIORITIES, UNBLOCKED_LANES, type Board, type Task } from "../src/db";
 import { Database } from "bun:sqlite";
+import { createApp } from "../src/app";
 
 let dir = "";
 let db: KanbanDb;
@@ -295,4 +296,104 @@ test("nextTask: skips blocked and counts", () => {
   const resAlpha = db.nextTask("alpha");
   expect(resAlpha.task?.id).toBe(pA.id);
   expect(resAlpha.blocked).toBe(0);
+});
+
+test("PATCH priority + blockedBy; board payload carries blockedBy", async () => {
+  const app = createApp(db);
+
+  // 1. Initial GET /board includes empty blockedBy map
+  const boardRes1 = await app.handle(new Request("http://localhost/board"));
+  expect(boardRes1.status).toBe(200);
+  const board1 = (await boardRes1.json()) as Board;
+  expect(board1.blockedBy).toEqual({});
+
+  // 2. Create tasks
+  const blocker = db.createTask({ title: "blocker card" });
+  const dependent = db.createTask({ title: "dependent card" });
+
+  // 3. POST /tasks with priority and blockedBy
+  const createRes = await app.handle(
+    new Request("http://localhost/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "new card with prio and edge",
+        priority: "high",
+        blockedBy: [blocker.id],
+      }),
+    }),
+  );
+  expect(createRes.status).toBe(201);
+  const created = (await createRes.json()) as Task;
+  expect(created.priority).toBe("high");
+  expect(db.blockers(created.id).map((t) => t.id)).toEqual([blocker.id]);
+
+  // 4. PATCH priority and blockedBy
+  const patchRes = await app.handle(
+    new Request(`http://localhost/tasks/${dependent.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        priority: "low",
+        blockedBy: [blocker.id],
+      }),
+    }),
+  );
+  expect(patchRes.status).toBe(200);
+  const patched = (await patchRes.json()) as Task;
+  expect(patched.priority).toBe("low");
+  expect(db.blockers(dependent.id).map((t) => t.id)).toEqual([blocker.id]);
+
+  // 5. GET /board carries blockedBy map
+  const boardRes2 = await app.handle(new Request("http://localhost/board"));
+  expect(boardRes2.status).toBe(200);
+  const board2 = (await boardRes2.json()) as Board;
+  expect(board2.blockedBy).toEqual({
+    [created.id]: [blocker.id],
+    [dependent.id]: [blocker.id],
+  });
+
+  // 6. Unknown ref -> 404
+  const unknownRes = await app.handle(
+    new Request(`http://localhost/tasks/${dependent.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        blockedBy: ["non-existent-id"],
+      }),
+    }),
+  );
+  expect(unknownRes.status).toBe(404);
+  const unknownBody = (await unknownRes.json()) as { error: string; code: string };
+  expect(unknownBody.code).toBe("not-found");
+
+  // 7. Cycle -> 409
+  // Blocker card cannot be blocked by dependent (dependent is blocked by blocker)
+  const cycleRes = await app.handle(
+    new Request(`http://localhost/tasks/${blocker.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        blockedBy: [dependent.id],
+      }),
+    }),
+  );
+  expect(cycleRes.status).toBe(409);
+  const cycleBody = (await cycleRes.json()) as { error: string; code: string };
+  expect(cycleBody.code).toBe("conflict");
+  expect(cycleBody.error).toContain("cycle");
+
+  // 8. Self-edge -> 409
+  const selfRes = await app.handle(
+    new Request(`http://localhost/tasks/${blocker.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        blockedBy: [blocker.id],
+      }),
+    }),
+  );
+  expect(selfRes.status).toBe(409);
+  const selfBody = (await selfRes.json()) as { error: string; code: string };
+  expect(selfBody.code).toBe("conflict");
 });
