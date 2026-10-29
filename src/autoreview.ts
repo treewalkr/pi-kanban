@@ -296,8 +296,9 @@ export function reviewerPrompt(task: Task): string {
 5. Prove every finding: each --finding must include the failing repro (command + observed output) or quote the exact code path that breaks. A concern you cannot verify is NOT a finding — post it as a comment instead: kanban comment ${task.id} "<concern>" --author pi-reviewer.
 
 Then record exactly one verdict (never move the card with mv):
-- Pass: kanban review ${task.id} --approve --message "<1-3 sentence summary>" --author pi-reviewer
-- Fail: kanban review ${task.id} --block --message "<summary>" --finding "<file:line — issue>" [--finding "<…>" …] --author pi-reviewer
+- Pass: kanban review ${task.id} --approve --message "<1-3 sentence summary; list any [minor]/[nit] observations at the end>" --author pi-reviewer
+- Fail (only when at least one finding is [blocker]): kanban review ${task.id} --block --message "<summary>" --finding "[blocker] <file:line — issue>" [--finding "<…>" …] --author pi-reviewer
+Severity: [blocker] must fix before done; [minor] should fix; [nit] style or preference. A review with only [minor]/[nit] findings is a Pass.
 
 If you cannot locate the work in this repo, do NOT block — post kanban comment ${task.id} "could not locate the work in this repo — needs manual review" --author pi-reviewer, and stop.
 Your last line: a one-sentence verdict.`;

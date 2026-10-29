@@ -456,6 +456,17 @@ describe("auto-review", () => {
     expect(prompt).toContain("--finding");
   });
 
+  test("reviewer prompt teaches severity tiers", () => {
+    const task = { id: "abc12", title: "t", laneId: "review" } as never;
+    const prompt = reviewerPrompt(task);
+    expect(prompt).toContain("Fail (only when at least one finding is [blocker])");
+    expect(prompt).toContain('list any [minor]/[nit] observations at the end');
+    expect(prompt).toContain(
+      "[blocker] must fix before done; [minor] should fix; [nit] style or preference. A review with only [minor]/[nit] findings is a Pass."
+    );
+    expect(prompt).toContain('finding "[blocker] <file:line — issue>"');
+  });
+
   test("reviewer prompt demands proof and routes unverifiable concerns to comments", () => {
     const task = { id: "abc12", title: "proof", laneId: "review" } as never;
     const prompt = reviewerPrompt(task);
