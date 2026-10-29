@@ -308,7 +308,7 @@ export function builderPlanPrompt(task: Task): string {
 4. Run the full test suite (e.g. bun test) — everything green before handoff.
 5. Hand off: kanban handoff ${task.id} review --message "<what you built · test status>" --author pi-builder
 
-Never move the card with mv and never run kanban approve/reject. If a plan step turns out wrong, stop and comment instead of improvising: kanban comment ${task.id} "<the problem>" --author pi-builder.
+Never move the card with mv and never run kanban approve/reject. If a plan step turns out wrong, stop and ask instead of improvising: kanban comment ${task.id} "<the problem + recommended default>" --kind question --author pi-builder.
 Your last line: one-sentence build summary.`;
 }
 
@@ -339,7 +339,7 @@ export function builderPrompt(task: Task): string {
 3. Rewrite the note with the findings checked off: kanban edit ${task.id} --note "<full updated note with '- [x]' lines>".
 4. Hand the card back: kanban handoff ${task.id} review --message "<what you fixed · test status>" --author pi-builder
 
-Never move the card with mv. If a finding looks wrong, say so in the handoff message instead of silently skipping it. A finding that cites no proof may be challenged: quote what you checked and why it still holds.`;
+Never move the card with mv. If a finding looks wrong, say so in the handoff message instead of silently skipping it. A finding that cites no proof may be challenged: quote what you checked and why it still holds. If you cannot proceed without a human call, stop and ask: kanban comment ${task.id} "<the problem + recommended default>" --kind question --author pi-builder.`;
 }
 
 /** Max characters of a SKILL.md body injected into the system prompt (argv safety). */
@@ -986,7 +986,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         db.createComment(task.id, {
           author: BUILDER_AUTHOR,
           kind: "comment",
-          body: `${KanbanDb.SESSION_DIED_PREFIX}auto-builder ${reason} — findings unaddressed, needs a human.`,
+          body: `${KanbanDb.SESSION_DIED_PREFIX}auto-builder ${reason} — ${job.mode === "plan" ? "plan not built" : "findings unaddressed"}, needs a human. comment on this card to re-trigger.`,
         });
       }
     }

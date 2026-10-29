@@ -138,6 +138,13 @@ function cardInReview(w: KanbanDb, title = "ship it") {
   return card;
 }
 
+/** A card in the plan lane with a plan attached — one human action from the gate. */
+function cardInPlan(w: KanbanDb, title = "plan me") {
+  const card = w.createTask({ title, lane: "plan" });
+  w.attach(card.id, "plan", "# plan v1\nstep one");
+  return card;
+}
+
 describe("skillActivationPrompt", () => {
   test("wraps each SKILL.md body in pi's skill block (dir or file path, frontmatter stripped)", () => {
     const skillDir = makeSkill("demo", "# Rules\nBe terse.");
@@ -522,10 +529,23 @@ describe("auto-review", () => {
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(BUILDER_AUTHOR);
-    expect(last.body).toContain("failed");
+    expect(last.body.startsWith(KanbanDb.SESSION_DIED_PREFIX)).toBe(true);
+    expect(last.body).toContain("findings unaddressed, needs a human. comment on this card to re-trigger.");
     w.createTask({ title: "noise" });
     await sleep(150);
     expect(calls.length).toBe(2);
+
+    // Also test plan-mode builder crash
+    const planCard = cardInPlan(w);
+    await w.approveTask(planCard.id);
+    await sleep(200);
+    expect(calls.length).toBe(3);
+    expect(calls[2].job.mode).toBe("plan");
+    calls[2].finish({ code: 1 });
+    await sleep(20);
+    const lastPlan = db!.comments(planCard.id).at(-1)!;
+    expect(lastPlan.body.startsWith(KanbanDb.SESSION_DIED_PREFIX)).toBe(true);
+    expect(lastPlan.body).toContain("plan not built, needs a human. comment on this card to re-trigger.");
   });
 
   test("prompts embed the card id and the verdict commands", () => {
@@ -535,6 +555,10 @@ describe("auto-review", () => {
     expect(prompt).toContain("review abc12 --approve");
     expect(prompt).toContain("review abc12 --block");
     expect(prompt).toContain("--finding");
+
+    expect(builderPlanPrompt(task)).toContain("--kind question");
+    expect(builderPrompt(task)).toContain("--kind question");
+    expect(plannerPrompt(task)).toContain("--kind question");
   });
 
   test("reviewer prompt teaches severity tiers", () => {
@@ -1476,13 +1500,6 @@ describe("auto-review", () => {
 });
 
 describe("auto-plan", () => {
-  /** A card in the plan lane with a plan attached — one human action from the gate. */
-  function cardInPlan(w: KanbanDb, title = "plan me") {
-    const card = w.createTask({ title, lane: "plan" });
-    w.attach(card.id, "plan", "# plan v1\nstep one");
-    return card;
-  }
-
   test("planner spawns for a bare card in the plan lane; its own comment disarms it", async () => {
     const { dbFile, writer: w } = setup();
     const card = w.createTask({ title: "fresh idea", lane: "plan" });
@@ -1811,7 +1828,7 @@ describe("auto-plan", () => {
     expect(calls.length).toBe(0);
   });
 
-  test("planner question disarms; a human answer re-arms the planner", async () => {
+  test("planner question parks the card; the human reply returns it and re-arms the planner", async () => {
     const { dbFile, writer: w } = setup();
     const card = w.createTask({ title: "ambiguous idea", lane: "plan" });
     const { calls, spawnFn } = fakeSpawn();
@@ -1819,8 +1836,9 @@ describe("auto-plan", () => {
     expect(calls.length).toBe(1);
     expect(calls[0].job.prompt).toContain("--kind question");
 
-    // planner asks instead of attaching a plan → waiting on the human, no failure comment
-    await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "question", body: "Q1: SSE or polling? default: SSE" });
+    // planner asks via w.comment → parks in waiting
+    w.comment(card.id, { author: PLANNER_AUTHOR, kind: "question", body: "Q1: SSE or polling? default: SSE" });
+    expect(db!.resolveTask(card.id).laneId).toBe("waiting");
     calls[0].finish({ code: 0 });
     await sleep(20);
     w.createTask({ title: "noise" });
@@ -1828,11 +1846,81 @@ describe("auto-plan", () => {
     expect(calls.length).toBe(1);
     expect(db!.comments(card.id).at(-1)!.kind).toBe("question");
 
-    // the human answers → planner runs again
-    await w.createComment(card.id, { author: "user", body: "SSE" });
+    // the human answers via w.comment → returns to plan, planner runs again
+    w.comment(card.id, { author: "user", body: "SSE" });
+    expect(db!.resolveTask(card.id).laneId).toBe("plan");
     await sleep(200);
     expect(calls.length).toBe(2);
     expect(calls[1].job.role).toBe("planner");
+  });
+
+  test("builder question parks; human reply re-arms the builder in findings mode", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await w.handoff(card.id, "implement", {
+      kind: "review",
+      author: REVIEWER_AUTHOR,
+      message: "found issues",
+      findings: ["x"],
+    });
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("builder");
+    expect(calls[1].job.mode).toBe("findings");
+
+    // builder asks a question instead of fixing
+    w.comment(card.id, { author: BUILDER_AUTHOR, kind: "question", body: "which approach?" });
+    expect(db!.resolveTask(card.id).laneId).toBe("waiting");
+    calls[1].finish({ code: 0 });
+    await sleep(20);
+
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(2); // no spawns while parked
+
+    // human replies
+    w.comment(card.id, { author: "user", body: "use approach A" });
+    expect(db!.resolveTask(card.id).laneId).toBe("implement");
+    await sleep(200);
+
+    expect(calls.length).toBe(3);
+    expect(calls[2].job.role).toBe("builder");
+    expect(calls[2].job.mode).toBe("findings");
+    expect(calls[2].job.prompt).toContain("was blocked in review");
+  });
+
+  test("builder question in the plan flow; reply re-arms the builder in plan mode", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInPlan(w);
+    await w.approveTask(card.id);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("builder");
+    expect(calls[0].job.mode).toBe("plan");
+
+    // builder asks a question
+    w.comment(card.id, { author: BUILDER_AUTHOR, kind: "question", body: "should step 2 use postgres?" });
+    expect(db!.resolveTask(card.id).laneId).toBe("waiting");
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(1);
+
+    // human replies
+    w.comment(card.id, { author: "user", body: "no, sqlite" });
+    expect(db!.resolveTask(card.id).laneId).toBe("implement");
+    await sleep(200);
+
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("builder");
+    expect(calls[1].job.mode).toBe("plan");
+    expect(calls[1].job.prompt).toContain("had its plan approved");
   });
 
   test("planner crash posts a failure comment and does not hot-loop", async () => {
