@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { copyText } from "./copy";
+
   let { id }: { id: string } = $props();
 
   let copied = $state(false);
@@ -6,12 +8,11 @@
 
   async function copy(e: MouseEvent): Promise<void> {
     e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(id);
+    if (await copyText(id)) {
       copied = true;
       clearTimeout(timer);
       timer = setTimeout(() => (copied = false), 1200);
-    } catch {}
+    }
   }
 </script>
 
