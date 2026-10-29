@@ -1,6 +1,7 @@
 import { api } from "../api";
 import type { AgentConfig, AgentRole } from "../../../src/db";
 import type { CatalogModel } from "../../../src/models";
+import type { CatalogSkill } from "../../../src/skills";
 import { board } from "./board.svelte";
 
 type EdenError = { value?: unknown };
@@ -20,6 +21,8 @@ class AgentsStore {
   configs = $state<Record<AgentRole, AgentConfig>>(emptyConfigs());
   /** pi's catalog for the provider/model selects; empty → the panel falls back to text inputs. */
   models = $state<CatalogModel[]>([]);
+  /** pi's skill catalog for the Skills picker; empty → picker falls back to custom-path entry. */
+  skills = $state<CatalogSkill[]>([]);
   /** Board-level agent-loop pause: no process spawns (or re-spawns) sessions while set. */
   paused = $state(false);
 
@@ -29,7 +32,12 @@ class AgentsStore {
   }
 
   async load(): Promise<void> {
-    const [agents, models, pause] = await Promise.all([api.agents.get(), api["pi-models"].get(), api.agents.pause.get()]);
+    const [agents, models, pause, catalog] = await Promise.all([
+      api.agents.get(),
+      api["pi-models"].get(),
+      api.agents.pause.get(),
+      api["pi-skills"].get(),
+    ]);
     if (agents.error) this.fail(agents.error);
     else {
       this.configs = {
@@ -42,6 +50,7 @@ class AgentsStore {
     }
     if (!models.error) this.models = models.data.models;
     if (!pause.error) this.paused = pause.data.paused;
+    if (!catalog.error) this.skills = catalog.data.skills;
   }
 
   async setPaused(paused: boolean): Promise<void> {

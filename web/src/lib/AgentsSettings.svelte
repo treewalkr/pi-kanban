@@ -1,12 +1,13 @@
 <script lang="ts">
   import type { AgentConfig, AgentRole, AgentThinking } from "../../../src/db";
   import { agents } from "./agents.svelte";
+  import SkillPicker from "./SkillPicker.svelte";
 
   interface AgentForm {
     provider: string;
     model: string;
     thinking: string;
-    skills: string;
+    skills: string[];
     context: string;
     tools: string;
     extraArgs: string;
@@ -17,7 +18,7 @@
     provider: cfg.provider ?? "",
     model: cfg.model ?? "",
     thinking: cfg.thinking ?? "",
-    skills: (cfg.skills ?? []).join("\n"),
+    skills: (cfg.skills ?? []).slice(),
     context: cfg.context ?? "",
     tools: cfg.tools ?? "",
     extraArgs: (cfg.extraArgs ?? []).join("\n"),
@@ -28,7 +29,7 @@
     provider: f.provider,
     model: f.model,
     thinking: f.thinking as AgentThinking, // the select only offers valid levels
-    skills: f.skills.split("\n").map((s) => s.trim()).filter(Boolean),
+    skills: f.skills.slice(),
     context: f.context,
     tools: f.tools,
     extraArgs: f.extraArgs.split("\n").map((s) => s.trim()).filter(Boolean),
@@ -192,12 +193,9 @@
 
   <section class="settings-general-section">
     <h3 class="settings-general-heading">Skills</h3>
-    <p class="settings-general-description">One path per line — each skill's SKILL.md is injected into the session's system prompt at spawn (and still passed as --skill).</p>
+    <p class="settings-general-description">Search pi's skill catalog (~/.pi/agent/skills) and toggle skills on — each skill's SKILL.md is injected into the session's system prompt at spawn (and still passed as --skill). Type any path to add one outside the catalog.</p>
     <div class="settings-form">
-      <label>
-        skills
-        <textarea bind:value={form.skills} rows="2" placeholder={"~/.pi/agent/skills/scrutinize"}></textarea>
-      </label>
+      <SkillPicker selected={form.skills} onchange={(paths) => (form.skills = paths)} />
     </div>
   </section>
 
