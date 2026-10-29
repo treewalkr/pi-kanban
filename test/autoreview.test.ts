@@ -480,6 +480,15 @@ describe("auto-review", () => {
     expect(builderPrompt(task)).toContain("A finding that cites no proof may be challenged");
   });
 
+  test("builder prompt ranks findings by severity", () => {
+    const task = { id: "abc12", title: "t", laneId: "implement" } as never;
+    const prompt = builderPrompt(task);
+    expect(prompt).toContain("Fix every [blocker] finding; fix [minor]s when cheap");
+    expect(prompt).toContain(
+      "[nit]s may be deferred with a one-line note in the handoff message."
+    );
+  });
+
   test("agentFlags: reviewer defaults to thinking max, builder to nothing", () => {
     withAgentEnv({}, () => {
       expect(agentFlags("reviewer", null)).toEqual(["--thinking", "max"]);

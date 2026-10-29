@@ -308,7 +308,7 @@ export function builderPrompt(task: Task): string {
   return `You are pi-builder. Kanban card ${task.id} "${task.title}" was blocked in review; its note now carries "- [ ]" findings from pi-reviewer.
 
 1. Run: kanban brief ${task.id} — note (with the findings checklist), latest plan, full thread.
-2. Fix every finding in this repo; run the tests.
+2. Fix every [blocker] finding; fix [minor]s when cheap; [nit]s may be deferred with a one-line note in the handoff message. Run the tests.
 3. Rewrite the note with the findings checked off: kanban edit ${task.id} --note "<full updated note with '- [x]' lines>".
 4. Hand the card back: kanban handoff ${task.id} review --message "<what you fixed · test status>" --author pi-builder
 
