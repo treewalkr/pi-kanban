@@ -15,6 +15,7 @@ describe("pools store", () => {
     pools.pools = [];
     pools.loaded = false;
     pools.models = [];
+    pools.settings = { maxWorkers: 12 };
     board.error = "";
 
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -43,6 +44,7 @@ describe("pools store", () => {
                 updatedAt: 123,
               },
             ],
+            settings: { maxWorkers: 12 },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -66,17 +68,26 @@ describe("pools store", () => {
       }
 
       if (method === "PUT") {
+        if (url.endsWith("/pools/settings")) {
+          const bodyObj = body as { maxWorkers?: number };
+          return new Response(
+            JSON.stringify({ maxWorkers: bodyObj?.maxWorkers ?? 12 }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
         const id = url.split("/").pop();
         const pool = body as Partial<WorkerPool>;
+        const res: Record<string, any> = {
+          id,
+          name: pool.name ?? "",
+          enabled: pool.enabled ?? false,
+          roles: pool.roles ?? [],
+          slots: pool.slots ?? [{}],
+          updatedAt: Date.now(),
+        };
+        if (pool.maxWorkers !== undefined) res.maxWorkers = pool.maxWorkers;
         return new Response(
-          JSON.stringify({
-            id,
-            name: pool.name ?? "",
-            enabled: pool.enabled ?? false,
-            roles: pool.roles ?? [],
-            slots: pool.slots ?? [{}],
-            updatedAt: Date.now(),
-          }),
+          JSON.stringify(res),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
@@ -303,5 +314,105 @@ describe("pools store", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].method).toBe("DELETE");
     expect(calls[0].url.endsWith(`/pools/${draftId}`)).toBe(true);
+  });
+
+  test("load() reads settings from GET /pools, defaulting to 12 when absent", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+
+      if (url.endsWith("/pools") && method === "GET") {
+        return new Response(
+          JSON.stringify({
+            pools: [],
+            settings: { maxWorkers: 7 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ models: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await pools.load();
+    expect(pools.settings).toEqual({ maxWorkers: 7 });
+
+    // stub without settings -> { maxWorkers: 12 }
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+
+      if (url.endsWith("/pools") && method === "GET") {
+        return new Response(
+          JSON.stringify({ pools: [] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ models: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await pools.load();
+    expect(pools.settings).toEqual({ maxWorkers: 12 });
+  });
+
+  test("saveSettings() PUTs /pools/settings and updates the store", async () => {
+    pools.settings.maxWorkers = 3;
+    const ok = await pools.saveSettings();
+
+    expect(ok).toBe(true);
+    const putCall = calls.find((c) => c.method === "PUT" && c.url.endsWith("/pools/settings"));
+    expect(putCall).toBeDefined();
+    expect(putCall?.body).toEqual({ maxWorkers: 3 });
+    expect(pools.settings).toEqual({ maxWorkers: 3 });
+
+    // Error response -> board.error set, returns false
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      return new Response(JSON.stringify({ error: "bad value" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const failed = await pools.saveSettings();
+    expect(failed).toBe(false);
+    expect(board.error).toBe("bad value");
+  });
+
+  test("save(pool) sends maxWorkers when set and omits it when undefined", async () => {
+    const poolWithCap: WorkerPool = {
+      id: "p-capped",
+      name: "capped",
+      enabled: true,
+      roles: ["builder"],
+      slots: [{}],
+      maxWorkers: 2,
+      updatedAt: 1,
+    };
+    await pools.save(poolWithCap);
+    const cappedCall = calls.find((c) => c.method === "PUT" && c.url.endsWith("/pools/p-capped"));
+    expect(cappedCall).toBeDefined();
+    expect((cappedCall?.body as any).maxWorkers).toBe(2);
+
+    calls = [];
+    const poolWithoutCap: WorkerPool = {
+      id: "p-uncapped",
+      name: "uncapped",
+      enabled: true,
+      roles: ["builder"],
+      slots: [{}],
+      maxWorkers: undefined,
+      updatedAt: 1,
+    };
+    await pools.save(poolWithoutCap);
+    const uncappedCall = calls.find((c) => c.method === "PUT" && c.url.endsWith("/pools/p-uncapped"));
+    expect(uncappedCall).toBeDefined();
+    expect("maxWorkers" in (uncappedCall?.body as any)).toBe(false);
   });
 });

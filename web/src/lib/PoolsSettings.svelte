@@ -4,6 +4,7 @@
   import ConfirmDialog from "./ConfirmDialog.svelte";
 
   let saving = $state<Record<string, boolean>>({});
+  let savingSettings = $state(false);
   let poolToDelete = $state<WorkerPool | null>(null);
 
   let providers = $derived([...new Set(pools.models.map((m) => m.provider))].sort());
@@ -40,6 +41,19 @@
   function removeSlot(pool: WorkerPool, index: number): void {
     if (pool.slots.length > 1) {
       pool.slots = pool.slots.filter((_, i) => i !== index);
+      if (pool.maxWorkers !== undefined) {
+        pool.maxWorkers = Math.min(pool.maxWorkers, pool.slots.length);
+      }
+    }
+  }
+
+  async function saveSettings(): Promise<void> {
+    if (savingSettings) return;
+    savingSettings = true;
+    try {
+      await pools.saveSettings();
+    } finally {
+      savingSettings = false;
     }
   }
 
@@ -67,6 +81,21 @@
     <p class="settings-general-description">
       Named pools of parallel execution slots for auto-review. Each pool serves specified roles. Unset slot fields inherit from the role's agent config.
     </p>
+
+    <div class="global-cap-row settings-form">
+      <label>
+        Max workers (global)
+        <input type="number" min="1" max="20" bind:value={pools.settings.maxWorkers} />
+      </label>
+      <button
+        type="button"
+        class="primary"
+        disabled={savingSettings}
+        onclick={saveSettings}
+      >
+        {savingSettings ? "saving…" : "save"}
+      </button>
+    </div>
 
     {#if pools.pools.length === 0}
       <p class="settings-general-description">
@@ -160,14 +189,31 @@
         <div class="slots-group">
           <div class="slots-header">
             <span class="field-label">slots ({pool.slots.length} of 8)</span>
-            <button
-              type="button"
-              class="ghost"
-              disabled={pool.slots.length >= 8}
-              onclick={() => addSlot(pool)}
-            >
-              + add slot
-            </button>
+            <div class="slots-header-actions">
+              <label class="pool-max-workers-label">
+                max workers
+                <input
+                  type="number"
+                  min="1"
+                  max={pool.slots.length}
+                  value={pool.maxWorkers ?? pool.slots.length}
+                  onchange={(e) => {
+                    const v = parseInt((e.currentTarget as HTMLInputElement).value, 10);
+                    if (!isNaN(v)) {
+                      pool.maxWorkers = v < pool.slots.length ? v : undefined;
+                    }
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                class="ghost"
+                disabled={pool.slots.length >= 8}
+                onclick={() => addSlot(pool)}
+              >
+                + add slot
+              </button>
+            </div>
           </div>
 
           {#each pool.slots as slot, sIndex (sIndex)}
@@ -371,5 +417,34 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 8px;
+  }
+  .slots-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .pool-max-workers-label {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .pool-max-workers-label input {
+    width: 60px;
+    padding: 3px 6px;
+  }
+  .global-cap-row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .global-cap-row label {
+    width: 150px;
   }
 </style>

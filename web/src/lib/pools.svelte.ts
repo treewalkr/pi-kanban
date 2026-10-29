@@ -20,6 +20,7 @@ class PoolsStore {
   loaded = $state(false);
   pools = $state<WorkerPool[]>([]);
   models = $state<CatalogModel[]>([]);
+  settings = $state<{ maxWorkers: number }>({ maxWorkers: 12 });
   private drafts = new Set<string>();
 
   private fail(error: EdenError): void {
@@ -45,6 +46,7 @@ class PoolsStore {
     if (poolsRes.error) this.fail(poolsRes.error);
     else {
       this.pools = poolsRes.data.pools ?? [];
+      this.settings = poolsRes.data.settings ?? { maxWorkers: 12 };
       this.drafts.clear();
       this.loaded = true;
     }
@@ -57,6 +59,7 @@ class PoolsStore {
       enabled: pool.enabled,
       roles: pool.roles,
       slots: pool.slots,
+      maxWorkers: pool.maxWorkers,
     });
     if (error) {
       this.fail(error);
@@ -69,6 +72,19 @@ class PoolsStore {
       this.pools.push(data as WorkerPool);
     }
     this.drafts.delete(pool.id);
+    return true;
+  }
+
+  async saveSettings(): Promise<boolean> {
+    const { data, error } = await api.pools.settings.put({
+      maxWorkers: this.settings.maxWorkers,
+    });
+    if (error) {
+      this.fail(error);
+      return false;
+    }
+    const res = data as { maxWorkers: number };
+    this.settings = { maxWorkers: res.maxWorkers };
     return true;
   }
 
