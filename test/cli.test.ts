@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Task } from "../src/db";
@@ -726,4 +726,89 @@ test("no done warning for childless cards or children in done/archive", async ()
   const pShow = JSON.parse((await cli("show", parent.id, "--json")).stdout) as Task;
   expect(pShow.laneId).toBe("done");
 });
+
+test("kanban check reports seeded violations and exits 0", async () => {
+  const violDb = join(dir, "check-viol.db");
+  const run = (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: violDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code }));
+  };
+
+  // 1. (a) done parent with active child
+  const p1 = JSON.parse((await run("add", "parent-1", "--lane", "done", "--json")).stdout) as Task;
+  const c1 = JSON.parse((await run("add", "child-1", "--parent", p1.id, "--lane", "backlog", "--json")).stdout) as Task;
+
+  // 2. (b) child behind parent (parent in implement with plan, child in backlog)
+  const p2 = JSON.parse((await run("add", "parent-2", "--lane", "implement", "--json")).stdout) as Task;
+  const planPath = join(dir, "p2-plan.md");
+  writeFileSync(planPath, "# Plan for p2");
+  await run("attach", p2.id, planPath);
+  const c2 = JSON.parse((await run("add", "child-2", "--parent", p2.id, "--lane", "backlog", "--json")).stdout) as Task;
+
+  // 3. (c) card in implement with no attached plan
+  const card3 = JSON.parse((await run("add", "card-3", "--lane", "implement", "--json")).stdout) as Task;
+
+  const res = await run("check");
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain(`⚠ ${p1.id} done with active children: ${c1.id}`);
+  expect(res.stdout).toContain(`⚠ ${c2.id} in backlog behind parent ${p2.id} (implement)`);
+  expect(res.stdout).toContain(`⚠ ${card3.id} in implement with no attached plan`);
+
+  const jsonRes = await run("check", "--json");
+  expect(jsonRes.code).toBe(0);
+  expect(JSON.parse(jsonRes.stdout)).toEqual([
+    {
+      kind: "done-parent-active-children",
+      cardId: p1.id,
+      childIds: [c1.id],
+    },
+    {
+      kind: "child-behind-parent",
+      cardId: c2.id,
+      parentId: p2.id,
+      cardLaneId: "backlog",
+      parentLaneId: "implement",
+    },
+    {
+      kind: "missing-plan",
+      cardId: card3.id,
+      laneId: "implement",
+    },
+  ]);
+});
+
+test("kanban check on a clean board prints nothing and exits 0", async () => {
+  const cleanDb = join(dir, "check-clean.db");
+  const run = (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: cleanDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code }));
+  };
+
+  const res = await run("check");
+  expect(res.code).toBe(0);
+  expect(res.stdout).toBe("");
+
+  const jsonRes = await run("check", "--json");
+  expect(jsonRes.code).toBe(0);
+  expect(JSON.parse(jsonRes.stdout)).toEqual([]);
+});
+
 

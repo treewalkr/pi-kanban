@@ -32,6 +32,7 @@ usage:
                           [--clear-note] [--clear-parent] [--clear-blocked-by]
   kanban done <id>
   kanban archive <id>                        (undo: mv <id> <lane>)
+  kanban check [--json]                     (board-health lint: done parents w/ active children, children behind parent, planless build cards; advisory, exit 0)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
   kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force]
   kanban serve [--port <n>] [--open] [--auto-review]
@@ -502,6 +503,26 @@ async function main(): Promise<number> {
         const moved = db.moveTask(task.id, laneById(db, "archive"));
         if (json) jsonOut(moved);
         else console.log(taskLine(db, moved));
+        return 0;
+      }
+
+      case "check": {
+        const violations = db.boardViolations();
+        if (json) {
+          jsonOut(violations);
+          return 0;
+        }
+        for (const v of violations) {
+          let line = "";
+          if (v.kind === "done-parent-active-children") {
+            line = `⚠ ${v.cardId} done with active children: ${v.childIds.join(", ")}`;
+          } else if (v.kind === "child-behind-parent") {
+            line = `⚠ ${v.cardId} in ${v.cardLaneId} behind parent ${v.parentId} (${v.parentLaneId})`;
+          } else if (v.kind === "missing-plan") {
+            line = `⚠ ${v.cardId} in ${v.laneId} with no attached plan`;
+          }
+          console.log(c.hex("#d29922", line));
+        }
         return 0;
       }
 
