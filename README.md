@@ -57,6 +57,14 @@ kanban edit <id> --parent <id> · --clear-parent
 kanban show <id> · done <id> · archive <id> · edit <id> …
 kanban rm <id> --force         # deleting a parent cascades its subtree
 kanban lane ls | add | rename | rm
+kanban attach <id> <plan-file> # versioned plan attach — re-attaching versions it
+kanban comment <id> <text…> · comments <id>   # card thread (--kind comment|review|handoff|question)
+kanban handoff <id> <lane> --message <text>    # atomic move + thread record
+kanban brief <id>              # pickup context: note, plan, thread
+kanban review <id> (--approve | --block --message <text>) · plan-review <id> (--pass | --block …)
+kanban check [--json]          # board-health lint: done parents w/ active children, children behind
+                               # parent, planless build cards (advisory — exit 0)
+kanban stop [--port <n>]       # graceful server stop (drains in-flight agent sessions)
 ```
 
 Task ids accept any unique prefix; lanes accept slug, prefix, name, or ordinal.
@@ -97,7 +105,7 @@ re-acquiring the lease, clearing the dead badge, and streaming into the live act
 earlier reasoning and tokens instead of starting from scratch. Commenting on the card remains a fresh
 re-run. If the session file in `~/.pi` is missing, resume safely falls back to a fresh session under the same ID.
 
-Configure agents in the web UI (⚙ in the topbar) — settings apply to the next session
+Configure agents in the web UI (≡ in the topbar) — settings apply to the next session
 without restarting serve:
 
 | field | becomes | notes |
@@ -111,7 +119,8 @@ without restarting serve:
 | timeout | total run cap — silent sessions are killed earlier by the stall watchdog | 1 min–24 h, default 2 h |
 
 Env overrides win over the stored config: `KANBAN_AUTOREVIEW_MODEL`, `KANBAN_AUTOREVIEW_THINKING`
-(set to `""` to disable thinking entirely). Session parallelism lives in the Pools settings tab:
+(set to `""` to disable thinking entirely), `KANBAN_AUTOREVIEW_TIMEOUT_MS` (total run cap),
+`KANBAN_AUTOREVIEW_STALL_MS` (silent-session kill). Session parallelism lives in the Pools settings tab:
 a global max-workers cap plus an optional per-pool cap. Reviewer/builder sessions run in the serve process's
 directory and use the card's plan path and thread to locate the work.
 
@@ -128,8 +137,11 @@ directory and use the card's plan path and thread to locate the work.
 ## Layout
 
 ```
-src/    db.ts (sqlite + queries) · app.ts (elysia, type App) · index.ts (server)
-        cli.ts + render.ts (kanban CLI)
+src/    db.ts (sqlite + queries) · app.ts (elysia, type App) · index.ts (server entry)
+        cli.ts + render.ts (kanban CLI) · search.ts (ranked search) · ids.ts (id gen)
+        autoreview.ts (auto agents: elaborator/planner/reviewer/builder) · thread.ts (card threads)
+        restart.ts + shutdown.ts + dev-reload.ts (restart button & graceful drain)
+        skills.ts + models.ts (pi catalog feeds for the agents panel)
 web/    Svelte 5 SPA: board with nested subtask cards, drag & drop, card detail
         view, editor, filters
 skills/pi-kanban/SKILL.md   pi skill (source of truth)
