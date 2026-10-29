@@ -564,7 +564,6 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const stallMs = opts.stallMs ?? DEFAULT_STALL_MS;
   const maxBlocks = opts.maxBlocks ?? DEFAULT_MAX_BLOCKS;
   const maxPlanBlocks = opts.maxPlanBlocks ?? DEFAULT_MAX_PLAN_BLOCKS;
-  const maxParallel = Math.min(8, Math.max(1, parseInt(process.env.KANBAN_AUTOREVIEW_MAX_PARALLEL ?? "", 10) || 1));
 
   const queue: Array<AgentJob & { enqueuedAt: number }> = [];
   const inFlight = new Set<string>();
@@ -603,7 +602,8 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     const covering = pools.filter((p) => p.enabled && p.roles.includes(role));
     if (covering.length > 0) {
       for (const pool of covering) {
-        for (let i = 0; i < pool.slots.length; i++) {
+        const cap = pool.maxWorkers ?? pool.slots.length;
+        for (let i = 0; i < cap; i++) {
           const key = `${pool.id}:${i}`;
           if (!busySlots.has(key)) {
             return { key, slot: pool.slots[i], pool, slotIndex: i };
@@ -612,11 +612,9 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       }
       return null;
     }
-    for (let i = 0; i < maxParallel; i++) {
-      const key = `::default:${i}`;
-      if (!busySlots.has(key)) {
-        return { key, slot: undefined, pool: undefined };
-      }
+    const key = "::default:0";
+    if (!busySlots.has(key)) {
+      return { key, slot: undefined, pool: undefined };
     }
     return null;
   }
@@ -913,6 +911,11 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         }
         if (db.leaseFor(job.task.id, LEASE_TTL_MS)) continue;
 
+        if (busySlots.size >= db.maxWorkers()) {
+          remaining.push(job);
+          continue;
+        }
+
         const allocated = freeSlotFor(job.role);
         if (!allocated) {
           remaining.push(job);
@@ -990,7 +993,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   }
 
   const stopWatch = db.watch(() => scan(), opts.watchIntervalMs ?? 300);
-  log(`enabled — agents run in ${opts.cwd}, stall ${Math.round(stallMs / 60_000)} min / cap ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}${maxParallel > 1 ? `, up to ${maxParallel} parallel` : ""}`);
+  log(`enabled — agents run in ${opts.cwd}, stall ${Math.round(stallMs / 60_000)} min / cap ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}`);
   scan(); // cards already waiting get picked up right away
 
   return {

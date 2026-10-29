@@ -111,9 +111,8 @@ without restarting serve:
 | timeout | total run cap — silent sessions are killed earlier by the stall watchdog | 1 min–24 h, default 2 h |
 
 Env overrides win over the stored config: `KANBAN_AUTOREVIEW_MODEL`, `KANBAN_AUTOREVIEW_THINKING`
-(set to `""` to disable thinking entirely), `KANBAN_AUTOREVIEW_MAX_PARALLEL` (concurrent sessions,
-default 1, max 8), `KANBAN_AUTOREVIEW_TIMEOUT_MS` (total run cap), and `KANBAN_AUTOREVIEW_STALL_MS`
-(stall window). Reviewer/builder sessions run in the serve process's
+(set to `""` to disable thinking entirely). Session parallelism lives in the Pools settings tab:
+a global max-workers cap plus an optional per-pool cap. Reviewer/builder sessions run in the serve process's
 directory and use the card's plan path and thread to locate the work.
 
 ## Scripts
