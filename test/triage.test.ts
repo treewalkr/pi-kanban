@@ -196,3 +196,103 @@ test("priority: defaults, backfill, and validation", () => {
   expect(reopened.resolveTask("leg01").priority).toBe("normal");
   reopened.close();
 });
+
+test("nextTask: priority rank beats age, lane rank beats priority", () => {
+  // Within a lane: high-newer beats normal-older
+  const olderNormal = db.createTask({ title: "older normal", lane: "backlog", priority: "normal" });
+  const newerHigh = db.createTask({ title: "newer high", lane: "backlog", priority: "high" });
+
+  const raw = new Database(join(dir, "t.db"));
+  raw.run("UPDATE tasks SET created_at = 1000 WHERE id = ?", [olderNormal.id]);
+  raw.run("UPDATE tasks SET created_at = 2000 WHERE id = ?", [newerHigh.id]);
+  raw.close();
+
+  // high beats normal despite being created later
+  const res1 = db.nextTask();
+  expect(res1.task?.id).toBe(newerHigh.id);
+  expect(res1.blocked).toBe(0);
+
+  // normal beats low
+  const lowCard = db.createTask({ title: "low card", lane: "backlog", priority: "low" });
+  const raw2 = new Database(join(dir, "t.db"));
+  raw2.run("UPDATE tasks SET created_at = 500 WHERE id = ?", [lowCard.id]);
+  raw2.close();
+
+  db.moveTask(newerHigh.id, "done");
+  const res2 = db.nextTask();
+  expect(res2.task?.id).toBe(olderNormal.id);
+
+  db.moveTask(olderNormal.id, "done");
+  const res3 = db.nextTask();
+  expect(res3.task?.id).toBe(lowCard.id);
+
+  // Lane rank beats priority: low-priority review card beats high backlog card
+  const highBacklog = db.createTask({ title: "urgent backlog", lane: "backlog", priority: "high" });
+  const lowReview = db.createTask({ title: "low review", lane: "review", priority: "low" });
+
+  const res4 = db.nextTask();
+  expect(res4.task?.id).toBe(lowReview.id);
+});
+
+test("nextTask: skips blocked and counts", () => {
+  // Blocker card in backlog, dependent card in review
+  const blocker = db.createTask({ title: "blocker", lane: "backlog" });
+  const reviewCard = db.createTask({ title: "blocked review", lane: "review" });
+  db.setBlockedBy(reviewCard.id, [blocker.id]);
+
+  const impCard = db.createTask({ title: "eligible implement", lane: "implement" });
+
+  // Review lane is entirely blocked; next picks implement card and reports 0 blocked in implement
+  const res = db.nextTask();
+  expect(res.task?.id).toBe(impCard.id);
+  expect(res.blocked).toBe(0);
+
+  // Now add another card in implement, but blocked
+  const impBlocked = db.createTask({ title: "blocked imp", lane: "implement" });
+  db.setBlockedBy(impBlocked.id, [blocker.id]);
+
+  const resImp = db.nextTask();
+  expect(resImp.task?.id).toBe(impCard.id);
+  expect(resImp.blocked).toBe(1);
+
+  // Moving blocker to done unblocks dependents
+  db.moveTask(blocker.id, "done");
+  const resUnblocked = db.nextTask();
+  // Review lane card is now unblocked and wins because review > implement
+  expect(resUnblocked.task?.id).toBe(reviewCard.id);
+  expect(resUnblocked.blocked).toBe(0);
+
+  // Clean up
+  db.moveTask(reviewCard.id, "done");
+  db.moveTask(impCard.id, "done");
+  db.moveTask(impBlocked.id, "done");
+
+  // Nothing eligible anywhere -> task null + highest-priority lane's count
+  // Blocker lives in a custom lane (not in NEXT_LANE_PRIORITY, but not done/archive)
+  const extLane = db.createLane({ name: "External" });
+  const blocker2 = db.createTask({ title: "active blocker", lane: extLane.id });
+  const revBlocked1 = db.createTask({ title: "rev1", lane: "review" });
+  const revBlocked2 = db.createTask({ title: "rev2", lane: "review" });
+  db.setBlockedBy(revBlocked1.id, [blocker2.id]);
+  db.setBlockedBy(revBlocked2.id, [blocker2.id]);
+
+  // Review has 2 blocked cards, nothing eligible anywhere
+  const resNone = db.nextTask();
+  expect(resNone.task).toBeNull();
+  expect(resNone.blocked).toBe(2);
+
+  // Project filter respected
+  const pA = db.createTask({ title: "proj A", lane: "plan", project: "alpha" });
+  const pB = db.createTask({ title: "proj B", lane: "review", project: "beta" });
+  db.setBlockedBy(pB.id, [blocker2.id]);
+
+  // For project "beta", only review holds cards and it's blocked
+  const resBeta = db.nextTask("beta");
+  expect(resBeta.task).toBeNull();
+  expect(resBeta.blocked).toBe(1);
+
+  // For project "alpha", plan card is eligible
+  const resAlpha = db.nextTask("alpha");
+  expect(resAlpha.task?.id).toBe(pA.id);
+  expect(resAlpha.blocked).toBe(0);
+});

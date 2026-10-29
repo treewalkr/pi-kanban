@@ -226,10 +226,16 @@ async function main(): Promise<number> {
       }
 
       case "next": {
-        const task = db.nextTask(project);
-        if (json) jsonOut(task);
-        else if (task) console.log(taskLine(db, task));
-        else console.log(c.dim("nothing to pull forward"));
+        const { task, blocked } = db.nextTask(project);
+        if (json) {
+          jsonOut(task ? { ...task, blocked } : null);
+        } else if (task) {
+          const line = taskLine(db, task);
+          const warn = blocked > 0 ? `  ${c.hex("#d29922", `⚠ ${blocked} blocked card(s) skipped`)}` : "";
+          console.log(`${line}${warn}`);
+        } else {
+          console.log(c.dim("nothing to pull forward"));
+        }
         return 0;
       }
 

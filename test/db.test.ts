@@ -631,20 +631,20 @@ test("nextTask: lane priority review → implement → plan → backlog, oldest 
   const tReview = db.createTask({ title: "review card", lane: "review" });
 
   // With cards in all four lanes, returns review card even when backlog was created first
-  expect(db.nextTask()?.id).toBe(tReview.id);
+  expect(db.nextTask().task?.id).toBe(tReview.id);
 
   // After moving each winner to done, walks implement → plan → backlog → null
   db.moveTask(tReview.id, "done");
-  expect(db.nextTask()?.id).toBe(tImplement.id);
+  expect(db.nextTask().task?.id).toBe(tImplement.id);
 
   db.moveTask(tImplement.id, "done");
-  expect(db.nextTask()?.id).toBe(tPlan.id);
+  expect(db.nextTask().task?.id).toBe(tPlan.id);
 
   db.moveTask(tPlan.id, "done");
-  expect(db.nextTask()?.id).toBe(tBacklog.id);
+  expect(db.nextTask().task?.id).toBe(tBacklog.id);
 
   db.moveTask(tBacklog.id, "done");
-  expect(db.nextTask()).toBeNull();
+  expect(db.nextTask().task).toBeNull();
 
   // Within one lane, smaller created_at wins
   const a = db.createTask({ title: "a", lane: "backlog" });
@@ -653,7 +653,7 @@ test("nextTask: lane priority review → implement → plan → backlog, oldest 
   raw.run("UPDATE tasks SET created_at = 1000 WHERE id = ?", [b.id]);
   raw.run("UPDATE tasks SET created_at = 2000 WHERE id = ?", [a.id]);
   raw.close();
-  expect(db.nextTask()?.id).toBe(b.id);
+  expect(db.nextTask().task?.id).toBe(b.id);
 });
 
 test("nextTask: project filter; done, archive and custom lanes never proposed", () => {
@@ -661,23 +661,23 @@ test("nextTask: project filter; done, archive and custom lanes never proposed", 
   const backA = db.createTask({ title: "backlog a", lane: "backlog", project: "a" });
 
   // Project filter
-  expect(db.nextTask("a")?.id).toBe(backA.id);
-  expect(db.nextTask("b")?.id).toBe(revB.id);
-  expect(db.nextTask()?.id).toBe(revB.id);
+  expect(db.nextTask("a").task?.id).toBe(backA.id);
+  expect(db.nextTask("b").task?.id).toBe(revB.id);
+  expect(db.nextTask().task?.id).toBe(revB.id);
 
   // done/archive cards never win over any priority lane
   db.moveTask(revB.id, "done");
   db.moveTask(backA.id, "archive");
-  expect(db.nextTask()).toBeNull();
+  expect(db.nextTask().task).toBeNull();
 
   // Custom lane card is never returned
   const customLane = db.createLane({ name: "Parking Lot" });
   db.createTask({ title: "custom", lane: customLane.id });
-  expect(db.nextTask()).toBeNull();
+  expect(db.nextTask().task).toBeNull();
 
   // On a board whose review lane was removed, returns the implement card
   const imp = db.createTask({ title: "implement", lane: "implement" });
   db.deleteLane("review");
-  expect(db.nextTask()?.id).toBe(imp.id);
+  expect(db.nextTask().task?.id).toBe(imp.id);
 });
 

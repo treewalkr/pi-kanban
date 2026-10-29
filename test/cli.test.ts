@@ -418,10 +418,11 @@ test("next --json: Task object; null and exit 0 when nothing to pull forward", a
 
   const resJson = await cli("next", "--project", proj, "--json");
   expect(resJson.code).toBe(0);
-  const task = JSON.parse(resJson.stdout) as Task;
+  const task = JSON.parse(resJson.stdout) as Task & { blocked: number };
   expect(task.id).toBe(card.id);
   expect(task.laneId).toBe("review");
   expect(task.title).toBe("review task");
+  expect(task.blocked).toBe(0);
 
   const emptyProj = "next-e2e-empty";
   const emptyJson = await cli("next", "--project", emptyProj, "--json");

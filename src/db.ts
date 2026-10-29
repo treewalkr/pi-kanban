@@ -429,24 +429,78 @@ export class KanbanDb {
   }
 
   /**
-   * The skill's "what's next" card: first lane in NEXT_LANE_PRIORITY present on the
-   * board that holds a (project-matching) task; within it the smallest (created_at, id).
+   * The skill's "what's next" card: first lane in NEXT_LANE_PRIORITY holding an
+   * eligible (unblocked, project-matching) task; within it priority rank, then
+   * (created_at, id). `blocked` counts skipped blocked cards: in the lane the
+   * answer came from, or — when nothing is eligible anywhere — in the
+   * highest-priority lane that held any tasks (else 0).
    */
-  nextTask(project?: string): Task | null {
+  nextTask(project?: string): { task: Task | null; blocked: number } {
     const present = new Set(this.lanes().map((l) => l.id));
+    let firstLaneBlocked: number | null = null;
+
+    const ELIGIBILITY = `
+      id NOT IN (
+        SELECT b.card_id FROM blocked_by b
+        JOIN tasks blocker ON blocker.id = b.blocker_id
+        WHERE blocker.lane_id NOT IN ('done', 'archive')
+      )
+    `;
+
+    const INELIGIBILITY = `
+      id IN (
+        SELECT b.card_id FROM blocked_by b
+        JOIN tasks blocker ON blocker.id = b.blocker_id
+        WHERE blocker.lane_id NOT IN ('done', 'archive')
+      )
+    `;
+
+    const ORDER = `
+      ORDER BY
+        CASE priority WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+        created_at,
+        id
+    `;
+
     for (const laneId of NEXT_LANE_PRIORITY) {
       if (!present.has(laneId)) continue;
-      const row = (
+
+      const totalCount = (
         project !== undefined
-          ? this.q("SELECT * FROM tasks WHERE lane_id = ? AND project = ? ORDER BY created_at, id LIMIT 1").get(
+          ? this.q("SELECT COUNT(*) AS n FROM tasks WHERE lane_id = ? AND project = ?").get(laneId, project)
+          : this.q("SELECT COUNT(*) AS n FROM tasks WHERE lane_id = ?").get(laneId)
+      ) as { n: number };
+
+      if (totalCount.n === 0) continue;
+
+      const blockedCount = (
+        project !== undefined
+          ? this.q(`SELECT COUNT(*) AS n FROM tasks WHERE lane_id = ? AND project = ? AND ${INELIGIBILITY}`).get(
               laneId,
               project,
             )
-          : this.q("SELECT * FROM tasks WHERE lane_id = ? ORDER BY created_at, id LIMIT 1").get(laneId)
+          : this.q(`SELECT COUNT(*) AS n FROM tasks WHERE lane_id = ? AND ${INELIGIBILITY}`).get(laneId)
+      ) as { n: number };
+
+      const row = (
+        project !== undefined
+          ? this.q(`SELECT * FROM tasks WHERE lane_id = ? AND project = ? AND ${ELIGIBILITY} ${ORDER} LIMIT 1`).get(
+              laneId,
+              project,
+            )
+          : this.q(`SELECT * FROM tasks WHERE lane_id = ? AND ${ELIGIBILITY} ${ORDER} LIMIT 1`).get(laneId)
       ) as TaskRow | null;
-      if (row) return rowToTask(row);
+
+      if (row) {
+        return { task: rowToTask(row), blocked: blockedCount.n };
+      }
+
+      if (firstLaneBlocked === null) {
+        firstLaneBlocked = blockedCount.n;
+      }
     }
-    return null;
+
+    return { task: null, blocked: firstLaneBlocked ?? 0 };
   }
 
   board(): Board {
