@@ -77,7 +77,7 @@ export interface AutoReviewOptions {
   log?: (message: string) => void;
 }
 
-const DEFAULT_TIMEOUT_MS = 20 * 60_000;
+const DEFAULT_TIMEOUT_MS = 40 * 60_000;
 const DEFAULT_MAX_BLOCKS = 3;
 const DEFAULT_MAX_PLAN_BLOCKS = 2;
 const MAX_LOG_LINES = 150;
