@@ -433,7 +433,7 @@ export const createApp = (
           context: t.Optional(t.String()),
           tools: t.Optional(t.String()),
           extraArgs: t.Optional(t.Array(t.String({ minLength: 1 }))),
-          timeoutMs: t.Optional(t.Number({ minimum: 60_000, maximum: 3_600_000 })),
+          timeoutMs: t.Optional(t.Number({ minimum: 60_000, maximum: 86_400_000 })),
         }),
       },
     )

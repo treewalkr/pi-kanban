@@ -305,6 +305,15 @@ test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async (
     new Request("http://localhost/agents/reviewer", { method: "PUT", ...putBody({ timeoutMs: 5 }) }),
   );
   expect(shortTimeout.status).toBe(422);
+  const longTimeout = await app.handle(
+    new Request("http://localhost/agents/reviewer", { method: "PUT", ...putBody({ timeoutMs: 90_000_000 }) }),
+  );
+  expect(longTimeout.status).toBe(422);
+  const twoHourTimeout = await app.handle(
+    new Request("http://localhost/agents/reviewer", { method: "PUT", ...putBody({ timeoutMs: 7_200_000 }) }),
+  );
+  expect(twoHourTimeout.status).toBe(200);
+  expect(await twoHourTimeout.json()).toMatchObject({ timeoutMs: 7_200_000 });
 
   // PUT is a full replace: an empty body clears the stored config
   const cleared = await app.handle(
