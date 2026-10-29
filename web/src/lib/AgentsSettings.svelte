@@ -176,7 +176,7 @@
 
   <section class="settings-general-section">
     <h3 class="settings-general-heading">Thinking &amp; timeout</h3>
-    <p class="settings-general-description">Reasoning effort and the hard per-run time limit.</p>
+    <p class="settings-general-description">Reasoning effort and the total run cap. A session is killed when its output is silent for 10 min (stall) or at the cap — whichever comes first.</p>
     <div class="settings-form">
       <div class="row">
         <label>
@@ -194,7 +194,7 @@
         </label>
         <label>
           timeout · min
-          <input inputmode="numeric" bind:value={form.timeoutMin} placeholder="20" />
+          <input inputmode="numeric" bind:value={form.timeoutMin} placeholder="120" />
         </label>
       </div>
     </div>
