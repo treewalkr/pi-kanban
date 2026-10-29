@@ -396,6 +396,85 @@ test("childrenOf returns direct children in position order", () => {
   expect(db.childrenOf(other.id)).toHaveLength(0);
 });
 
+test("boardViolations reports all three kinds", () => {
+  // Healthy controls first:
+  // 1. childless done card
+  db.createTask({ title: "childless-done", lane: "done" });
+  // 2. done child under done parent
+  const doneParent = db.createTask({ title: "done-parent", lane: "done" });
+  db.createTask({ title: "done-child", parent: doneParent.id, lane: "done" });
+  // 3. implement card with plan
+  const plannedCard = db.createTask({ title: "planned-card", lane: "implement" });
+  db.attach(plannedCard.id, "plan", "plan text");
+  // 4. child ahead of parent (e.g. child in implement, parent in plan)
+  const planParent = db.createTask({ title: "plan-parent", lane: "plan" });
+  const aheadChild = db.createTask({ title: "ahead-child", parent: planParent.id, lane: "implement" });
+  db.attach(aheadChild.id, "plan", "plan text");
+  expect(db.boardViolations()).toEqual([]);
+
+  // Now seed the three violations:
+  // (a) done epic with backlog child
+  const epicA = db.createTask({ title: "epic-a", lane: "done" });
+  const childA = db.createTask({ title: "child-a", parent: epicA.id, lane: "backlog" });
+
+  // (b) implement parent (with plan) with backlog child
+  const parentB = db.createTask({ title: "parent-b", lane: "implement" });
+  db.attach(parentB.id, "plan", "plan for b");
+  const childB = db.createTask({ title: "child-b", parent: parentB.id, lane: "backlog" });
+
+  // (c) implement card without plan
+  const cardC = db.createTask({ title: "card-c", lane: "implement" });
+
+  const violations = db.boardViolations();
+  expect(violations).toEqual([
+    {
+      kind: "done-parent-active-children",
+      cardId: epicA.id,
+      childIds: [childA.id],
+    },
+    {
+      kind: "child-behind-parent",
+      cardId: childB.id,
+      parentId: parentB.id,
+      cardLaneId: "backlog",
+      parentLaneId: "implement",
+    },
+    {
+      kind: "missing-plan",
+      cardId: cardC.id,
+      laneId: "implement",
+    },
+  ]);
+});
+
+test("boardViolations on a clean board is empty; activeChildren excludes done/archive", () => {
+  const parent = db.createTask({ title: "parent", lane: "backlog" });
+  const childBacklog = db.createTask({ title: "child-backlog", parent: parent.id, lane: "backlog" });
+  const childDone = db.createTask({ title: "child-done", parent: parent.id, lane: "done" });
+  const childArchive = db.createTask({ title: "child-archive", parent: parent.id, lane: "archive" });
+
+  expect(db.activeChildren(parent.id).map((t) => t.id)).toEqual([childBacklog.id]);
+
+  // Clean board check: parent in backlog, children in backlog/done/archive
+  expect(db.boardViolations()).toEqual([]);
+
+  // Move parent to done while childBacklog is still active
+  db.moveTask(parent.id, "done");
+  expect(db.boardViolations()).toEqual([
+    {
+      kind: "done-parent-active-children",
+      cardId: parent.id,
+      childIds: [childBacklog.id],
+    },
+  ]);
+
+  // Move childBacklog to done -> now board is clean again
+  db.moveTask(childBacklog.id, "done");
+  expect(db.activeChildren(parent.id)).toEqual([]);
+  expect(db.boardViolations()).toEqual([]);
+});
+
+
 test("deleteTask guards descendants and force cascades the subtree", () => {
   const epic = db.createTask({ title: "epic" });
   const story = db.createTask({ title: "story", parent: epic.id, lane: "plan" });

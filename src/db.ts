@@ -244,6 +244,12 @@ export type Priority = (typeof PRIORITIES)[number];
 /** Lanes where a card no longer blocks its dependents (soft blocking). */
 export const UNBLOCKED_LANES = ["done", "archive"] as const;
 
+/** One board-health violation reported by `kanban check` (advisory, never a gate). */
+export type BoardViolation =
+  | { kind: "done-parent-active-children"; cardId: string; childIds: string[] }
+  | { kind: "child-behind-parent"; cardId: string; parentId: string; cardLaneId: string; parentLaneId: string }
+  | { kind: "missing-plan"; cardId: string; laneId: string };
+
 export function defaultDbPath(): string {
   return process.env.KANBAN_DB ?? join(import.meta.dir, "..", "data", "kanban.db");
 }
@@ -770,6 +776,70 @@ export class KanbanDb {
       }
     }
     return out;
+  }
+
+  /** Direct children still in active lanes (every lane except done/archive), position order. */
+  activeChildren(taskRef: string): Task[] {
+    const task = this.resolveTask(taskRef);
+    return this.childrenOf(task.id).filter((c) => !UNBLOCKED_LANES.includes(c.laneId as any));
+  }
+
+  /** Board-health lint findings; empty array = healthy. Pure query — never mutates, never gates. */
+  boardViolations(): BoardViolation[] {
+    const tasks = this.tasks();
+    const taskMap = new Map(tasks.map((t) => [t.id, t]));
+    const lanes = this.lanes();
+    const laneIndex = new Map(lanes.map((l, i) => [l.id, i]));
+    const violations: BoardViolation[] = [];
+
+    // (a) done parent with active children
+    for (const task of tasks) {
+      if (task.laneId === "done") {
+        const active = this.activeChildren(task.id);
+        if (active.length > 0) {
+          violations.push({
+            kind: "done-parent-active-children",
+            cardId: task.id,
+            childIds: active.map((t) => t.id),
+          });
+        }
+      }
+    }
+
+    // (b) child in a lane behind its parent (active parent only)
+    for (const task of tasks) {
+      if (task.parentId !== null) {
+        const parent = taskMap.get(task.parentId);
+        if (parent && !UNBLOCKED_LANES.includes(parent.laneId as any)) {
+          const childIdx = laneIndex.get(task.laneId);
+          const parentIdx = laneIndex.get(parent.laneId);
+          if (childIdx !== undefined && parentIdx !== undefined && childIdx < parentIdx) {
+            violations.push({
+              kind: "child-behind-parent",
+              cardId: task.id,
+              parentId: task.parentId,
+              cardLaneId: task.laneId,
+              parentLaneId: parent.laneId,
+            });
+          }
+        }
+      }
+    }
+
+    // (c) card in Test+Implement/Review with no attached plan
+    for (const task of tasks) {
+      if (task.laneId === "implement" || task.laneId === "review") {
+        if (this.attachment(task.id, "plan") === null) {
+          violations.push({
+            kind: "missing-plan",
+            cardId: task.id,
+            laneId: task.laneId,
+          });
+        }
+      }
+    }
+
+    return violations;
   }
 
   // ---------- blocking edges ----------
