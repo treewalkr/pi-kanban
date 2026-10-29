@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Task } from "../src/db";
@@ -9,7 +9,7 @@ let dir = "";
 let dbFile = "";
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), "kanban-cli-"));
+  dir = realpathSync(mkdtempSync(join(tmpdir(), "kanban-cli-")));
   dbFile = join(dir, "t.db");
 });
 
@@ -24,6 +24,21 @@ interface CliResult {
 async function cli(...args: string[]): Promise<CliResult> {
   const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
     cwd: root,
+    env: { ...process.env, KANBAN_DB: dbFile, NO_COLOR: "1" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { code, stdout, stderr };
+}
+
+async function cliIn(cwd: string, ...args: string[]): Promise<CliResult> {
+  const proc = Bun.spawn(["bun", join(root, "src/cli.ts"), ...args], {
+    cwd,
     env: { ...process.env, KANBAN_DB: dbFile, NO_COLOR: "1" },
     stdout: "pipe",
     stderr: "pipe",
@@ -181,6 +196,27 @@ test("attach versions a plan file; show prints the latest; bad file fails", asyn
   const usage = await cli("attach", task.id);
   expect(usage.code).toBe(1);
   expect(usage.stderr).toContain("usage: kanban attach");
+
+  await cli("rm", task.id, "--json");
+});
+
+test("attach stores the plan source as an absolute path", async () => {
+  const planPath = join(dir, "cwd-plan.md");
+  await Bun.write(planPath, "# plan");
+  const added = await cli("add", "absolute source card", "--lane", "plan", "--json");
+  const task = JSON.parse(added.stdout) as Task;
+
+  const res = await cliIn(dir, "attach", task.id, "cwd-plan.md", "--json");
+  expect(res.code).toBe(0);
+  const plan = JSON.parse(res.stdout);
+  expect(plan.source).toBe(planPath);
+
+  const brief = JSON.parse((await cli("brief", task.id, "--json")).stdout) as {
+    task: Task;
+    plan: { source: string; content: string };
+    comments: Array<{ body: string }>;
+  };
+  expect(brief.plan.source).toBe(planPath);
 
   await cli("rm", task.id, "--json");
 });

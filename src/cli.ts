@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { KanbanDb, KanbanError, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
 import { c, commentLine, commentThread, laneList, listLanes, searchResults, taskDetail, taskLine } from "./render";
 import { searchBoard } from "./search";
@@ -295,7 +295,7 @@ async function main(): Promise<number> {
         } catch (err) {
           throw new KanbanError(`cannot read plan file '${file}': ${(err as Error).message}`, "invalid");
         }
-        const plan = db.attach(idRef, "plan", content, file);
+        const plan = db.attach(idRef, "plan", content, resolve(file));
         if (json) jsonOut(plan);
         else console.log(`${c.green("✓")} attached plan ${c.dim(`v${plan.version}`)} to ${c.dim(plan.taskId)}`);
         return 0;
