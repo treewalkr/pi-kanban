@@ -11,11 +11,12 @@ const HELP = `kanban ${VERSION} — task board for the pi agent
 
 usage:
   kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>]
-                      [--priority <high|normal|low>] [--blocked-by <id>]… [--top]
+                      [--priority <high|normal|low>] [--blocked-by <id>]… [--top] [--elaborate]
   kanban ls [lane] [--project <tag>] [--json]
   kanban next [--project <tag>] [--json]  (what's next: lane priority, then card priority, then oldest; skips blocked)
   kanban search <query…> [--project <tag>] [--json]
   kanban show <id>
+  kanban elaborate <id>                     (queue AI note elaboration; runs on the auto-agent loop)
   kanban attach <id> <plan-file>            (re-attach versions; show prints the latest)
   kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]
   kanban comments <id>
@@ -47,7 +48,7 @@ auto-plan: the same flag runs a pi planner for cards in Plan — it writes the p
 template, asks open questions (kind question) when an answer would change the plan, then hands off
 to a pi plan-reviewer that checks the plan against the template checklist (max 2 block rounds per
 human comment); the human gate is kanban approve (arms a plan-build pi-builder) or kanban reject
---message (re-plans with the feedback).`;
+--message (re-plans with the feedback); the same loop elaborates newly added cards on request (add --elaborate / the ✨ composer toggle).`;
 
 interface Parsed {
   flags: Record<string, string | true | string[]>;
@@ -55,7 +56,7 @@ interface Parsed {
 }
 
 const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority"]);
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by"]);
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by", "elaborate"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by"]); // repeatable: each occurrence appends one value
 
 function parse(argv: string[]): Parsed {
@@ -213,8 +214,14 @@ async function main(): Promise<number> {
           blockedBy,
           index: flags.top ? 0 : (str(flags, "pos") ? Number(str(flags, "pos")) - 1 : undefined),
         });
+        if (flags["elaborate"]) db.queueElaboration(task.id);
         if (json) jsonOut(task);
-        else console.log(taskLine(db, task));
+        else {
+          console.log(taskLine(db, task));
+          if (flags["elaborate"]) {
+            console.log(c.dim("✨ elaboration queued — the auto-agent loop (kanban serve --auto-review) will expand the note"));
+          }
+        }
         return 0;
       }
 
@@ -283,6 +290,18 @@ async function main(): Promise<number> {
         const task = db.resolveTask(idRef);
         if (json) jsonOut({ task, plan: db.attachment(task.id, "plan"), comments: db.comments(task.id) });
         else console.log(taskDetail(db, task)); // thread-aware: note, plan, and comments in one read
+        return 0;
+      }
+
+      case "elaborate": {
+        const idRef = positional[0];
+        if (!idRef) throw new KanbanError("usage: kanban elaborate <id>", "invalid");
+        const task = db.resolveTask(idRef);
+        db.queueElaboration(task.id);
+        if (json) jsonOut(task);
+        else {
+          console.log(`${c.green("✓")} elaboration queued for ${c.dim(task.id)} — runs on the auto-agent loop (kanban serve --auto-review)`);
+        }
         return 0;
       }
 

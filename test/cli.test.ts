@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Task } from "../src/db";
+import { KanbanDb, type Task } from "../src/db";
 
 const root = join(import.meta.dir, "..");
 let dir = "";
@@ -616,4 +616,47 @@ test("triage: priority and blocked-by CLI flags, mv warning, ls glyphs, and show
   // now moving dep within implement does not warn
   const mvImpAgain = await cli("mv", dep.id, "implement");
   expect(mvImpAgain.stdout).not.toContain("⚠ blocked by:");
+});
+
+test("add --elaborate queues elaboration; elaborate re-queues; unknown id fails", async () => {
+  // JSON add with --elaborate
+  const addJson = await cli("add", "Fix login json", "--elaborate", "--json");
+  expect(addJson.code).toBe(0);
+  const taskJson = JSON.parse(addJson.stdout) as Task;
+  expect(taskJson.title).toBe("Fix login json");
+
+  // Plain add with --elaborate
+  const addPlain = await cli("add", "Fix login plain", "--elaborate");
+  expect(addPlain.code).toBe(0);
+  expect(addPlain.stdout).toContain("Fix login plain");
+  expect(addPlain.stdout).toContain("✨ elaboration queued — the auto-agent loop");
+
+  const inspectDb = new KanbanDb(dbFile);
+  try {
+    const reqs = inspectDb.elaborationRequests();
+    const reqIds = reqs.map((r) => r.taskId);
+    expect(reqIds).toContain(taskJson.id);
+
+    // clear elaboration for taskJson
+    inspectDb.clearElaboration(taskJson.id);
+    expect(inspectDb.elaborationRequests().map((r) => r.taskId)).not.toContain(taskJson.id);
+
+    // re-queue via `kanban elaborate <id>`
+    const elab = await cli("elaborate", taskJson.id);
+    expect(elab.code).toBe(0);
+    expect(elab.stdout).toContain(`elaboration queued for ${taskJson.id}`);
+    expect(inspectDb.elaborationRequests().map((r) => r.taskId)).toContain(taskJson.id);
+
+    // json elaborate
+    const elabJson = await cli("elaborate", taskJson.id, "--json");
+    expect(elabJson.code).toBe(0);
+    expect(JSON.parse(elabJson.stdout)).toMatchObject({ id: taskJson.id });
+
+    // unknown id fails
+    const failElab = await cli("elaborate", "nope");
+    expect(failElab.code).toBe(1);
+    expect(failElab.stderr).toContain("no task matching 'nope'");
+  } finally {
+    inspectDb.close();
+  }
 });
