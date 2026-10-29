@@ -8,6 +8,7 @@ function task(partial: Partial<Task> & { id: string; title: string }): Task {
     laneId: "backlog",
     project: "",
     parentId: null,
+    previousLane: null,
     priority: "normal",
     position: 100,
     createdAt: 1,

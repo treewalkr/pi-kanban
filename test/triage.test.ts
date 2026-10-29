@@ -397,3 +397,20 @@ test("PATCH priority + blockedBy; board payload carries blockedBy", async () => 
   const selfBody = (await selfRes.json()) as { error: string; code: string };
   expect(selfBody.code).toBe("conflict");
 });
+
+test("nextTask ignores the waiting lane", () => {
+  const t = db.createTask({ title: "Parked card", lane: "waiting" });
+  expect(t.laneId).toBe("waiting");
+  expect(db.nextTask()).toEqual({ task: null, blocked: 0 });
+});
+
+test("a parked blocker still blocks its dependents", () => {
+  const blocker = db.createTask({ title: "Blocker", lane: "waiting" });
+  const dependent = db.createTask({ title: "Dependent", lane: "backlog" });
+  db.setBlockedBy(dependent.id, [blocker.id]);
+
+  expect(db.isBlocked(dependent.id)).toBe(true);
+  const next = db.nextTask();
+  expect(next.task).toBeNull();
+  expect(next.blocked).toBe(1);
+});

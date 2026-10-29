@@ -20,7 +20,7 @@ function lane(partial: Partial<Lane> & { id: string; name: string }): Lane {
 }
 
 function task(partial: Partial<Task> & { id: string; title: string }): Task {
-  return { note: "", laneId: "backlog", project: "", parentId: null, priority: "normal", position: 100, createdAt: now(), updatedAt: now(), ...partial };
+  return { note: "", laneId: "backlog", project: "", parentId: null, previousLane: null, priority: "normal", position: 100, createdAt: now(), updatedAt: now(), ...partial };
 }
 
 export const CATALOG: CatalogModel[] = [

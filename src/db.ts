@@ -33,6 +33,7 @@ export interface Task {
   laneId: string;
   project: string;
   parentId: string | null;
+  previousLane: string | null;
   priority: Priority;
   position: number;
   createdAt: number;
@@ -158,6 +159,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   lane_id TEXT NOT NULL REFERENCES lanes (id),
   project TEXT NOT NULL DEFAULT '',
   parent_id TEXT REFERENCES tasks (id),
+  previous_lane TEXT,
   priority TEXT NOT NULL DEFAULT 'normal',
   position REAL NOT NULL,
   created_at INTEGER NOT NULL,
@@ -229,6 +231,7 @@ CREATE TABLE IF NOT EXISTS worker_pools (
 `;
 
 export const DEFAULT_LANES: Array<Omit<Lane, "position">> = [
+  { id: "waiting", name: "Waiting on you", description: "Parked for a human answer — replying returns the card", fixed: 1 },
   { id: "backlog", name: "Backlog", description: "Waiting work, nothing started", fixed: 1 },
   { id: "plan", name: "Plan", description: "Scoping and design before code", fixed: 0 },
   { id: "implement", name: "Test + Implement", description: "Build it, test as you go", fixed: 0 },
@@ -236,6 +239,9 @@ export const DEFAULT_LANES: Array<Omit<Lane, "position">> = [
   { id: "done", name: "Done", description: "Finished", fixed: 1 },
   { id: "archive", name: "Archive", description: "Kept out of the way", fixed: 1 },
 ];
+
+/** Fixed first lane: HITL tickets parked for a human answer (never proposed by next). */
+export const WAITING_LANE_ID = "waiting" as const;
 
 /** Lane priority for "what's next": Review → Test + Implement → Plan → Backlog (skill contract). */
 export const NEXT_LANE_PRIORITY = ["review", "implement", "plan", "backlog"] as const;
@@ -271,6 +277,7 @@ interface TaskRow {
   lane_id: string;
   project: string;
   parent_id: string | null;
+  previous_lane: string | null;
   priority: string;
   position: number;
   created_at: number;
@@ -304,6 +311,7 @@ const rowToTask = (r: TaskRow): Task => ({
   laneId: r.lane_id,
   project: r.project,
   parentId: r.parent_id,
+  previousLane: r.previous_lane ?? null,
   priority: (r.priority ?? "normal") as Priority,
   position: r.position,
   createdAt: r.created_at,
@@ -359,8 +367,10 @@ export class KanbanDb {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.ensureParentColumn();
     this.migratePriorityColumn();
+    this.migratePreviousLaneColumn();
     this.db.exec(SCHEMA);
     this.seedLanes();
+    this.ensureWaitingLane();
     this.ensureArchiveLane();
     this.migratePlansTable();
   }
@@ -435,6 +445,15 @@ export class KanbanDb {
     }
   }
 
+  /** Boards created before lane memory existed need the column added once (nullable, no backfill). */
+  private migratePreviousLaneColumn(): void {
+    const table = this.q("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'").get();
+    if (!table) return; // fresh db: SCHEMA creates the table with the column
+    const cols = this.q("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!cols.some((col) => col.name === "previous_lane"))
+      this.db.exec("ALTER TABLE tasks ADD COLUMN previous_lane TEXT");
+  }
+
   // boards created before the archive lane existed need it appended once
   private ensureArchiveLane(): void {
     const row = this.q("SELECT COUNT(*) AS n FROM lanes WHERE id = 'archive'").get() as { n: number };
@@ -446,6 +465,23 @@ export class KanbanDb {
       "Kept out of the way",
       (last.p ?? 0) + GAP,
       1,
+    );
+  }
+
+  /** Boards created before the waiting lane existed get it seeded first once; a
+   * pre-existing custom lane with our id is adopted and marked fixed. */
+  private ensureWaitingLane(): void {
+    const row = this.q("SELECT COUNT(*) AS n FROM lanes WHERE id = 'waiting'").get() as { n: number };
+    if (row.n > 0) {
+      this.q("UPDATE lanes SET fixed = 1 WHERE id = 'waiting'").run();
+      return;
+    }
+    const first = this.q("SELECT MIN(position) AS p FROM lanes").get() as { p: number | null };
+    this.q("INSERT INTO lanes (id, name, description, position, fixed) VALUES (?, ?, ?, ?, 1)").run(
+      "waiting",
+      "Waiting on you",
+      "Parked for a human answer — replying returns the card",
+      (first.p ?? 0) / 2,
     );
   }
 
@@ -633,7 +669,11 @@ export class KanbanDb {
     }
     const priority = input.priority ?? "normal";
     const parent = this.resolveParent(null, input.parent);
-    const lane = input.lane ? this.resolveLane(input.lane) : parent ? this.resolveLane(parent.laneId) : this.lanes()[0];
+    const lane = input.lane
+      ? this.resolveLane(input.lane)
+      : parent
+        ? this.resolveLane(parent.laneId)
+        : this.lanes().find((l) => l.id !== WAITING_LANE_ID)!; // bare adds keep landing in Backlog
     if (!lane) throw new KanbanError("board has no lanes", "invalid");
     const now = Date.now();
     const position = this.insertPosition(lane.id, input.index, null);
@@ -642,8 +682,8 @@ export class KanbanDb {
       try {
         this.db.transaction(() => {
           this.q(
-            "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          ).run(id, title, input.note ?? "", lane.id, input.project ?? "", parent?.id ?? null, priority, position, now, now);
+            "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, previous_lane, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          ).run(id, title, input.note ?? "", lane.id, input.project ?? "", parent?.id ?? null, null, priority, position, now, now);
           if (input.blockedBy !== undefined) {
             this.setBlockedBy(id, input.blockedBy);
           }
@@ -674,9 +714,11 @@ export class KanbanDb {
     }
     const priority = patch.priority ?? task.priority;
 
+    const previousLane = laneId === WAITING_LANE_ID ? task.previousLane : null;
+
     this.q(
       `UPDATE tasks SET
-        title = ?, note = ?, lane_id = ?, project = ?, parent_id = ?, priority = ?, position = ?, updated_at = ?
+        title = ?, note = ?, lane_id = ?, project = ?, parent_id = ?, previous_lane = ?, priority = ?, position = ?, updated_at = ?
       WHERE id = ?`,
     ).run(
       title ?? task.title,
@@ -684,6 +726,7 @@ export class KanbanDb {
       laneId,
       patch.project ?? task.project,
       parentId,
+      previousLane,
       priority,
       position,
       Date.now(),
@@ -1002,6 +1045,18 @@ export class KanbanDb {
   }
 
   // ---------- waiting state ----------
+
+  /** Cards parked in the waiting lane — the count `next` prints. */
+  waitingCount(project?: string): number {
+    if (project !== undefined) {
+      const row = this.q("SELECT COUNT(*) AS n FROM tasks WHERE lane_id = 'waiting' AND project = ?").get(project) as {
+        n: number;
+      };
+      return row.n;
+    }
+    const row = this.q("SELECT COUNT(*) AS n FROM tasks WHERE lane_id = 'waiting'").get() as { n: number };
+    return row.n;
+  }
 
   /** Why this card waits on the human; null unless it is a Plan-lane card or has a dead session. */
   waiting(taskRef: string): WaitingState | null {

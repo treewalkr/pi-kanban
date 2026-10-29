@@ -311,6 +311,43 @@ test("appends the archive lane when reopening a board that predates it", () => {
   reopened.close();
 });
 
+test("waiting lane: seeds first, fixed, and migrates existing boards", () => {
+  const freshLanes = db.lanes();
+  expect(freshLanes[0].id).toBe("waiting");
+  expect(freshLanes[0].fixed).toBe(1);
+  expect(freshLanes[1].id).toBe("backlog");
+  expect(() => db.deleteLane("waiting")).toThrow(/fixed/);
+
+  // Pre-existing DB without waiting lane regains it at position 0 (min / 2)
+  const path = join(dir, "pre-waiting.db");
+  new KanbanDb(path).close();
+  const raw = new Database(path);
+  raw.run("DELETE FROM lanes WHERE id = 'waiting'");
+  raw.close();
+  const reopened = new KanbanDb(path);
+  const reLanes = reopened.lanes();
+  expect(reLanes[0].id).toBe("waiting");
+  expect(reLanes[0].fixed).toBe(1);
+  expect(reLanes[0].position).toBeLessThan(reLanes[1].position);
+  reopened.close();
+
+  // Pre-existing custom waiting lane is adopted and marked fixed
+  const path2 = join(dir, "custom-waiting.db");
+  const raw2 = new Database(path2);
+  raw2.exec(`
+    CREATE TABLE lanes (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      position REAL NOT NULL, fixed INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO lanes (id, name, description, position, fixed) VALUES ('waiting', 'Custom Waiting', 'custom', 50, 0);
+  `);
+  raw2.close();
+  const adopted = new KanbanDb(path2);
+  const adoptedWaiting = adopted.resolveLane("waiting");
+  expect(adoptedWaiting.fixed).toBe(1);
+  adopted.close();
+});
+
 test("adds the parent column when reopening a board that predates hierarchy", () => {
   const path = join(dir, "old.db");
   const raw = new Database(path); // simulate a board written before parent_id existed
@@ -346,7 +383,8 @@ test("createTask defaults to the first lane and appends in order", () => {
 test("resolves lanes by slug prefix, name prefix, and ordinal", () => {
   expect(db.resolveLane("imp").name).toBe("Test + Implement");
   expect(db.resolveLane("rev").name).toBe("Review");
-  expect(db.resolveLane("3").name).toBe("Test + Implement");
+  expect(db.resolveLane("3").name).toBe("Plan");
+  expect(db.resolveLane("4").name).toBe("Test + Implement");
   expect(() => db.resolveLane("zzz")).toThrow(KanbanError);
 });
 
