@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { Comment } from "../src/db";
-import { commentThread } from "../src/render";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { KanbanDb, type Comment } from "../src/db";
+import { commentThread, listLanes, taskDetail } from "../src/render";
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -172,6 +175,28 @@ describe("commentThread CLI renderer", () => {
     const lines = out.split("\n");
     for (const line of lines) {
       expect(line.length).toBeLessThanOrEqual(width);
+    }
+  });
+
+  test("ls glyph and show from: line for parked cards", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kanban-render-test-"));
+    const db = new KanbanDb(join(dir, "t.db"));
+    try {
+      const card = db.createTask({ title: "hitl card", lane: "implement" });
+      db.comment(card.id, { kind: "question", body: "what db?" });
+
+      const lanesOut = stripAnsi(listLanes(db));
+      expect(lanesOut).toContain(`${card.id}  hitl card ☉`);
+
+      const parkedDetail = stripAnsi(taskDetail(db, db.resolveTask(card.id)));
+      expect(parkedDetail).toContain("from:    Test + Implement (implement)");
+
+      const manual = db.createTask({ title: "manual", lane: "waiting" });
+      const manualDetail = stripAnsi(taskDetail(db, db.resolveTask(manual.id)));
+      expect(manualDetail).not.toContain("from:");
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

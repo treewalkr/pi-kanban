@@ -55,7 +55,8 @@ export function listLanes(db: KanbanDb, laneRef?: string, project?: string): str
         const lead = depth === 0 ? "  " : `${"  ".repeat(depth)}└ `;
         const prio = t.priority === "high" ? `${c.red("▲")} ` : t.priority === "low" ? `${c.dim("▼")} ` : "";
         const blocked = db.isBlocked(t.id) ? ` ${c.hex("#d29922", "⊘")}` : "";
-        out.push(`${lead}${c.dim(t.id)}  ${prio}${truncate(t.title, titleWidth)}${blocked}${chip}`);
+        const waiting = t.laneId === "waiting" ? ` ${c.hex("#bc8cff", "☉")}` : "";
+        out.push(`${lead}${c.dim(t.id)}  ${prio}${truncate(t.title, titleWidth)}${blocked}${waiting}${chip}`);
         for (const child of db.childrenOf(t.id)) {
           if (visible.has(child.id)) emit(child, depth + 1);
         }
@@ -187,6 +188,10 @@ export function taskDetail(db: KanbanDb, task: Task): string {
   if (task.parentId) {
     const parent = db.tasks().find((t) => t.id === task.parentId);
     out.push(`${c.dim("parent:")}  ${parent ? `${c.dim(parent.id)}  ${parent.title}` : c.dim(task.parentId)}`);
+  }
+  if (task.laneId === "waiting" && task.previousLane) {
+    const fromLane = db.lanes().find((l) => l.id === task.previousLane);
+    out.push(`${c.dim("from:")}    ${fromLane ? `${fromLane.name} (${fromLane.id})` : task.previousLane}`);
   }
   if (task.priority !== "normal") {
     out.push(`${c.dim("priority:")} ${task.priority}`);

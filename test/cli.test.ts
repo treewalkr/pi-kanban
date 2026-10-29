@@ -434,6 +434,7 @@ test("next: prints the highest-priority card for a project", async () => {
   expect(out.code).toBe(0);
   expect(out.stdout).toContain(review.id);
   expect(out.stdout).toContain("Review");
+  expect(out.stdout).not.toContain("waiting on you");
 
   // with only a backlog card tagged
   const projOnlyBacklog = "next-e2e-backlog-only";
@@ -445,6 +446,13 @@ test("next: prints the highest-priority card for a project", async () => {
   expect(outBacklog.code).toBe(0);
   expect(outBacklog.stdout).toContain(onlyBacklog.id);
   expect(outBacklog.stdout).toContain("Backlog");
+
+  // park the review card with a question -> next prints ☉ 1 waiting on you
+  await cli("comment", review.id, "what db?", "--kind", "question");
+  const outWaiting = await cli("next", "--project", proj);
+  expect(outWaiting.code).toBe(0);
+  expect(outWaiting.stdout).toContain("☉ 1 waiting on you");
+  expect(outWaiting.stdout).toContain(backlog.id);
 });
 
 test("next --json: Task object; null and exit 0 when nothing to pull forward", async () => {
@@ -456,11 +464,12 @@ test("next --json: Task object; null and exit 0 when nothing to pull forward", a
 
   const resJson = await cli("next", "--project", proj, "--json");
   expect(resJson.code).toBe(0);
-  const task = JSON.parse(resJson.stdout) as Task & { blocked: number };
+  const task = JSON.parse(resJson.stdout) as Task & { blocked: number; waiting: number };
   expect(task.id).toBe(card.id);
   expect(task.laneId).toBe("review");
   expect(task.title).toBe("review task");
   expect(task.blocked).toBe(0);
+  expect(task.waiting).toBe(0);
 
   const emptyProj = "next-e2e-empty";
   const emptyJson = await cli("next", "--project", emptyProj, "--json");
@@ -495,7 +504,23 @@ test("next --json: Task object; null and exit 0 when nothing to pull forward", a
 
   const blockedJson = await cli("next", "--project", allBlockedProj, "--json");
   expect(blockedJson.code).toBe(0);
-  expect(JSON.parse(blockedJson.stdout)).toEqual({ task: null, blocked: 1 });
+  expect(JSON.parse(blockedJson.stdout)).toEqual({ task: null, blocked: 1, waiting: 0 });
+
+  // waiting-only project -> task null + waiting count surfaced in both modes
+  const waitingProj = "next-e2e-waiting-only";
+  const waitCard = JSON.parse(
+    (await cli("add", "wait card", "--project", waitingProj, "--lane", "implement", "--json")).stdout,
+  ) as Task;
+  await cli("comment", waitCard.id, "need human?", "--kind", "question");
+
+  const waitHuman = await cli("next", "--project", waitingProj);
+  expect(waitHuman.code).toBe(0);
+  expect(waitHuman.stdout).toContain("nothing to pull forward");
+  expect(waitHuman.stdout).toContain("☉ 1 waiting on you");
+
+  const waitJson = await cli("next", "--project", waitingProj, "--json");
+  expect(waitJson.code).toBe(0);
+  expect(JSON.parse(waitJson.stdout)).toEqual({ task: null, blocked: 0, waiting: 1 });
 });
 
 

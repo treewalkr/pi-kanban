@@ -44,6 +44,7 @@ task ids: any unique prefix works. add --json for machine-readable output.
 search: ranks titles, checklist lines, note text, then plans — same results as the web dropdown.
 hierarchy: --parent nests a card (epic → story → subtask, max depth 3).
 threads: comment/handoff/review append to the card thread; brief prints full pickup context.
+waiting: kind-question comments park the card in the fixed first lane "Waiting on you"; any human reply returns it.
 auto-review: serve --auto-review spawns a pi reviewer for cards in Review (thinking max; block → pi-builder works the findings, max 3 cycles; agents configurable in the web ui → ≡).
 auto-plan: the same flag runs a pi planner for cards in Plan — it writes the plan from the shared
 template, asks open questions (kind question) when an answer would change the plan, then hands off
@@ -257,14 +258,22 @@ async function main(): Promise<number> {
 
       case "next": {
         const { task, blocked } = db.nextTask(project);
+        const waiting = db.waitingCount(project);
         if (json) {
-          jsonOut(task ? { ...task, blocked } : (blocked > 0 ? { task: null, blocked } : null));
+          jsonOut(
+            task
+              ? { ...task, blocked, waiting }
+              : blocked > 0 || waiting > 0
+                ? { task: null, blocked, waiting }
+                : null,
+          );
         } else {
           const warn = blocked > 0 ? `  ${c.hex("#d29922", `⚠ ${blocked} blocked card(s) skipped`)}` : "";
+          const waitLine = waiting > 0 ? `  ${c.hex("#bc8cff", `☉ ${waiting} waiting on you`)}` : "";
           if (task) {
-            console.log(`${taskLine(db, task)}${warn}`);
+            console.log(`${taskLine(db, task)}${warn}${waitLine}`);
           } else {
-            console.log(`${c.dim("nothing to pull forward")}${warn}`);
+            console.log(`${c.dim("nothing to pull forward")}${warn}${waitLine}`);
           }
         }
         return 0;
