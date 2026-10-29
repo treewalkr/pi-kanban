@@ -3,6 +3,7 @@ import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type Attachment, type Board, type Comment, type Lane, type Task } from "./db";
 import { activitySnapshot, killAgentSessions } from "./autoreview";
 import { listPiModels } from "./models";
+import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
@@ -361,6 +362,9 @@ export const createApp = (
     )
     .get("/pi-models", async (): Promise<{ models: Awaited<ReturnType<typeof listPiModels>> }> => ({
       models: await listPiModels(),
+    }))
+    .get("/pi-skills", (): { skills: CatalogSkill[] } => ({
+      skills: listPiSkills(),
     }))
     .get("/activity", (): { sessions: ReturnType<typeof activitySnapshot> } => ({
       sessions: activitySnapshot(),

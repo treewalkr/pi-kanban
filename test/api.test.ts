@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/app";
 import { KanbanDb } from "../src/db";
@@ -421,4 +421,25 @@ test("POST /restart refuses while agent sessions run; force overrides", async ()
   inFlight = 0;
   const plain = await app.handle(new Request("http://localhost/restart", { method: "POST" }));
   expect(plain.status).toBe(202);
+});
+
+test("GET /pi-skills serves the skill catalog", async () => {
+  const app = createApp(db);
+  const res = await app.handle(new Request("http://localhost/pi-skills"));
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { skills: Array<{ name: string; description: string; path: string }> };
+  expect(Array.isArray(body.skills)).toBe(true);
+  for (const s of body.skills) {
+    expect(typeof s.name).toBe("string");
+    expect(s.name.length).toBeGreaterThan(0);
+    expect(typeof s.description).toBe("string");
+    expect(typeof s.path).toBe("string");
+    expect(s.path.length).toBeGreaterThan(0);
+  }
+  const localSkillsRoot = join(homedir(), ".pi", "agent", "skills");
+  if (existsSync(localSkillsRoot)) {
+    const names = body.skills.map((s) => s.name);
+    expect(names).toContain("tdd");
+    expect(names).toContain("caveman");
+  }
 });
