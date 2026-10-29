@@ -304,8 +304,9 @@ export function builderPlanPrompt(task: Task): string {
 
 1. Run: kanban brief ${task.id} — the note, the approved plan, and the full thread. Follow the plan; older rejections in the thread are already addressed by it.
 2. Implement the plan exactly: numbered steps, target files. Test as you go; add or adjust the tests the plan calls for.
-3. Run the full test suite (e.g. bun test) — everything green before handoff.
-4. Hand off: kanban handoff ${task.id} review --message "<what you built · test status>" --author pi-builder
+3. Advance child cards as their steps land: run kanban show ${task.id} — if it lists children, complete each child's scope and advance each child as its work lands (kanban handoff <child-id> done --message "<what landed>" --author pi-builder). Never strand a child in an active lane while its parent moves on.
+4. Run the full test suite (e.g. bun test) — everything green before handoff.
+5. Hand off: kanban handoff ${task.id} review --message "<what you built · test status>" --author pi-builder
 
 Never move the card with mv and never run kanban approve/reject. If a plan step turns out wrong, stop and comment instead of improvising: kanban comment ${task.id} "<the problem>" --author pi-builder.
 Your last line: one-sentence build summary.`;
@@ -317,8 +318,9 @@ export function reviewerPrompt(task: Task): string {
 1. Run: kanban brief ${task.id} --json — the note, latest plan, and full thread (what the builder claims).
 2. Locate the work: the last handoff message says what changed; use git log, git diff, and the files named in the plan.
 3. Review like a senior engineer: correctness, edge cases, error handling, tests, adherence to the plan and repo conventions (read AGENTS.md if present).
-4. Verify cheaply: run the test suite if it is fast (e.g. bun test).
-5. Prove every finding: each --finding must include the failing repro (command + observed output) or quote the exact code path that breaks. A concern you cannot verify is NOT a finding — post it as a comment instead: kanban comment ${task.id} "<concern>" --author pi-reviewer.
+4. Check board truthfulness: run kanban show ${task.id} — if the card has children, their lanes must match the work done. Approving a parent to Done while its children still sit in active lanes (backlog, plan, implement, review) is a block finding (quote the child ids and their lanes as proof); if the children legitimately trail as follow-up scope, say so in the approve message instead.
+5. Verify cheaply: run the test suite if it is fast (e.g. bun test).
+6. Prove every finding: each --finding must include the failing repro (command + observed output) or quote the exact code path that breaks. A concern you cannot verify is NOT a finding — post it as a comment instead: kanban comment ${task.id} "<concern>" --author pi-reviewer.
 
 Then record exactly one verdict (never move the card with mv):
 - Pass: kanban review ${task.id} --approve --message "<1-3 sentence summary; list any [minor]/[nit] observations at the end>" --author pi-reviewer

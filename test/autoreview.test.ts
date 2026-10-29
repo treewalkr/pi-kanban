@@ -506,6 +506,23 @@ describe("auto-review", () => {
     );
   });
 
+  test("builder plan prompt advances child cards as their steps land", () => {
+    const task = { id: "abc12", title: "advance children", laneId: "implement" } as never;
+    const prompt = builderPlanPrompt(task);
+    expect(prompt).toContain("Advance child cards as their steps land");
+    expect(prompt).toContain("kanban show abc12");
+    expect(prompt).toContain("kanban handoff <child-id> done");
+    expect(prompt).toContain("--author pi-builder");
+  });
+
+  test("reviewer prompt checks child lanes before approving a parent", () => {
+    const task = { id: "abc12", title: "check truthfulness", laneId: "review" } as never;
+    const prompt = reviewerPrompt(task);
+    expect(prompt).toContain("Check board truthfulness");
+    expect(prompt).toContain("their lanes must match the work");
+    expect(prompt).toContain("block finding");
+  });
+
   test("agentFlags: reviewer defaults to thinking max, builder to nothing", () => {
     withAgentEnv({}, () => {
       expect(agentFlags("reviewer", null)).toEqual(["--thinking", "max"]);
