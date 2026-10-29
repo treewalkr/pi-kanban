@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { KanbanDb, PLAN_REVIEWER_AUTHOR, type AgentConfig, type AgentRole, type LeaseOwner, type Task } from "./db";
+import { KanbanDb, PLAN_REVIEWER_AUTHOR, type AgentConfig, type AgentRole, type LeaseOwner, type PoolSlot, type Task, type WorkerPool } from "./db";
 
 export type { AgentRole };
 export { PLAN_REVIEWER_AUTHOR };
@@ -88,6 +88,8 @@ export interface AgentSessionInfo {
   role: AgentRole;
   startedAt: number;
   log: string[];
+  model?: string;
+  pool?: string;
 }
 
 /** A job waiting in the serial drain queue (no session yet), for /activity. */
@@ -354,6 +356,21 @@ export function skillActivationPrompt(skills: string[], onWarn?: (message: strin
 }
 
 /**
+ * Merges a pool slot's set fields over the role's agent config.
+ * Unset slot fields inherit from the role config; skills/context/tools/timeout
+ * pass through untouched (a slot structurally cannot set them).
+ * Returns null only when the merged config is empty.
+ */
+export function mergeSlotConfig(cfg: AgentConfig | null, slot: PoolSlot | undefined): AgentConfig | null {
+  if (!cfg && !slot) return null;
+  const result: AgentConfig = cfg ? { ...cfg } : {};
+  if (slot?.provider?.trim()) result.provider = slot.provider.trim();
+  if (slot?.model?.trim()) result.model = slot.model.trim();
+  if (slot?.thinking) result.thinking = slot.thinking;
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
  * pi flags for a role: env (KANBAN_AUTOREVIEW_MODEL / KANBAN_AUTOREVIEW_THINKING)
  * beats the board config, which beats the built-in default (reviewer thinks max;
  * setting the thinking env var to "" disables thinking entirely). Configured
@@ -510,9 +527,39 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     return sessions.size;
   };
   pauseKillers.add(killInFlight);
-  let active = 0;
+  const busySlots = new Set<string>();
   let draining = false;
   let stopped = false;
+
+  interface AllocatedSlot {
+    key: string;
+    slot?: PoolSlot;
+    pool?: WorkerPool;
+    slotIndex?: number;
+  }
+
+  function freeSlotFor(role: AgentRole): AllocatedSlot | null {
+    const pools = db.pools();
+    const covering = pools.filter((p) => p.enabled && p.roles.includes(role));
+    if (covering.length > 0) {
+      for (const pool of covering) {
+        for (let i = 0; i < pool.slots.length; i++) {
+          const key = `${pool.id}:${i}`;
+          if (!busySlots.has(key)) {
+            return { key, slot: pool.slots[i], pool, slotIndex: i };
+          }
+        }
+      }
+      return null;
+    }
+    for (let i = 0; i < maxParallel; i++) {
+      const key = `::default:${i}`;
+      if (!busySlots.has(key)) {
+        return { key, slot: undefined, pool: undefined };
+      }
+    }
+    return null;
+  }
 
   /** What the card needs right now: a planner, a plan reviewer, a reviewer, a builder (two flavors), or nothing. */
   const roleFor = (task: Task): AgentRole | "capped" | "plan-capped" | null => {
@@ -574,7 +621,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const enqueue = (job: AgentJob): void => {
     if (stopped || inFlight.has(job.task.id) || queue.some((j) => j.task.id === job.task.id)) return;
     queue.push({ ...job, enqueuedAt: Date.now() });
-    if (sessions.size > 0 || active >= maxParallel || draining) {
+    if (sessions.size > 0 || busySlots.size > 0 || draining) {
       const head = [...sessions.values()][0];
       log(head ? `${job.role} queued ${job.task.id} — behind ${head.role} ${head.taskId}` : `${job.role} queued ${job.task.id}`);
     }
@@ -657,112 +704,147 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     void drain();
   }
 
-  async function runJob(job: AgentJob): Promise<void> {
-    const fresh = db.tasks().find((t) => t.id === job.task.id);
-    if (!fresh) return;
-    if (job.mode === "resume") {
-      if (db.waiting(job.task.id) !== "dead") return;
-    } else {
-      if (roleFor(fresh) !== job.role) return; // state moved on while queued
-    }
-    if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {
-      log(`${job.role} ${job.task.id}: lease held by another server — skipping`);
-      return;
-    }
-    inFlight.add(job.task.id);
-    job.sessionId ??= sessionIdFor(job);
-    db.setCardSession(job.task.id, job.role, job.sessionId);
-    if (job.mode === "resume") {
-      db.createComment(job.task.id, {
-        author: "kanban",
-        kind: "comment",
-        body: `${KanbanDb.SESSION_RESUMED_PREFIX}continuing ${AUTHOR_BY_ROLE[job.role]} session ${job.sessionId} — the transcript picks up where it died.`,
-      });
-    }
-    const config = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
-    const flags = agentFlags(job.role, config);
-    const model = flags.includes("--model") ? flags[flags.indexOf("--model") + 1] : "default model";
-    const thinking = flags.includes("--thinking") ? `thinking ${flags[flags.indexOf("--thinking") + 1]}` : "";
-    const skills = config?.skills?.length ? `${config.skills.length} skill${config.skills.length === 1 ? "" : "s"}` : "";
-    log(`${job.role} start ${job.task.id} "${job.task.title}" (${[model, thinking, skills].filter(Boolean).join(" · ")})`);
-    const session: AgentSessionInfo = { taskId: job.task.id, role: job.role, startedAt: Date.now(), log: [] };
-    // stop() must be able to silence the heartbeat even when the spawn
-    // promise never settles (a stuck/fake child) — otherwise the 15s tick
-    // lands on a closed db long after the test (or server) tore down
-    const beat = setInterval(() => db.heartbeatLease(job.task.id, owner), LEASE_HEARTBEAT_MS);
-    const stopBeat = track(() => clearInterval(beat));
-    sessions.set(job.task.id, session);
-    const emit = (line: string): void => {
-      session.log.push(line);
-      if (session.log.length > MAX_LOG_LINES) session.log.shift();
-      log(`${job.role} ${job.task.id} │ ${line}`);
-    };
-    const jobKills = new Set<() => void>();
-    const jobTrack = (kill: () => void): (() => void) => {
-      const untrack = track(kill);
-      jobKills.add(untrack);
-      return () => {
-        jobKills.delete(untrack);
-        untrack();
-      };
-    };
-    let result: SpawnResult = { code: 1 };
+  async function runJob(job: AgentJob, allocated: AllocatedSlot): Promise<void> {
+    const { slot, pool, slotIndex, key: slotKey } = allocated;
     try {
-      result = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track: jobTrack });
-      if (result.timedOut) emit("timed out — killed");
-      if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
-    } catch (err) {
-      log(`${job.role} ${job.task.id}: spawn error ${(err as Error).message}`);
-      result = { code: 1, stderrTail: `spawn error: ${(err as Error).message}` };
-      if (result.timedOut) emit("timed out — killed");
-      if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
-    } finally {
-      for (const untrack of jobKills) untrack();
-      jobKills.clear();
-      // keep the transcript on the card — the live view evaporates when the session ends
-      if (!stopped && session.log.length > 0) {
-        const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
-        const header = `${AUTHOR_BY_ROLE[job.role]} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
-        try {
-          db.attach(job.task.id, "session", `${header}\n${session.log.join("\n")}`, "autoreview");
-        } catch (err) {
-          log(`${job.role} ${job.task.id}: could not save the session log (${(err as Error).message})`);
+      const fresh = db.tasks().find((t) => t.id === job.task.id);
+      if (!fresh) return;
+      if (job.mode === "resume") {
+        if (db.waiting(job.task.id) !== "dead") return;
+      } else {
+        if (roleFor(fresh) !== job.role) return; // state moved on while queued
+      }
+      if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {
+        log(`${job.role} ${job.task.id}: lease held by another server — skipping`);
+        return;
+      }
+      inFlight.add(job.task.id);
+      job.sessionId ??= sessionIdFor(job);
+      db.setCardSession(job.task.id, job.role, job.sessionId);
+      if (job.mode === "resume") {
+        db.createComment(job.task.id, {
+          author: "kanban",
+          kind: "comment",
+          body: `${KanbanDb.SESSION_RESUMED_PREFIX}continuing ${AUTHOR_BY_ROLE[job.role]} session ${job.sessionId} — the transcript picks up where it died.`,
+        });
+      }
+      const roleConfig = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
+      const config = mergeSlotConfig(roleConfig, slot);
+      const flags = agentFlags(job.role, config);
+      const model = flags.includes("--model") ? flags[flags.indexOf("--model") + 1] : "default model";
+      const thinking = flags.includes("--thinking") ? `thinking ${flags[flags.indexOf("--thinking") + 1]}` : "";
+      const skills = config?.skills?.length ? `${config.skills.length} skill${config.skills.length === 1 ? "" : "s"}` : "";
+      const via = pool ? `via pool ${pool.name} slot ${slotIndex}` : "via default slot";
+      log(`${job.role} start ${job.task.id} "${job.task.title}" (${[model, thinking, skills].filter(Boolean).join(" · ")}) ${via}`);
+      const modelIndex = flags.indexOf("--model");
+      const resolvedModel = modelIndex !== -1 ? flags[modelIndex + 1] : undefined;
+      const session: AgentSessionInfo = {
+        taskId: job.task.id,
+        role: job.role,
+        startedAt: Date.now(),
+        log: [],
+        ...(resolvedModel ? { model: resolvedModel } : {}),
+        ...(pool ? { pool: pool.name } : {}),
+      };
+      // stop() must be able to silence the heartbeat even when the spawn
+      // promise never settles (a stuck/fake child) — otherwise the 15s tick
+      // lands on a closed db long after the test (or server) tore down
+      const beat = setInterval(() => db.heartbeatLease(job.task.id, owner), LEASE_HEARTBEAT_MS);
+      const stopBeat = track(() => clearInterval(beat));
+      sessions.set(job.task.id, session);
+      const emit = (line: string): void => {
+        session.log.push(line);
+        if (session.log.length > MAX_LOG_LINES) session.log.shift();
+        log(`${job.role} ${job.task.id} │ ${line}`);
+      };
+      const jobKills = new Set<() => void>();
+      const jobTrack = (kill: () => void): (() => void) => {
+        const untrack = track(kill);
+        jobKills.add(untrack);
+        return () => {
+          jobKills.delete(untrack);
+          untrack();
+        };
+      };
+      let result: SpawnResult = { code: 1 };
+      try {
+        result = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track: jobTrack });
+        if (result.timedOut) emit("timed out — killed");
+        if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
+      } catch (err) {
+        log(`${job.role} ${job.task.id}: spawn error ${(err as Error).message}`);
+        result = { code: 1, stderrTail: `spawn error: ${(err as Error).message}` };
+        if (result.timedOut) emit("timed out — killed");
+        if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
+      } finally {
+        for (const untrack of jobKills) untrack();
+        jobKills.clear();
+        // keep the transcript on the card — the live view evaporates when the session ends
+        if (!stopped && session.log.length > 0) {
+          const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
+          const header = `${AUTHOR_BY_ROLE[job.role]} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
+          try {
+            db.attach(job.task.id, "session", `${header}\n${session.log.join("\n")}`, "autoreview");
+          } catch (err) {
+            log(`${job.role} ${job.task.id}: could not save the session log (${(err as Error).message})`);
+          }
+        }
+        sessions.delete(job.task.id);
+        stopBeat();
+        clearInterval(beat);
+        if (!stopped) {
+          try {
+            db.releaseLease(job.task.id, owner);
+          } catch {
+            /* db may be closed */
+          }
         }
       }
-      sessions.delete(job.task.id);
-      stopBeat();
-      clearInterval(beat);
+      inFlight.delete(job.task.id);
       if (!stopped) {
         try {
-          db.releaseLease(job.task.id, owner);
-        } catch {
-          /* db may be closed */
+          afterJob(job, result, session);
+        } catch (err) {
+          log(`${job.role} ${job.task.id}: ${err instanceof Error ? err.message : String(err)}`);
         }
+        scan(); // follow the verdict: block → builder, handoff → reviewer
       }
-    }
-    inFlight.delete(job.task.id);
-    if (!stopped) {
-      try {
-        afterJob(job, result, session);
-      } catch (err) {
-        log(`${job.role} ${job.task.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      scan(); // follow the verdict: block → builder, handoff → reviewer
+    } finally {
+      busySlots.delete(slotKey);
+      if (!stopped) drain();
     }
   }
 
-  async function drain(): Promise<void> {
-    if (draining) return;
+  function drain(): void {
+    if (stopped || db.agentsPaused() || draining) return;
     draining = true;
     try {
-      while (!stopped && !db.agentsPaused() && queue.length > 0 && active < maxParallel) {
-        const job = queue.shift()!;
-        active++;
-        void runJob(job).finally(() => {
-          active--;
-          if (!stopped) void drain();
-        });
+      const remaining: Array<AgentJob & { enqueuedAt: number }> = [];
+      for (const job of queue) {
+        if (stopped || db.agentsPaused()) {
+          remaining.push(job);
+          continue;
+        }
+        const fresh = db.tasks().find((t) => t.id === job.task.id);
+        if (!fresh) continue;
+        if (job.mode === "resume") {
+          if (db.waiting(job.task.id) !== "dead") continue;
+        } else {
+          if (roleFor(fresh) !== job.role) continue;
+        }
+        if (db.leaseFor(job.task.id, LEASE_TTL_MS)) continue;
+
+        const allocated = freeSlotFor(job.role);
+        if (!allocated) {
+          remaining.push(job);
+          continue;
+        }
+
+        busySlots.add(allocated.key);
+        void runJob(job, allocated);
       }
+      queue.length = 0;
+      queue.push(...remaining);
     } finally {
       draining = false;
     }

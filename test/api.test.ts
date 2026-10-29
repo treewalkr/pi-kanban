@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/app";
 import { KanbanDb } from "../src/db";
+import { startAutoReview } from "../src/autoreview";
 
 let dir = "";
 let db: KanbanDb;
@@ -614,4 +615,51 @@ test("GET/PUT/DELETE /pools roundtrip; schema 422, semantic 400, missing 404", a
   const delMissing = await app.handle(new Request("http://localhost/pools/non-existent", { method: "DELETE" }));
   expect(delMissing.status).toBe(404);
   expect(await delMissing.json()).toMatchObject({ code: "not-found" });
+});
+
+test("/activity carries the resolved model per session", async () => {
+  const app = createApp(db);
+  db.setPool("heavy", {
+    name: "heavy pool",
+    enabled: true,
+    roles: ["reviewer"],
+    slots: [
+      { provider: "anthropic", model: "claude-3-5-sonnet" },
+      { provider: "openai", model: "gpt-4o" },
+    ],
+  });
+
+  const card1 = db.createTask({ title: "card 1", lane: "review" });
+  db.createComment(card1.id, { author: "pi-builder", kind: "handoff", body: "done" });
+  const card2 = db.createTask({ title: "card 2", lane: "review" });
+  db.createComment(card2.id, { author: "pi-builder", kind: "handoff", body: "done" });
+
+  const finishes: Array<() => void> = [];
+  const handle = startAutoReview({
+    db,
+    cwd: dir,
+    spawnFn: () => new Promise((resolve) => finishes.push(() => resolve({ code: 0 }))),
+    watchIntervalMs: 50,
+  });
+
+  for (let i = 0; i < 20 && finishes.length < 2; i++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  expect(finishes.length).toBe(2);
+
+  const res = await app.handle(new Request("http://localhost/activity"));
+  expect(res.status).toBe(200);
+  const data = (await res.json()) as { sessions: Array<{ taskId: string; model?: string; pool?: string }> };
+  expect(data.sessions.length).toBe(2);
+
+  const models = data.sessions.map((s) => s.model);
+  expect(models).toContain("claude-3-5-sonnet");
+  expect(models).toContain("gpt-4o");
+
+  for (const s of data.sessions) {
+    expect(s.pool).toBe("heavy pool");
+  }
+
+  handle.stop();
+  for (const f of finishes) f();
 });

@@ -20,6 +20,7 @@ import {
   formatPiEvent,
   killAgentSessions,
   MAX_SKILL_CHARS,
+  mergeSlotConfig,
   plannerPrompt,
   planReviewerPrompt,
   resumePrompt,
@@ -460,6 +461,242 @@ describe("auto-review", () => {
       expect(agentFlags("reviewer", null)).toEqual(["--thinking", "max"]);
       expect(agentFlags("builder", null)).toEqual([]);
     });
+  });
+
+  test("two reviewer cards spawn concurrently under a 2-slot pool; a third waits", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("rev-pool", {
+      name: "reviewer pool",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "slot-0" }, { model: "slot-1" }],
+    });
+    const first = cardInReview(w, "first");
+    await sleep(2);
+    const second = cardInReview(w, "second");
+    await sleep(2);
+    const third = cardInReview(w, "third");
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(50);
+
+    expect(calls.length).toBe(2);
+    expect(new Set(calls.map((c) => c.job.task.id))).toEqual(new Set([first.id, second.id]));
+
+    calls[0].finish({ code: 0 });
+    await sleep(50);
+
+    expect(calls.length).toBe(3);
+    expect(calls[2].job.task.id).toBe(third.id);
+  });
+
+  test("builder-only pool never takes reviewer jobs; uncovered roles share the default slot", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("b-pool", {
+      name: "builder pool",
+      enabled: true,
+      roles: ["builder"],
+      slots: [{ model: "b-0" }, { model: "b-1" }],
+    });
+    const first = cardInReview(w, "first");
+    await sleep(2);
+    const second = cardInReview(w, "second");
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(50);
+
+    // reviewer is uncovered → single implicit default slot, serial
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("reviewer");
+    const firstId = calls[0].job.task.id;
+
+    calls[0].finish({ code: 0 });
+    await sleep(50);
+
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("reviewer");
+    expect(calls[1].job.task.id).not.toBe(firstId);
+  });
+
+  test("mergeSlotConfig: set fields override, unset inherit, null role config works", () => {
+    expect(mergeSlotConfig({ model: "a", thinking: "high" }, { model: "b" })).toEqual({
+      model: "b",
+      thinking: "high",
+    });
+    expect(mergeSlotConfig(null, { model: "b" })).toEqual({ model: "b" });
+    expect(mergeSlotConfig({ model: "a" }, {})).toEqual({ model: "a" });
+    expect(mergeSlotConfig(null, {})).toBeNull();
+    // skills/context/timeout fields pass through untouched
+    expect(
+      mergeSlotConfig(
+        { model: "a", skills: ["s1"], context: "ctx", tools: "bash", extraArgs: ["--x"], timeoutMs: 120_000 },
+        { model: "b", provider: "anthropic" },
+      ),
+    ).toEqual({
+      model: "b",
+      provider: "anthropic",
+      skills: ["s1"],
+      context: "ctx",
+      tools: "bash",
+      extraArgs: ["--x"],
+      timeoutMs: 120_000,
+    });
+  });
+
+  test("slot flags override the role config end to end", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setAgentConfig("reviewer", { model: "a" });
+    w.setPool("rev-pool", {
+      name: "rev",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "b" }],
+    });
+    cardInReview(w);
+    let capturedConfig: any = null;
+    const spawnFn: SpawnFn = (job, ctx) => {
+      capturedConfig = ctx.config;
+      return Promise.resolve({ code: 0 });
+    };
+    start(spawnFn, dbFile);
+    await sleep(50);
+
+    expect(capturedConfig).not.toBeNull();
+    expect(capturedConfig.model).toBe("b");
+  });
+
+  test("pool edits apply to the next spawn", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("p-edit", {
+      name: "edit pool",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "m-a" }],
+    });
+    cardInReview(w, "first");
+    await sleep(2);
+    cardInReview(w, "second");
+
+    const configs: any[] = [];
+    const calls: Array<{ finish: (res: SpawnResult) => void }> = [];
+    const spawnFn: SpawnFn = (job, ctx) => {
+      configs.push(ctx.config);
+      return new Promise<SpawnResult>((resolve) => calls.push({ finish: resolve }));
+    };
+    start(spawnFn, dbFile);
+    await sleep(50);
+
+    expect(calls.length).toBe(1);
+    expect(configs[0].model).toBe("m-a");
+
+    // while spawn 1 is in flight, edit pool
+    w.setPool("p-edit", {
+      name: "edit pool",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "m-b" }],
+    });
+
+    calls[0].finish({ code: 0 });
+    await sleep(50);
+
+    expect(calls.length).toBe(2);
+    expect(configs[1].model).toBe("m-b");
+  });
+
+  test("deleting a pool mid-flight lets the session finish normally", async () => {
+    // 1. Delete mid-flight
+    {
+      const { dbFile, writer: w } = setup();
+      w.setPool("p-del", {
+        name: "del pool",
+        enabled: true,
+        roles: ["reviewer"],
+        slots: [{ model: "m-1" }],
+      });
+      const card = cardInReview(w);
+      const { calls, spawnFn } = fakeSpawn();
+      start(spawnFn, dbFile);
+      await sleep(50);
+
+      expect(calls.length).toBe(1);
+      w.deletePool("p-del");
+
+      calls[0].finish({ code: 0 });
+      await sleep(50);
+
+      const last = db!.comments(card.id).at(-1)!;
+      expect(last.author).toBe(REVIEWER_AUTHOR);
+      expect(last.body).toContain("without a verdict");
+      expect(calls.length).toBe(1);
+      stop?.();
+    }
+
+    // 2. Set enabled: false mid-flight
+    {
+      const { dbFile, writer: w } = setup();
+      w.setPool("p-dis", {
+        name: "dis pool",
+        enabled: true,
+        roles: ["reviewer"],
+        slots: [{ model: "m-1" }],
+      });
+      const card = cardInReview(w);
+      const { calls, spawnFn } = fakeSpawn();
+      start(spawnFn, dbFile);
+      await sleep(50);
+
+      expect(calls.length).toBe(1);
+      w.setPool("p-dis", {
+        name: "dis pool",
+        enabled: false,
+        roles: ["reviewer"],
+        slots: [{ model: "m-1" }],
+      });
+
+      calls[0].finish({ code: 0 });
+      await sleep(50);
+
+      const last = db!.comments(card.id).at(-1)!;
+      expect(last.author).toBe(REVIEWER_AUTHOR);
+      expect(last.body).toContain("without a verdict");
+      expect(calls.length).toBe(1);
+      stop?.();
+    }
+  });
+
+  test("pause kill ends every in-flight session across slots", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("p-pause", {
+      name: "pause pool",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "s-0" }, { model: "s-1" }],
+    });
+    const c1 = cardInReview(w, "card 1");
+    await sleep(2);
+    const c2 = cardInReview(w, "card 2");
+
+    const spawnFn: SpawnFn = (job, ctx) =>
+      new Promise<SpawnResult>((resolve) => {
+        ctx.track(() => {
+          resolve({ code: 143 });
+        });
+      });
+
+    start(spawnFn, dbFile);
+    await sleep(50);
+
+    const killed = killAgentSessions();
+    expect(killed).toBe(2);
+
+    await sleep(50);
+    const last1 = db!.comments(c1.id).at(-1)!;
+    expect(last1.body).toStartWith(KanbanDb.SESSION_DIED_PREFIX);
+    expect(last1.body).toContain("exit 143");
+    const last2 = db!.comments(c2.id).at(-1)!;
+    expect(last2.body).toStartWith(KanbanDb.SESSION_DIED_PREFIX);
+    expect(last2.body).toContain("exit 143");
   });
 
   test("agentFlags: board config maps onto pi flags, skills activated into the system prompt", () => {
