@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +25,23 @@ describe("one-shot share token (restart.ts)", () => {
 });
 
 describe("boot() occupied-port guard (seams per plan AC3)", () => {
+  // guard tests must boot with the ambient env a user would have — not whatever
+  // the test process inherited (an agent session spawned by the 4600 server
+  // carries KANBAN_SHARE_PORT=1/TOKEN, which would flip E3's base guard into
+  // the share path and silently bind)
+  const SHARE_VARS = ["KANBAN_SHARE_PORT", "KANBAN_SHARE_TOKEN", "KANBAN_SHARE_FORCE"] as const;
+  let savedShareEnv: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    savedShareEnv = Object.fromEntries(SHARE_VARS.map((k) => [k, process.env[k]]));
+    for (const k of SHARE_VARS) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedShareEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
   test("E1: share flag against a healthy foreign kanban is refused", async () => {
     const foreign = health({ ok: true, booted: Date.now() });
     await expect(
