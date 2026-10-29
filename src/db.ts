@@ -85,6 +85,8 @@ export interface WorkerPool {
   enabled: boolean;
   roles: AgentRole[];
   slots: PoolSlot[];
+  /** Max concurrent sessions from this pool; absent = slots.length. */
+  maxWorkers?: number;
   updatedAt: number;
 }
 
@@ -1232,6 +1234,24 @@ export class KanbanDb {
     return this.agentsPaused();
   }
 
+  /** Board-level cap on total in-flight agent sessions across all pool slots + default slot; absent or corrupt row falls back to 12. */
+  maxWorkers(): number {
+    const row = this.q("SELECT value FROM board_state WHERE key = 'max_workers'").get() as { value: string } | undefined;
+    if (!row) return 12;
+    const n = Number(row.value);
+    return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 12;
+  }
+
+  setMaxWorkers(n: number): number {
+    if (!Number.isInteger(n) || n < 1 || n > 20) {
+      throw new KanbanError("max workers must be between 1 and 20", "invalid");
+    }
+    this.q(
+      "INSERT INTO board_state (key, value) VALUES ('max_workers', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(String(n));
+    return this.maxWorkers();
+  }
+
   // ---------- agent session leases ----------
   // One agent works a card at a time — across every server process. A loop takes
   // the lease before spawning and releases it when the session ends; a lease
@@ -1318,7 +1338,7 @@ export class KanbanDb {
     }>;
     return rows.map((r) => {
       const parsed = JSON.parse(r.config);
-      return {
+      const pool: WorkerPool = {
         id: r.id,
         name: parsed.name,
         enabled: Boolean(parsed.enabled),
@@ -1326,6 +1346,8 @@ export class KanbanDb {
         slots: parsed.slots,
         updatedAt: r.updated_at,
       };
+      if (parsed.maxWorkers !== undefined) pool.maxWorkers = parsed.maxWorkers;
+      return pool;
     });
   }
 
@@ -1335,7 +1357,7 @@ export class KanbanDb {
       | undefined;
     if (!row) return null;
     const parsed = JSON.parse(row.config);
-    return {
+    const pool: WorkerPool = {
       id: row.id,
       name: parsed.name,
       enabled: Boolean(parsed.enabled),
@@ -1343,9 +1365,14 @@ export class KanbanDb {
       slots: parsed.slots,
       updatedAt: row.updated_at,
     };
+    if (parsed.maxWorkers !== undefined) pool.maxWorkers = parsed.maxWorkers;
+    return pool;
   }
 
-  setPool(id: string, input: { name: string; enabled?: boolean; roles: AgentRole[]; slots: PoolSlot[] }): WorkerPool {
+  setPool(
+    id: string,
+    input: { name: string; enabled?: boolean; roles: AgentRole[]; slots: PoolSlot[]; maxWorkers?: number },
+  ): WorkerPool {
     const name = input.name?.trim() ?? "";
     if (!name) throw new KanbanError("pool name must not be empty", "invalid");
 
@@ -1379,6 +1406,16 @@ export class KanbanDb {
       throw new KanbanError(`pool '${id}' must have 1-8 slots`, "invalid");
     }
 
+    if (
+      input.maxWorkers !== undefined &&
+      (!Number.isInteger(input.maxWorkers) || input.maxWorkers < 1 || input.maxWorkers > cleanSlots.length)
+    ) {
+      throw new KanbanError(
+        `pool '${id}' maxWorkers must be between 1 and ${cleanSlots.length} (its slot count)`,
+        "invalid",
+      );
+    }
+
     const enabled = Boolean(input.enabled);
 
     let totalEnabledSlots = enabled ? cleanSlots.length : 0;
@@ -1392,21 +1429,20 @@ export class KanbanDb {
     }
 
     const now = Date.now();
+    const configBlob: Record<string, any> = {
+      name,
+      enabled,
+      roles: dedupedRoles,
+      slots: cleanSlots,
+    };
+    if (input.maxWorkers !== undefined) configBlob.maxWorkers = input.maxWorkers;
+
     this.q(
       `INSERT INTO worker_pools (id, config, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at`,
-    ).run(
-      id,
-      JSON.stringify({
-        name,
-        enabled,
-        roles: dedupedRoles,
-        slots: cleanSlots,
-      }),
-      now,
-    );
+    ).run(id, JSON.stringify(configBlob), now);
 
-    return {
+    const pool: WorkerPool = {
       id,
       name,
       enabled,
@@ -1414,6 +1450,8 @@ export class KanbanDb {
       slots: cleanSlots,
       updatedAt: now,
     };
+    if (input.maxWorkers !== undefined) pool.maxWorkers = input.maxWorkers;
+    return pool;
   }
 
   deletePool(id: string): void {

@@ -143,6 +143,58 @@ test("pools: set → list → replace → delete; caps and field trimming", () =
   expect(db.pools().map((p) => p.id)).not.toContain("p1");
 });
 
+test("board max workers: default 12, set/get round-trip, rejects out-of-range", () => {
+  expect(db.maxWorkers()).toBe(12);
+
+  expect(db.setMaxWorkers(5)).toBe(5);
+  expect(db.maxWorkers()).toBe(5);
+
+  expect(db.setMaxWorkers(1)).toBe(1);
+  expect(db.maxWorkers()).toBe(1);
+
+  expect(db.setMaxWorkers(20)).toBe(20);
+  expect(db.maxWorkers()).toBe(20);
+
+  expect(() => db.setMaxWorkers(0)).toThrow(new KanbanError("max workers must be between 1 and 20", "invalid"));
+  expect(() => db.setMaxWorkers(21)).toThrow(new KanbanError("max workers must be between 1 and 20", "invalid"));
+  expect(() => db.setMaxWorkers(2.5)).toThrow(new KanbanError("max workers must be between 1 and 20", "invalid"));
+});
+
+test("pool maxWorkers: absent means slot count, validation clamps to slots", () => {
+  const threeSlots = [{ model: "m-0" }, { model: "m-1" }, { model: "m-2" }];
+
+  const savedWithCap = db.setPool("p1", {
+    name: "pool 1",
+    roles: ["builder"],
+    slots: threeSlots,
+    maxWorkers: 2,
+  });
+  expect(savedWithCap.maxWorkers).toBe(2);
+  expect(db.pools()[0].maxWorkers).toBe(2);
+  expect(db.pool("p1")?.maxWorkers).toBe(2);
+
+  const savedWithoutCap = db.setPool("p2", {
+    name: "pool 2",
+    roles: ["reviewer"],
+    slots: threeSlots,
+  });
+  expect("maxWorkers" in savedWithoutCap).toBe(false);
+  expect("maxWorkers" in db.pools()[1]).toBe(false);
+  expect("maxWorkers" in db.pool("p2")!).toBe(false);
+
+  expect(() =>
+    db.setPool("p1", { name: "pool 1", roles: ["builder"], slots: threeSlots, maxWorkers: 0 }),
+  ).toThrow(new KanbanError("pool 'p1' maxWorkers must be between 1 and 3 (its slot count)", "invalid"));
+
+  expect(() =>
+    db.setPool("p1", { name: "pool 1", roles: ["builder"], slots: threeSlots, maxWorkers: 4 }),
+  ).toThrow(new KanbanError("pool 'p1' maxWorkers must be between 1 and 3 (its slot count)", "invalid"));
+
+  expect(() =>
+    db.setPool("p1", { name: "pool 1", roles: ["builder"], slots: threeSlots, maxWorkers: 2.5 }),
+  ).toThrow(new KanbanError("pool 'p1' maxWorkers must be between 1 and 3 (its slot count)", "invalid"));
+});
+
 test("setCardSession/cardSession roundtrip; deleteTask clears pointer and request", () => {
   const task = db.createTask({ title: "session-test" });
   expect(db.cardSession(task.id)).toBeNull();
