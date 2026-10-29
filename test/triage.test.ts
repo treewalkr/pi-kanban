@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KanbanDb, KanbanError, UNBLOCKED_LANES } from "../src/db";
+import { KanbanDb, KanbanError, PRIORITIES, UNBLOCKED_LANES } from "../src/db";
+import { Database } from "bun:sqlite";
 
 let dir = "";
 let db: KanbanDb;
@@ -132,4 +133,66 @@ test("soft blocking: done/archive blockers stop blocking", () => {
   expect(bArchive[0].laneId).toBe("archive");
   expect(UNBLOCKED_LANES.includes(bArchive[0].laneId as any)).toBe(true);
   expect(db.blockedByMap()).toEqual({ [dependent.id]: [blocker.id] });
+});
+
+test("priority: defaults, backfill, and validation", () => {
+  // fresh card defaults to normal
+  const task = db.createTask({ title: "default priority" });
+  expect(task.priority).toBe("normal");
+
+  // explicit tiers round-trip on create
+  const high = db.createTask({ title: "urgent", priority: "high" });
+  expect(high.priority).toBe("high");
+  const low = db.createTask({ title: "eventual", priority: "low" });
+  expect(low.priority).toBe("low");
+
+  // update tier
+  const updated = db.updateTask(task.id, { priority: "high" });
+  expect(updated.priority).toBe("high");
+  expect(db.resolveTask(task.id).priority).toBe("high");
+
+  // invalid tier rejected on create and update
+  expect(() => db.createTask({ title: "bad", priority: "urgent" as any })).toThrow(KanbanError);
+  try {
+    db.createTask({ title: "bad", priority: "urgent" as any });
+  } catch (err: any) {
+    expect(err.code).toBe("invalid");
+  }
+
+  expect(() => db.updateTask(task.id, { priority: "critical" as any })).toThrow(KanbanError);
+  try {
+    db.updateTask(task.id, { priority: "critical" as any });
+  } catch (err: any) {
+    expect(err.code).toBe("invalid");
+  }
+
+  // Pre-existing DB backfill: simulate board written before priority column existed
+  const oldPath = join(dir, "old-pre-priority.db");
+  const raw = new Database(oldPath);
+  raw.exec(`
+    CREATE TABLE lanes (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      position REAL NOT NULL, fixed INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+      lane_id TEXT NOT NULL REFERENCES lanes (id), project TEXT NOT NULL DEFAULT '',
+      parent_id TEXT REFERENCES tasks (id),
+      position REAL NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+    INSERT INTO lanes (id, name, description, position, fixed) VALUES ('backlog', 'Backlog', '', 100, 1);
+    INSERT INTO tasks (id, title, note, lane_id, project, parent_id, position, created_at, updated_at)
+      VALUES ('leg01', 'legacy one', '', 'backlog', '', NULL, 100, 1, 1),
+             ('leg02', 'legacy two', '', 'backlog', '', NULL, 200, 2, 2);
+  `);
+  raw.close();
+
+  // Reopen with KanbanDb
+  const reopened = new KanbanDb(oldPath);
+  const rows = reopened.tasks();
+  expect(rows.length).toBe(2);
+  expect(rows[0].priority).toBe("normal");
+  expect(rows[1].priority).toBe("normal");
+  expect(reopened.resolveTask("leg01").priority).toBe("normal");
+  reopened.close();
 });

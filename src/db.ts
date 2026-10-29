@@ -33,6 +33,7 @@ export interface Task {
   laneId: string;
   project: string;
   parentId: string | null;
+  priority: Priority;
   position: number;
   createdAt: number;
   updatedAt: number;
@@ -95,6 +96,7 @@ export interface TaskPatch {
   project?: string;
   lane?: string; // lane ref: id, id prefix, name prefix, or 1-based ordinal
   parent?: string | null; // task ref to attach under; null detaches
+  priority?: Priority;
   index?: number; // 0-based position within the target lane; omit to append
 }
 
@@ -136,6 +138,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   lane_id TEXT NOT NULL REFERENCES lanes (id),
   project TEXT NOT NULL DEFAULT '',
   parent_id TEXT REFERENCES tasks (id),
+  priority TEXT NOT NULL DEFAULT 'normal',
   position REAL NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -198,6 +201,9 @@ export const DEFAULT_LANES: Array<Omit<Lane, "position">> = [
 /** Lane priority for "what's next": Review → Test + Implement → Plan → Backlog (skill contract). */
 export const NEXT_LANE_PRIORITY = ["review", "implement", "plan", "backlog"] as const;
 
+export const PRIORITIES = ["high", "normal", "low"] as const;
+export type Priority = (typeof PRIORITIES)[number];
+
 /** Lanes where a card no longer blocks its dependents (soft blocking). */
 export const UNBLOCKED_LANES = ["done", "archive"] as const;
 
@@ -220,6 +226,7 @@ interface TaskRow {
   lane_id: string;
   project: string;
   parent_id: string | null;
+  priority: string;
   position: number;
   created_at: number;
   updated_at: number;
@@ -252,6 +259,7 @@ const rowToTask = (r: TaskRow): Task => ({
   laneId: r.lane_id,
   project: r.project,
   parentId: r.parent_id,
+  priority: (r.priority ?? "normal") as Priority,
   position: r.position,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -305,6 +313,7 @@ export class KanbanDb {
     this.db = new Database(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.ensureParentColumn();
+    this.migratePriorityColumn();
     this.db.exec(SCHEMA);
     this.seedLanes();
     this.ensureArchiveLane();
@@ -368,6 +377,17 @@ export class KanbanDb {
     const cols = this.q("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     if (cols.some((col) => col.name === "parent_id")) return;
     this.db.exec("ALTER TABLE tasks ADD COLUMN parent_id TEXT REFERENCES tasks (id)");
+  }
+
+  /** Boards created before priority existed need the column added once; the ALTER's
+   * DEFAULT backfills 'normal' on existing rows (ensureParentColumn pattern). */
+  private migratePriorityColumn(): void {
+    const table = this.q("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'").get();
+    if (!table) return; // fresh db: SCHEMA creates the table with the column
+    const cols = this.q("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!cols.some((col) => col.name === "priority")) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'");
+    }
   }
 
   // boards created before the archive lane existed need it appended once
@@ -491,9 +511,21 @@ export class KanbanDb {
 
   // ---------- task writes ----------
 
-  createTask(input: { title: string; note?: string; lane?: string; project?: string; parent?: string | null; index?: number }): Task {
+  createTask(input: {
+    title: string;
+    note?: string;
+    lane?: string;
+    project?: string;
+    parent?: string | null;
+    priority?: string;
+    index?: number;
+  }): Task {
     const title = input.title.trim();
     if (!title) throw new KanbanError("title must not be empty", "invalid");
+    if (input.priority !== undefined && !PRIORITIES.includes(input.priority as Priority)) {
+      throw new KanbanError("priority must be one of high|normal|low", "invalid");
+    }
+    const priority = input.priority ?? "normal";
     const parent = this.resolveParent(null, input.parent);
     const lane = input.lane ? this.resolveLane(input.lane) : parent ? this.resolveLane(parent.laneId) : this.lanes()[0];
     if (!lane) throw new KanbanError("board has no lanes", "invalid");
@@ -503,8 +535,8 @@ export class KanbanDb {
       const id = newId();
       try {
         this.q(
-          "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ).run(id, title, input.note ?? "", lane.id, input.project ?? "", parent?.id ?? null, position, now, now);
+          "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).run(id, title, input.note ?? "", lane.id, input.project ?? "", parent?.id ?? null, priority, position, now, now);
         this.renormalizeIfTight(lane.id);
         return this.resolveTask(id);
       } catch (err) {
@@ -525,9 +557,14 @@ export class KanbanDb {
     const title = patch.title?.trim();
     if (patch.title !== undefined && !title) throw new KanbanError("title must not be empty", "invalid");
 
+    if (patch.priority !== undefined && !PRIORITIES.includes(patch.priority as Priority)) {
+      throw new KanbanError("priority must be one of high|normal|low", "invalid");
+    }
+    const priority = patch.priority ?? task.priority;
+
     this.q(
       `UPDATE tasks SET
-        title = ?, note = ?, lane_id = ?, project = ?, parent_id = ?, position = ?, updated_at = ?
+        title = ?, note = ?, lane_id = ?, project = ?, parent_id = ?, priority = ?, position = ?, updated_at = ?
       WHERE id = ?`,
     ).run(
       title ?? task.title,
@@ -535,6 +572,7 @@ export class KanbanDb {
       laneId,
       patch.project ?? task.project,
       parentId,
+      priority,
       position,
       Date.now(),
       task.id,
