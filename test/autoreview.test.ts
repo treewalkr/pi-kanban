@@ -22,6 +22,7 @@ import {
   MAX_SKILL_CHARS,
   plannerPrompt,
   planReviewerPrompt,
+  resumePrompt,
   reviewerPrompt,
   sessionIdFor,
   skillActivationPrompt,
@@ -826,6 +827,143 @@ describe("auto-review", () => {
     const queuedLog = logs.find((l) => l.includes("queued"));
     expect(queuedLog).toBeDefined();
     expect(queuedLog).toMatch(new RegExp(`^reviewer queued ${second.id} — behind reviewer ${first.id}$`));
+  });
+
+  test("a queued resume re-spawns the dead role with the stored session id", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "dead builder", lane: "implement" });
+    w.createComment(card.id, { author: BUILDER_AUTHOR, kind: "comment", body: "session died: timeout after 20m" });
+    w.setCardSession(card.id, "builder", "kanban-x-builder-1");
+    w.queueResume(card.id);
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(50);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("builder");
+    expect(calls[0].job.sessionId).toBe("kanban-x-builder-1");
+    expect(calls[0].job.prompt).toContain("continues that same session");
+    expect(calls[0].job.prompt).toContain(`kanban handoff ${card.id} review`);
+  });
+
+  test("one resume serviced when two loops share the db", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "shared db resume", lane: "implement" });
+    w.createComment(card.id, { author: BUILDER_AUTHOR, kind: "comment", body: "session died: crash" });
+    w.setCardSession(card.id, "builder", "kanban-x-builder-shared");
+    w.queueResume(card.id);
+
+    const a = fakeSpawn();
+    const b = fakeSpawn();
+    const dbA = new KanbanDb(dbFile);
+    const dbB = new KanbanDb(dbFile);
+    const hA = startAutoReview({ db: dbA, cwd: dir, spawnFn: a.spawnFn, watchIntervalMs: 50 });
+    const hB = startAutoReview({ db: dbB, cwd: dir, spawnFn: b.spawnFn, watchIntervalMs: 50 });
+    stop = () => {
+      hA.stop();
+      hB.stop();
+      dbA.close();
+      dbB.close();
+    };
+    await sleep(500);
+    expect(a.calls.length + b.calls.length).toBe(1);
+  });
+
+  test("a resume job is dropped when the card is no longer dead at take time", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "no longer dead", lane: "implement" });
+    w.createComment(card.id, { author: BUILDER_AUTHOR, kind: "comment", body: "session died: crash" });
+    w.setCardSession(card.id, "builder", "kanban-x-builder-drop");
+    w.queueResume(card.id);
+
+    // Human comments before loop starts/drains → card no longer dead
+    w.createComment(card.id, { author: "user", kind: "comment", body: "i fixed it manually" });
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+
+    expect(calls.length).toBe(0);
+    expect(db!.resumeRequests()).toEqual([]);
+  });
+
+  test("a resumed session streams into activity and saves its transcript", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "activity transcript", lane: "implement" });
+    w.createComment(card.id, { author: BUILDER_AUTHOR, kind: "comment", body: "session died: crash" });
+    w.setCardSession(card.id, "builder", "kanban-x-builder-act");
+    w.queueResume(card.id);
+
+    let ctx!: SpawnContext;
+    let finish!: (result: SpawnResult) => void;
+    const spawnFn: SpawnFn = (_job, context) => {
+      ctx = context;
+      return new Promise<SpawnResult>((resolve) => (finish = resolve));
+    };
+    start(spawnFn, dbFile);
+    await sleep(50);
+
+    ctx.emit("→ bash: bun test");
+    expect(activitySnapshot().sessions.find((s) => s.taskId === card.id)?.log).toEqual(["→ bash: bun test"]);
+
+    finish({ code: 0 });
+    await sleep(50);
+
+    const attachments = db!.attachments(card.id, "session");
+    expect(attachments.length).toBe(1);
+    expect(attachments[0].content).toMatch(/^pi-builder ·/);
+  });
+
+  test("the resume-start comment clears waiting-dead; a second death re-posts a fresh reason", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "death cycle", lane: "implement" });
+    w.createComment(card.id, { author: BUILDER_AUTHOR, kind: "comment", body: "session died: first failure" });
+    w.setCardSession(card.id, "builder", "kanban-x-builder-cycle");
+    expect(w.waiting(card.id)).toBe("dead");
+
+    w.queueResume(card.id);
+
+    let finish!: (result: SpawnResult) => void;
+    const spawnFn: SpawnFn = () => new Promise<SpawnResult>((resolve) => (finish = resolve));
+    start(spawnFn, dbFile);
+    await sleep(50);
+
+    const startComment = db!.comments(card.id).at(-1)!;
+    expect(startComment.author).toBe("kanban");
+    expect(startComment.kind).toBe("comment");
+    expect(startComment.body).toStartWith("session resumed: ");
+    expect(startComment.body).toContain("kanban-x-builder-cycle");
+    expect(db!.waiting(card.id)).toBeNull();
+
+    finish({ code: 1, stderrTail: "second failure reason" });
+    await sleep(50);
+
+    expect(db!.waiting(card.id)).toBe("dead");
+    const deathComment = db!.comments(card.id).at(-1)!;
+    expect(deathComment.author).toBe(BUILDER_AUTHOR);
+    expect(deathComment.body).toStartWith("session died: ");
+    expect(deathComment.body).toContain("second failure reason");
+  });
+
+  test("a fresh re-run mints a new session id — the pointer follows", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "fresh re-run", lane: "implement" });
+    // Simulate plan approval to arm the builder
+    w.createComment(card.id, { author: "user", kind: "approval", body: "plan approved — build it" });
+    w.createComment(card.id, { author: BUILDER_AUTHOR, kind: "comment", body: "session died: exit 1" });
+    w.setCardSession(card.id, "builder", "kanban-old-session-id");
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+
+    // Human comment re-arms the builder
+    await w.createComment(card.id, { author: "user", kind: "comment", body: "try again" });
+    await sleep(50);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.sessionId).not.toBe("kanban-old-session-id");
+    expect(db!.cardSession(card.id)?.sessionId).toBe(calls[0].job.sessionId);
   });
 });
 

@@ -219,6 +219,23 @@ export const PLAN_SECTIONS = [
   "Open questions",
 ] as const;
 
+export function resumePrompt(task: Task, role: AgentRole, reason: string): string {
+  const ending: Record<AgentRole, string> = {
+    planner: `; then attach the plan file and hand off exactly: kanban attach ${task.id} <plan-file> and kanban comment ${task.id} "plan v<N> attached — over to pi-plan-reviewer" --kind handoff --author pi-planner`,
+    "plan-reviewer": `; then record exactly one verdict: kanban plan-review ${task.id} (--pass | --block --message "<summary>" [--finding "<checklist hit>"]…) --author pi-plan-reviewer`,
+    reviewer: `; then record exactly one verdict: kanban review ${task.id} (--approve | --block --message "<summary>" [--finding "<file:line — issue>"]…) --author pi-reviewer`,
+    builder: `; then hand off: kanban handoff ${task.id} review --message "<what you built · test status>" --author pi-builder`,
+  };
+  return `You are ${AUTHOR_BY_ROLE[role]}. Your previous session on kanban card ${task.id} "${task.title}" died before finishing (${reason}) — this spawn continues that same session, so your earlier context is intact: pick up where you left off, do not restart from scratch.
+
+1. Re-orient: run kanban brief ${task.id} — the thread may have moved while you were down; check your own progress (git status, git log, the files you touched) before redoing work.
+2. Finish what you were doing${ending[role]}
+3. Run the full test suite (e.g. bun test) before recording anything if you touched code.
+4. Never move the card with mv and never run kanban approve/reject — the human owns the gate.
+
+Your last line: one-sentence progress summary.`;
+}
+
 export function plannerPrompt(task: Task, now: number = Date.now()): string {
   return `You are pi-planner. Kanban card ${task.id} "${task.title}" is in the Plan lane in this repo — write its implementation plan. The plan is the builder's contract: two builders following it should produce the same behavior.
 
@@ -543,12 +560,13 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     }
     if (task.laneId === "review" && last?.author !== REVIEWER_AUTHOR) return "reviewer";
     if (task.laneId === "implement") {
+      if (last?.author === BUILDER_AUTHOR) return null; // builder died or left a comment — disarmed
       if (last?.kind === "review" && last?.author === REVIEWER_AUTHOR) {
         const blocks = thread.filter((c) => c.kind === "review" && c.author === REVIEWER_AUTHOR).length;
         return blocks < maxBlocks ? "builder" : "capped";
       }
-      // a human approval (never agent-authored) arms the plan-build builder
-      if (last?.kind === "approval" && !last.author.startsWith("pi-")) return "builder";
+      // a human approval or human comment re-arms the builder
+      if (last && !last.author.startsWith("pi-")) return "builder";
     }
     return null;
   };
@@ -567,6 +585,34 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     // comments, nothing — until the flag clears (the pause write itself wakes
     // the watcher on resume)
     if (stopped || db.agentsPaused()) return;
+    for (const req of db.resumeRequests()) {
+      const task = db.tasks().find((t) => t.id === req.taskId);
+      if (!task) {
+        db.clearResumeRequest(req.taskId);
+        continue;
+      }
+      if (db.leaseFor(task.id, LEASE_TTL_MS)) continue;
+      const session = db.cardSession(task.id);
+      if (!session) {
+        db.clearResumeRequest(task.id);
+        continue;
+      }
+      const last = db.comments(task.id).at(-1);
+      const lastBody = last?.body ?? "";
+      const reason = lastBody.startsWith(KanbanDb.SESSION_DIED_PREFIX)
+        ? lastBody.slice(KanbanDb.SESSION_DIED_PREFIX.length).trim()
+        : "session died";
+      const prompt = resumePrompt(task, session.role, reason);
+      const job: AgentJob = {
+        task,
+        role: session.role,
+        sessionId: session.sessionId,
+        prompt,
+        mode: "resume",
+      };
+      db.clearResumeRequest(task.id);
+      enqueue(job);
+    }
     const lanes = new Set(db.lanes().map((l) => l.id));
     if (!lanes.has("review") || !lanes.has("implement")) return;
     for (const task of db.tasks()) {
@@ -576,8 +622,20 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       else if (role === "plan-reviewer") enqueue({ task, role, prompt: planReviewerPrompt(task) });
       else if (role === "reviewer") enqueue({ task, role, prompt: reviewerPrompt(task) });
       else if (role === "builder") {
-        const plan = db.comments(task.id).at(-1)?.kind === "approval";
-        enqueue({ task, role, mode: plan ? "plan" : "findings", prompt: plan ? builderPlanPrompt(task) : builderPrompt(task) });
+        const thread = db.comments(task.id);
+        let isPlan = false;
+        for (let i = thread.length - 1; i >= 0; i--) {
+          const c = thread[i]!;
+          if (c.kind === "approval" && !c.author.startsWith("pi-")) {
+            isPlan = true;
+            break;
+          }
+          if (c.kind === "review" && c.author === REVIEWER_AUTHOR) {
+            isPlan = false;
+            break;
+          }
+        }
+        enqueue({ task, role, mode: isPlan ? "plan" : "findings", prompt: isPlan ? builderPlanPrompt(task) : builderPrompt(task) });
       } else if (role === "capped") {
         // posting flips the last comment away from the verdict, so this fires once
         db.createComment(task.id, {
@@ -601,7 +659,12 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
 
   async function runJob(job: AgentJob): Promise<void> {
     const fresh = db.tasks().find((t) => t.id === job.task.id);
-    if (!fresh || roleFor(fresh) !== job.role) return; // state moved on while queued
+    if (!fresh) return;
+    if (job.mode === "resume") {
+      if (db.waiting(job.task.id) !== "dead") return;
+    } else {
+      if (roleFor(fresh) !== job.role) return; // state moved on while queued
+    }
     if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {
       log(`${job.role} ${job.task.id}: lease held by another server — skipping`);
       return;
@@ -609,6 +672,13 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     inFlight.add(job.task.id);
     job.sessionId ??= sessionIdFor(job);
     db.setCardSession(job.task.id, job.role, job.sessionId);
+    if (job.mode === "resume") {
+      db.createComment(job.task.id, {
+        author: "kanban",
+        kind: "comment",
+        body: `${KanbanDb.SESSION_RESUMED_PREFIX}continuing ${AUTHOR_BY_ROLE[job.role]} session ${job.sessionId} — the transcript picks up where it died.`,
+      });
+    }
     const config = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
     const flags = agentFlags(job.role, config);
     const model = flags.includes("--model") ? flags[flags.indexOf("--model") + 1] : "default model";
@@ -735,7 +805,9 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         });
       }
     } else {
-      if (task.laneId === "review") log(`builder ${task.id}: ${job.mode === "plan" ? "built the plan → review" : "fixed → back to review"}`);
+      const desc = job.mode === "plan" ? "built the plan → review" : "fixed → back to review";
+      const prefix = job.mode === "resume" ? `resumed builder ${task.id}` : `builder ${task.id}`;
+      if (task.laneId === "review") log(`${prefix}: ${desc}`);
       else if (last?.author === BUILDER_AUTHOR) log(`builder ${task.id}: left a comment, no handoff`);
       else {
         db.createComment(task.id, {
