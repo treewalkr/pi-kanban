@@ -12,6 +12,7 @@ import {
   type SpawnFn,
   type SpawnResult,
 } from "../src/autoreview";
+import { createApp } from "../src/app";
 import { KanbanDb } from "../src/db";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -368,4 +369,94 @@ test("elaboration success records the agent comment; death posts the retry hint"
     writer = null;
     loopDir = "";
   }
+});
+
+test("POST /tasks elaborate flag queues exactly when set", async () => {
+  const app = createApp(db);
+
+  // POST with elaborate: true
+  const res1 = await app.handle(
+    new Request("http://localhost/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Needs elaboration", elaborate: true }),
+    }),
+  );
+  expect(res1.status).toBe(201);
+  const task1 = (await res1.json()) as { id: string };
+  expect(db.elaborationRequests().map((r) => r.taskId)).toContain(task1.id);
+
+  // POST without elaborate
+  const res2 = await app.handle(
+    new Request("http://localhost/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "No elaboration" }),
+    }),
+  );
+  expect(res2.status).toBe(201);
+  const task2 = (await res2.json()) as { id: string };
+  expect(db.elaborationRequests().map((r) => r.taskId)).not.toContain(task2.id);
+
+  // POST with non-boolean elaborate
+  const res3 = await app.handle(
+    new Request("http://localhost/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Invalid elaborate", elaborate: "yes" }),
+    }),
+  );
+  expect(res3.status).toBe(422);
+});
+
+test("agents routes roundtrip elaborator; pools accept the role", async () => {
+  const app = createApp(db);
+
+  // GET /agents elaborator is null initially
+  const get1 = await app.handle(new Request("http://localhost/agents"));
+  expect(get1.status).toBe(200);
+  const body1 = (await get1.json()) as { elaborator: unknown };
+  expect(body1.elaborator).toBeNull();
+
+  // PUT /agents/elaborator
+  const put1 = await app.handle(
+    new Request("http://localhost/agents/elaborator", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-haiku-3-5" }),
+    }),
+  );
+  expect(put1.status).toBe(200);
+
+  // GET /agents reflects it
+  const get2 = await app.handle(new Request("http://localhost/agents"));
+  expect(get2.status).toBe(200);
+  const body2 = (await get2.json()) as { elaborator: { model: string } };
+  expect(body2.elaborator).toEqual({ model: "claude-haiku-3-5" });
+
+  // PUT /agents/nope -> 422
+  const put2 = await app.handle(
+    new Request("http://localhost/agents/nope", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-haiku-3-5" }),
+    }),
+  );
+  expect(put2.status).toBe(422);
+
+  // db.setPool accepted
+  const pool = db.setPool("p1", { name: "light", roles: ["elaborator"], slots: [{ model: "m" }] });
+  expect(pool.roles).toEqual(["elaborator"]);
+
+  // PUT /pools/:id accepts elaborator
+  const putPool = await app.handle(
+    new Request("http://localhost/pools/p2", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "pool-elaborator", roles: ["elaborator"], slots: [{ model: "m" }] }),
+    }),
+  );
+  expect(putPool.status).toBe(200);
+  const pool2 = (await putPool.json()) as { roles: string[] };
+  expect(pool2.roles).toEqual(["elaborator"]);
 });

@@ -279,7 +279,9 @@ export const createApp = (
       "/tasks",
       ({ body, status }): Task | unknown => {
         try {
-          return status(201, db.createTask(body));
+          const task = db.createTask(body);
+          if (body.elaborate === true) db.queueElaboration(task.id);
+          return status(201, task);
         } catch (e) {
           return fail(e, status);
         }
@@ -294,6 +296,7 @@ export const createApp = (
           priority: t.Optional(t.Enum({ high: "high", normal: "normal", low: "low" })),
           blockedBy: t.Optional(t.Array(t.String())),
           index: t.Optional(t.Number({ minimum: 0 })),
+          elaborate: t.Optional(t.Boolean()),
         }),
       },
     )
@@ -372,11 +375,12 @@ export const createApp = (
     )
     .get(
       "/agents",
-      (): { planner: AgentConfig | null; reviewer: AgentConfig | null; builder: AgentConfig | null; "plan-reviewer": AgentConfig | null } => ({
+      (): { planner: AgentConfig | null; reviewer: AgentConfig | null; builder: AgentConfig | null; "plan-reviewer": AgentConfig | null; elaborator: AgentConfig | null } => ({
         planner: db.agentConfig("planner"),
         reviewer: db.agentConfig("reviewer"),
         builder: db.agentConfig("builder"),
         "plan-reviewer": db.agentConfig("plan-reviewer"),
+        elaborator: db.agentConfig("elaborator"),
       }),
     )
     .get("/agents/pause", (): { paused: boolean } => ({ paused: db.agentsPaused() }))
@@ -409,7 +413,7 @@ export const createApp = (
         }
       },
       {
-        params: t.Object({ role: t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer")]) }),
+        params: t.Object({ role: t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer"), t.Literal("elaborator")]) }),
         body: t.Object({
           provider: t.Optional(t.String()),
           model: t.Optional(t.String()),
@@ -448,7 +452,7 @@ export const createApp = (
         body: t.Object({
           name: t.String({ minLength: 1, maxLength: 60 }),
           enabled: t.Optional(t.Boolean()),
-          roles: t.Array(t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer")]), { minItems: 1 }),
+          roles: t.Array(t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer"), t.Literal("elaborator")]), { minItems: 1 }),
           slots: t.Array(t.Object({ provider: t.Optional(t.String()), model: t.Optional(t.String()), thinking: t.Optional(t.Union([t.Literal(""), t.Literal("off"), t.Literal("minimal"), t.Literal("low"), t.Literal("medium"), t.Literal("high"), t.Literal("xhigh"), t.Literal("max")])) }), { minItems: 1, maxItems: 8 }),
         }),
       },

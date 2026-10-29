@@ -253,7 +253,7 @@ test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async (
 
   const empty = await app.handle(new Request("http://localhost/agents"));
   expect(empty.status).toBe(200);
-  expect(await empty.json()).toEqual({ planner: null, reviewer: null, builder: null, "plan-reviewer": null });
+  expect(await empty.json()).toEqual({ planner: null, reviewer: null, builder: null, "plan-reviewer": null, elaborator: null });
 
   const put = await app.handle(
     new Request("http://localhost/agents/reviewer", {
