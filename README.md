@@ -47,6 +47,7 @@ back. Local pages only: cross-origin requests are refused.
 
 ```bash
 kanban add Fix login redirect --note "bounces to / after oauth" --project my-app
+kanban add "Fix login redirect" --elaborate # queues pi-elaborator to expand note with intent + AC
 kanban mv <id> plan            # or --next / --prev
 kanban ls [--project my-app] [--json]
 kanban next [--project my-app]      # what's next: lane priority, then card priority, then oldest; skips blocked
@@ -73,7 +74,7 @@ database and pushes changes to the web UI over SSE, so the board updates live.
 
 ### Auto agents (plan + review)
 
-`kanban serve --auto-review` runs four headless `pi` agents over the board. **Auto-plan**: a
+`kanban serve --auto-review` runs headless `pi` agents over the board. Newly added cards queued with `--elaborate` (or the ✨ composer toggle) spawn a `pi-elaborator` to expand terse notes into intent + acceptance criteria; `kanban elaborate <id>` retrofits or retries elaboration on any existing card. **Auto-plan**: a
 `pi-planner` picks up every card in the Plan lane, explores the repo, and attaches a versioned
 implementation plan written from the shared template ([plan-template.md](skills/pi-kanban/plan-template.md));
 when an answer would genuinely change the plan it asks first (`question` comments, each with a
@@ -96,7 +97,7 @@ re-acquiring the lease, clearing the dead badge, and streaming into the live act
 earlier reasoning and tokens instead of starting from scratch. Commenting on the card remains a fresh
 re-run. If the session file in `~/.pi` is missing, resume safely falls back to a fresh session under the same ID.
 
-Configure all four agents in the web UI (⚙ in the topbar) — settings apply to the next session
+Configure agents in the web UI (⚙ in the topbar) — settings apply to the next session
 without restarting serve:
 
 | field | becomes | notes |
