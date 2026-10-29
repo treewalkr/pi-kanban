@@ -182,6 +182,58 @@ const implB = task({
   createdAt: now() - DAY,
   updatedAt: now() - 90 * MIN,
 });
+const prioHigh = task({
+  id: "b3k9m",
+  title: "fix flaky e2e drop",
+  laneId: "backlog",
+  project: "kanban",
+  priority: "high",
+  position: 220,
+  createdAt: now() - 9 * HOUR,
+  updatedAt: now() - 2 * HOUR,
+  note: "Ship-stopper: red ▲ chip, and `kanban next` picks it first.",
+});
+const prioLow = task({
+  id: "v8x2q",
+  title: "sweep TODO comments",
+  laneId: "backlog",
+  project: "kanban",
+  priority: "low",
+  position: 240,
+  createdAt: now() - 12 * HOUR,
+  updatedAt: now() - 7 * HOUR,
+  note: "Dim ▼ chip — fine whenever.",
+});
+const edgeBlocker = task({
+  id: "e4r7t",
+  title: "land the schema migration",
+  laneId: "implement",
+  project: "kanban",
+  position: 300,
+  createdAt: now() - 20 * HOUR,
+  updatedAt: now() - 80 * MIN,
+  note: "Everything downstream waits on this one.",
+});
+const edgeDependent = task({
+  id: "d9w5y",
+  title: "ship the feature flag",
+  laneId: "backlog",
+  project: "kanban",
+  position: 260,
+  createdAt: now() - 18 * HOUR,
+  updatedAt: now() - 3 * HOUR,
+  note: "Depends on the migration — amber ⛔ chip, card dimmed while it blocks.",
+});
+const edgeDoneDep = task({
+  id: "g6u1i",
+  title: "announce in the changelog",
+  laneId: "backlog",
+  project: "kanban",
+  position: 280,
+  createdAt: now() - 16 * HOUR,
+  updatedAt: now() - 5 * HOUR,
+  note: "Depended on README examples (done) — edge kept, nothing blocking it.",
+});
 const archived = task({
   id: "z1a6b",
   title: "old bootstrap task",
@@ -193,7 +245,7 @@ const archived = task({
   note: "Kept for the archive strip + dimmed card state.",
 });
 
-const TASKS: Task[] = [epic, subA, subB, docsDone, docsChild, plain, waitingQuestion, waitingRerun, waitingCapped, crossChild, working, implA, implB, archived];
+const TASKS: Task[] = [epic, subA, subB, docsDone, docsChild, plain, waitingQuestion, waitingRerun, waitingCapped, crossChild, working, implA, implB, prioHigh, prioLow, edgeBlocker, edgeDependent, edgeDoneDep, archived];
 
 const PLAN: Attachment = {
   id: "pln1",
@@ -282,6 +334,7 @@ function stubMutations(): void {
     if (patch.project !== undefined) t.project = patch.project;
     if (patch.lane !== undefined) t.laneId = laneIdOf(patch.lane);
     if (patch.parent !== undefined) t.parentId = patch.parent ? (taskRef(patch.parent) ?? null) : null;
+    if (patch.priority !== undefined) t.priority = patch.priority;
     t.updatedAt = now();
     if (patch.index !== undefined) reposition(t, patch.index);
     board.tasks = [...board.tasks];
@@ -345,6 +398,7 @@ export function seed(): void {
   board.tasks = TASKS.map((t) => ({ ...t }));
   board.plans = { [epic.id]: { ...PLAN } };
   board.waiting = { [plain.id]: "gate", [waitingQuestion.id]: "question", [waitingRerun.id]: "rerun", [waitingCapped.id]: "capped" };
+  board.blockedBy = { [edgeDependent.id]: [edgeBlocker.id], [edgeDoneDep.id]: [docsChild.id] };
   board.activity = Object.fromEntries(Object.entries(ACTIVITY).map(([k, v]) => [k, { ...v, log: [...v.log] }]));
   board.loading = false;
   board.error = "";
