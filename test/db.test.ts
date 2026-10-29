@@ -45,6 +45,100 @@ test("agentConfig: null → set → roundtrip → replace; unknown role rejected
   expect(() => db.setAgentConfig("worker", {})).toThrow(KanbanError);
 });
 
+test("pools: set → list → replace → delete; caps and field trimming", () => {
+  expect(db.pools()).toEqual([]);
+
+  const saved = db.setPool("heavy", {
+    name: " heavy ",
+    enabled: true,
+    roles: ["builder", "builder"],
+    slots: [
+      { provider: " anthropic ", model: " claude-3-5-sonnet ", thinking: "max" },
+      { provider: "", model: " ", thinking: "" },
+    ],
+  });
+
+  expect(saved).toEqual({
+    id: "heavy",
+    name: "heavy",
+    enabled: true,
+    roles: ["builder"],
+    slots: [{ provider: "anthropic", model: "claude-3-5-sonnet", thinking: "max" }],
+    updatedAt: expect.any(Number),
+  });
+
+  expect(db.pools()).toEqual([saved]);
+
+  // replace updates fields
+  const replaced = db.setPool("heavy", {
+    name: "heavy-renamed",
+    enabled: false,
+    roles: ["builder", "reviewer"],
+    slots: [{ model: "claude-haiku" }],
+  });
+  expect(replaced.name).toBe("heavy-renamed");
+  expect(replaced.enabled).toBe(false);
+  expect(replaced.roles).toEqual(["builder", "reviewer"]);
+  expect(replaced.slots).toEqual([{ model: "claude-haiku" }]);
+  // disabled pools still list in pools()
+  expect(db.pools()).toEqual([replaced]);
+
+  // Validation: empty name
+  expect(() =>
+    db.setPool("p1", { name: "   ", roles: ["builder"], slots: [{ model: "m" }] }),
+  ).toThrow(new KanbanError("pool name must not be empty", "invalid"));
+
+  // Validation: unknown role
+  expect(() =>
+    db.setPool("p1", { name: "p1", roles: ["unknown" as any], slots: [{ model: "m" }] }),
+  ).toThrow(new KanbanError("pool 'p1' must serve 1-4 known roles", "invalid"));
+
+  // Validation: empty roles
+  expect(() =>
+    db.setPool("p1", { name: "p1", roles: [], slots: [{ model: "m" }] }),
+  ).toThrow(new KanbanError("pool 'p1' must serve 1-4 known roles", "invalid"));
+
+  // Validation: 0 slots after trim
+  expect(() =>
+    db.setPool("p1", {
+      name: "p1",
+      roles: ["builder"],
+      slots: [{ provider: "", model: " ", thinking: "" }],
+    }),
+  ).toThrow(new KanbanError("pool 'p1' must have 1-8 slots", "invalid"));
+
+  // Validation: 9 slots
+  const nineSlots = Array.from({ length: 9 }, (_, i) => ({ model: `m-${i}` }));
+  expect(() =>
+    db.setPool("p1", { name: "p1", roles: ["builder"], slots: nineSlots }),
+  ).toThrow(new KanbanError("pool 'p1' must have 1-8 slots", "invalid"));
+
+  // Caps: 13th enabled slot board-wide rejected, but disabled pools don't count
+  // First, create pool1 with 8 enabled slots
+  const eightSlots = Array.from({ length: 8 }, (_, i) => ({ model: `m-${i}` }));
+  db.setPool("p1", { name: "pool 1", enabled: true, roles: ["builder"], slots: eightSlots });
+
+  // Creating a disabled pool with 8 slots works (disabled doesn't count toward 12)
+  db.setPool("p-disabled", { name: "disabled pool", enabled: false, roles: ["planner"], slots: eightSlots });
+
+  // Creating an enabled pool with 5 slots would make total = 8 + 5 = 13 > 12 -> throws
+  const fiveSlots = Array.from({ length: 5 }, (_, i) => ({ model: `m2-${i}` }));
+  expect(() =>
+    db.setPool("p2", { name: "pool 2", enabled: true, roles: ["reviewer"], slots: fiveSlots }),
+  ).toThrow(new KanbanError("board-wide enabled slots would exceed 12", "invalid"));
+
+  // But 4 enabled slots makes total = 8 + 4 = 12 <= 12 -> succeeds
+  const fourSlots = Array.from({ length: 4 }, (_, i) => ({ model: `m2-${i}` }));
+  db.setPool("p2", { name: "pool 2", enabled: true, roles: ["reviewer"], slots: fourSlots });
+
+  // deletePool on missing id throws not-found
+  expect(() => db.deletePool("non-existent")).toThrow(new KanbanError("no pool 'non-existent'", "not-found"));
+
+  // deletePool removes the pool
+  db.deletePool("p1");
+  expect(db.pools().map((p) => p.id)).not.toContain("p1");
+});
+
 test("setCardSession/cardSession roundtrip; deleteTask clears pointer and request", () => {
   const task = db.createTask({ title: "session-test" });
   expect(db.cardSession(task.id)).toBeNull();

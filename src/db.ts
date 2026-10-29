@@ -73,6 +73,21 @@ export interface AgentConfig {
   timeoutMs?: number;
 }
 
+export interface PoolSlot {
+  provider?: string;
+  model?: string;
+  thinking?: AgentThinking;
+}
+
+export interface WorkerPool {
+  id: string;
+  name: string;
+  enabled: boolean;
+  roles: AgentRole[];
+  slots: PoolSlot[];
+  updatedAt: number;
+}
+
 export interface Comment {
   id: string;
   taskId: string;
@@ -199,6 +214,11 @@ CREATE TABLE IF NOT EXISTS card_sessions (
 CREATE TABLE IF NOT EXISTS resume_requests (
   task_id TEXT PRIMARY KEY REFERENCES tasks (id),
   requested_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS worker_pools (
+  id TEXT PRIMARY KEY,
+  config TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 `;
 
@@ -1190,6 +1210,122 @@ export class KanbanDb {
        ON CONFLICT(role) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at`,
     ).run(role, JSON.stringify(clean), Date.now());
     return this.agentConfig(role)!;
+  }
+
+  // ---------- worker pools ----------
+
+  pools(): WorkerPool[] {
+    const rows = this.q("SELECT id, config, updated_at FROM worker_pools ORDER BY rowid").all() as Array<{
+      id: string;
+      config: string;
+      updated_at: number;
+    }>;
+    return rows.map((r) => {
+      const parsed = JSON.parse(r.config);
+      return {
+        id: r.id,
+        name: parsed.name,
+        enabled: Boolean(parsed.enabled),
+        roles: parsed.roles,
+        slots: parsed.slots,
+        updatedAt: r.updated_at,
+      };
+    });
+  }
+
+  pool(id: string): WorkerPool | null {
+    const row = this.q("SELECT id, config, updated_at FROM worker_pools WHERE id = ?").get(id) as
+      | { id: string; config: string; updated_at: number }
+      | undefined;
+    if (!row) return null;
+    const parsed = JSON.parse(row.config);
+    return {
+      id: row.id,
+      name: parsed.name,
+      enabled: Boolean(parsed.enabled),
+      roles: parsed.roles,
+      slots: parsed.slots,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  setPool(id: string, input: { name: string; enabled?: boolean; roles: AgentRole[]; slots: PoolSlot[] }): WorkerPool {
+    const name = input.name?.trim() ?? "";
+    if (!name) throw new KanbanError("pool name must not be empty", "invalid");
+
+    const dedupedRoles: AgentRole[] = [];
+    const seenRoles = new Set<string>();
+    let invalidRole = false;
+    for (const r of input.roles ?? []) {
+      if (!AGENT_ROLES.has(r)) {
+        invalidRole = true;
+        break;
+      }
+      if (!seenRoles.has(r)) {
+        seenRoles.add(r);
+        dedupedRoles.push(r as AgentRole);
+      }
+    }
+    if (invalidRole || dedupedRoles.length === 0 || dedupedRoles.length > 4) {
+      throw new KanbanError(`pool '${id}' must serve 1-4 known roles`, "invalid");
+    }
+
+    const cleanSlots: PoolSlot[] = [];
+    for (const s of input.slots ?? []) {
+      const cleanSlot: PoolSlot = {};
+      if (s.provider?.trim()) cleanSlot.provider = s.provider.trim();
+      if (s.model?.trim()) cleanSlot.model = s.model.trim();
+      if (s.thinking) cleanSlot.thinking = s.thinking;
+      if (cleanSlot.provider !== undefined || cleanSlot.model !== undefined || cleanSlot.thinking !== undefined) {
+        cleanSlots.push(cleanSlot);
+      }
+    }
+    if (cleanSlots.length === 0 || cleanSlots.length > 8) {
+      throw new KanbanError(`pool '${id}' must have 1-8 slots`, "invalid");
+    }
+
+    const enabled = Boolean(input.enabled);
+
+    let totalEnabledSlots = enabled ? cleanSlots.length : 0;
+    for (const p of this.pools()) {
+      if (p.id !== id && p.enabled) {
+        totalEnabledSlots += p.slots.length;
+      }
+    }
+    if (totalEnabledSlots > 12) {
+      throw new KanbanError("board-wide enabled slots would exceed 12", "invalid");
+    }
+
+    const now = Date.now();
+    this.q(
+      `INSERT INTO worker_pools (id, config, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at`,
+    ).run(
+      id,
+      JSON.stringify({
+        name,
+        enabled,
+        roles: dedupedRoles,
+        slots: cleanSlots,
+      }),
+      now,
+    );
+
+    return {
+      id,
+      name,
+      enabled,
+      roles: dedupedRoles,
+      slots: cleanSlots,
+      updatedAt: now,
+    };
+  }
+
+  deletePool(id: string): void {
+    const info = this.q("DELETE FROM worker_pools WHERE id = ?").run(id);
+    if (info.changes === 0) {
+      throw new KanbanError(`no pool '${id}'`, "not-found");
+    }
   }
 
   // ---------- lane writes ----------
