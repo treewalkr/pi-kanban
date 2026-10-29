@@ -4,6 +4,7 @@
   import { api } from "../api";
   import { board } from "./board.svelte";
   import IdChip from "./IdChip.svelte";
+  import { copyText } from "./copy";
   import { renderMarkdown, toggleTaskLine } from "./markdown";
   import { laneColor, timeAgo } from "./util";
 
@@ -12,6 +13,18 @@
   // live copy: refresh replaces board.tasks, so derive everything hierarchy-ish from it
   let me = $derived(board.taskById(task.id) ?? task);
   let plan = $derived(board.plans[task.id]);
+  let pathCopied = $state(false);
+  let pathTimer: ReturnType<typeof setTimeout> | undefined;
+  async function copyPlanPath(e: MouseEvent): Promise<void> {
+    e.preventDefault(); // inside <summary>: keep the plan section's open/closed state
+    const source = plan?.source ?? "";
+    if (!source) return;
+    if (await copyText(source)) {
+      pathCopied = true;
+      clearTimeout(pathTimer);
+      pathTimer = setTimeout(() => (pathCopied = false), 1200);
+    }
+  }
   let ancestors = $derived(board.ancestorsOf(task.id));
   let progress = $derived(board.progressOf(me));
 
@@ -221,8 +234,13 @@
         <details class="detail-plan">
           <summary>
             plan
-            <span class="plan-meta" title="{plan.source}">
-              v{plan.version} · {timeAgo(plan.createdAt)}{#if plan.source} · {plan.source}{/if}
+            <span class="plan-meta">
+              v{plan.version} · {timeAgo(plan.createdAt)}{#if plan.source} · <button
+                class="plan-path"
+                class:copied={pathCopied}
+                title={plan.source}
+                onclick={copyPlanPath}>{#if pathCopied}✓ copied{:else}{plan.source}{/if}</button
+              >{/if}
             </span>
           </summary>
           <div class="detail-note md">{@html renderMarkdown(plan.content)}</div>

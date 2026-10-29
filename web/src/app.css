@@ -1751,6 +1751,28 @@ button.id-copy {
   white-space: nowrap;
 }
 
+.detail-plan .plan-path {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-dim);
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-plan .plan-path:hover {
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+.detail-plan .plan-path.copied {
+  color: var(--accent);
+}
+
 .detail-plan .detail-note.md {
   border: none;
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
