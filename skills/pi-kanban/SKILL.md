@@ -101,11 +101,11 @@ review your own work in that mode unless asked.
 ## Commands
 
 ```
-kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>] [--top]  # new card (Backlog by default; --parent nests it)
-kanban ls [lane] [--project <tag>] [--json]                           # board overview / one lane (children indented)
-kanban next [--project <tag>] [--json]                           # what's next: review → implement → plan → backlog, oldest first
+kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--top]  # new card (Backlog by default; --parent nests it)
+kanban ls [lane] [--project <tag>] [--json]                           # board overview / one lane (children indented; ▲▼ priority, ⛔ blocked)
+kanban next [--project <tag>] [--json]                           # what's next: lane priority, then card priority, then oldest; skips blocked (prints count)
 kanban search <query…> [--project <tag>] [--json]                     # ranked matches: titles, checklist lines, notes, plans
-kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks
+kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers
 kanban attach <id> <plan-file>                                        # attach/version a plan; show prints the latest
 kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff>]  # append to the card's thread
 kanban comments <id>                                                  # read the thread, oldest first
@@ -116,7 +116,7 @@ kanban reject <id> --message <feedback>   # plan gate: reject with feedback → 
 kanban brief <id>                                                     # full pickup context: note, latest plan, thread
 kanban mv <id> <lane> [--pos <1-based>]                               # move / reorder
 kanban mv <id> --next | --prev                                        # advance / pull back one lane
-kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>] [--parent <id>] [--clear-note] [--clear-parent]
+kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--clear-blocked-by] [--clear-note] [--clear-parent]
 kanban done <id>                                                      # shortcut → Done
 kanban archive <id>                                                   # shortcut → Archive (undo: mv <id> <lane>)
 kanban rm <id> [--force]                                              # delete card (a parent needs --force; cascades)
@@ -142,6 +142,19 @@ kanban help | version                                                 # CLI help
   each). `rm` on a parent with children refuses without `--force`, which
   deletes the whole subtree. The web UI nests same-lane children under the
   parent card with a `2/3 ✓` progress badge; `show <id>` prints the tree.
+- **`--priority`**: `high` | `normal` (default) | `low` — the triage tier. It
+  is a badge and a `next` input, not a sort: within a lane, `next` proposes
+  high before normal before low (then oldest). Shows as ▲/▼ chips in the web
+  UI and `ls`; set via `add`/`edit --priority`, or the toggle in the web
+  editor.
+- **`--blocked-by`**: prerequisite edges — `add`/`edit --blocked-by <id>`
+  (repeatable; on `edit` it **replaces** the set, `--clear-blocked-by` empties
+  it). Blocking is soft: a card is blocked while any blocker sits outside Done
+  or Archive; finishing the blocker unblocks it (the edge stays, for history).
+  Self-edges and cycles are refused. Blocked cards print ⛔ in `ls`/`show` and
+  dim in the web UI; `mv` into Plan/Implement warns but never refuses;
+  `next` skips them and prints how many. Edges map dependencies — they don't
+  gate moves or auto-finish anything.
 - **`--note`**: free text, rendered as GitHub-flavored markdown in the web UI —
   handy for acceptance-criteria checklists (`- [ ] …`), tables, code snippets,
   links. For multi-line notes from a shell, pass the text through a quoted
@@ -176,7 +189,9 @@ kanban help | version                                                 # CLI help
 
 Run `kanban next` (add `--project <repo>` on a shared board; `--json` for scripts):
 it prints the proposed card — first match by lane priority (Review →
-Test + Implement → Plan → Backlog), oldest first within the lane. Done,
-Archive and custom lanes are never proposed; an empty answer means the
-board is clear. `kanban brief <id>` picks the proposal up from there. For
-a fuller picture, run `kanban ls` and summarize per lane.
+Test + Implement → Plan → Backlog); within the lane, `high` beats `normal`
+beats `low`, then oldest first. Cards with unfinished blockers are skipped
+and the count printed — unblock them (finish the blocker) or pick from
+`kanban ls`. Done, Archive and custom lanes are never proposed; an empty
+answer means the board is clear. `kanban brief <id>` picks the proposal up
+from there. For a fuller picture, run `kanban ls` and summarize per lane.
