@@ -448,6 +448,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBlocks = opts.maxBlocks ?? DEFAULT_MAX_BLOCKS;
   const maxPlanBlocks = opts.maxPlanBlocks ?? DEFAULT_MAX_PLAN_BLOCKS;
+  const maxParallel = Math.min(8, Math.max(1, parseInt(process.env.KANBAN_AUTOREVIEW_MAX_PARALLEL ?? "", 10) || 1));
 
   const queue: AgentJob[] = [];
   const inFlight = new Set<string>();
@@ -467,6 +468,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     return sessions.size;
   };
   pauseKillers.add(killInFlight);
+  let active = 0;
   let draining = false;
   let stopped = false;
 
@@ -568,89 +570,97 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     void drain();
   }
 
+  async function runJob(job: AgentJob): Promise<void> {
+    const fresh = db.tasks().find((t) => t.id === job.task.id);
+    if (!fresh || roleFor(fresh) !== job.role) return; // state moved on while queued
+    if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {
+      log(`${job.role} ${job.task.id}: lease held by another server — skipping`);
+      return;
+    }
+    inFlight.add(job.task.id);
+    const config = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
+    const flags = agentFlags(job.role, config);
+    const model = flags.includes("--model") ? flags[flags.indexOf("--model") + 1] : "default model";
+    const thinking = flags.includes("--thinking") ? `thinking ${flags[flags.indexOf("--thinking") + 1]}` : "";
+    const skills = config?.skills?.length ? `${config.skills.length} skill${config.skills.length === 1 ? "" : "s"}` : "";
+    log(`${job.role} start ${job.task.id} "${job.task.title}" (${[model, thinking, skills].filter(Boolean).join(" · ")})`);
+    const session: AgentSessionInfo = { taskId: job.task.id, role: job.role, startedAt: Date.now(), log: [] };
+    // stop() must be able to silence the heartbeat even when the spawn
+    // promise never settles (a stuck/fake child) — otherwise the 15s tick
+    // lands on a closed db long after the test (or server) tore down
+    const beat = setInterval(() => db.heartbeatLease(job.task.id, owner), LEASE_HEARTBEAT_MS);
+    const stopBeat = track(() => clearInterval(beat));
+    sessions.set(job.task.id, session);
+    const emit = (line: string): void => {
+      session.log.push(line);
+      if (session.log.length > MAX_LOG_LINES) session.log.shift();
+      log(`${job.role} ${job.task.id} │ ${line}`);
+    };
+    const jobKills = new Set<() => void>();
+    const jobTrack = (kill: () => void): (() => void) => {
+      const untrack = track(kill);
+      jobKills.add(untrack);
+      return () => {
+        jobKills.delete(untrack);
+        untrack();
+      };
+    };
+    let result: SpawnResult = { code: 1 };
+    try {
+      result = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track: jobTrack });
+      if (result.timedOut) emit("timed out — killed");
+      if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
+    } catch (err) {
+      log(`${job.role} ${job.task.id}: spawn error ${(err as Error).message}`);
+      result = { code: 1, stderrTail: `spawn error: ${(err as Error).message}` };
+      if (result.timedOut) emit("timed out — killed");
+      if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
+    } finally {
+      for (const untrack of jobKills) untrack();
+      jobKills.clear();
+      // keep the transcript on the card — the live view evaporates when the session ends
+      if (!stopped && session.log.length > 0) {
+        const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
+        const header = `${AUTHOR_BY_ROLE[job.role]} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
+        try {
+          db.attach(job.task.id, "session", `${header}\n${session.log.join("\n")}`, "autoreview");
+        } catch (err) {
+          log(`${job.role} ${job.task.id}: could not save the session log (${(err as Error).message})`);
+        }
+      }
+      sessions.delete(job.task.id);
+      stopBeat();
+      clearInterval(beat);
+      if (!stopped) {
+        try {
+          db.releaseLease(job.task.id, owner);
+        } catch {
+          /* db may be closed */
+        }
+      }
+    }
+    inFlight.delete(job.task.id);
+    if (!stopped) {
+      try {
+        afterJob(job, result, session);
+      } catch (err) {
+        log(`${job.role} ${job.task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      scan(); // follow the verdict: block → builder, handoff → reviewer
+    }
+  }
+
   async function drain(): Promise<void> {
     if (draining) return;
     draining = true;
     try {
-      while (!stopped && !db.agentsPaused() && queue.length > 0) {
+      while (!stopped && !db.agentsPaused() && queue.length > 0 && active < maxParallel) {
         const job = queue.shift()!;
-        const fresh = db.tasks().find((t) => t.id === job.task.id);
-        if (!fresh || roleFor(fresh) !== job.role) continue; // state moved on while queued
-        if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {
-          log(`${job.role} ${job.task.id}: lease held by another server — skipping`);
-          continue;
-        }
-        inFlight.add(job.task.id);
-        const config = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
-        const flags = agentFlags(job.role, config);
-        const model = flags.includes("--model") ? flags[flags.indexOf("--model") + 1] : "default model";
-        const thinking = flags.includes("--thinking") ? `thinking ${flags[flags.indexOf("--thinking") + 1]}` : "";
-        const skills = config?.skills?.length ? `${config.skills.length} skill${config.skills.length === 1 ? "" : "s"}` : "";
-        log(`${job.role} start ${job.task.id} "${job.task.title}" (${[model, thinking, skills].filter(Boolean).join(" · ")})`);
-        const session: AgentSessionInfo = { taskId: job.task.id, role: job.role, startedAt: Date.now(), log: [] };
-        // stop() must be able to silence the heartbeat even when the spawn
-        // promise never settles (a stuck/fake child) — otherwise the 15s tick
-        // lands on a closed db long after the test (or server) tore down
-        const beat = setInterval(() => db.heartbeatLease(job.task.id, owner), LEASE_HEARTBEAT_MS);
-        const stopBeat = track(() => clearInterval(beat));
-        sessions.set(job.task.id, session);
-        const emit = (line: string): void => {
-          session.log.push(line);
-          if (session.log.length > MAX_LOG_LINES) session.log.shift();
-          log(`${job.role} ${job.task.id} │ ${line}`);
-        };
-        const jobKills = new Set<() => void>();
-        const jobTrack = (kill: () => void): (() => void) => {
-          const untrack = track(kill);
-          jobKills.add(untrack);
-          return () => {
-            jobKills.delete(untrack);
-            untrack();
-          };
-        };
-        let result: SpawnResult = { code: 1 };
-        try {
-          result = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, config, log, emit, track: jobTrack });
-          if (result.timedOut) emit("timed out — killed");
-          if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
-        } catch (err) {
-          log(`${job.role} ${job.task.id}: spawn error ${(err as Error).message}`);
-          result = { code: 1, stderrTail: `spawn error: ${(err as Error).message}` };
-          if (result.timedOut) emit("timed out — killed");
-          if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
-        } finally {
-          for (const untrack of jobKills) untrack();
-          jobKills.clear();
-          // keep the transcript on the card — the live view evaporates when the session ends
-          if (!stopped && session.log.length > 0) {
-            const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
-            const header = `${AUTHOR_BY_ROLE[job.role]} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
-            try {
-              db.attach(job.task.id, "session", `${header}\n${session.log.join("\n")}`, "autoreview");
-            } catch (err) {
-              log(`${job.role} ${job.task.id}: could not save the session log (${(err as Error).message})`);
-            }
-          }
-          sessions.delete(job.task.id);
-          stopBeat();
-          clearInterval(beat);
-          if (!stopped) {
-            try {
-              db.releaseLease(job.task.id, owner);
-            } catch {
-              /* db may be closed */
-            }
-          }
-        }
-        inFlight.delete(job.task.id);
-        if (!stopped) {
-          try {
-            afterJob(job, result, session);
-          } catch (err) {
-            log(`${job.role} ${job.task.id}: ${err instanceof Error ? err.message : String(err)}`);
-          }
-          scan(); // follow the verdict: block → builder, handoff → reviewer
-        }
+        active++;
+        void runJob(job).finally(() => {
+          active--;
+          if (!stopped) void drain();
+        });
       }
     } finally {
       draining = false;
@@ -707,7 +717,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   }
 
   const stopWatch = db.watch(() => scan(), opts.watchIntervalMs ?? 300);
-  log(`enabled — agents run in ${opts.cwd}, timeout ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}`);
+  log(`enabled — agents run in ${opts.cwd}, timeout ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}${maxParallel > 1 ? `, up to ${maxParallel} parallel` : ""}`);
   scan(); // cards already waiting get picked up right away
 
   return {
