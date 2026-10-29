@@ -1,9 +1,11 @@
 <script lang="ts">
   import { agents } from "./agents.svelte";
+  import { pools } from "./pools.svelte";
   import GeneralSettings from "./GeneralSettings.svelte";
   import AgentsSettings from "./AgentsSettings.svelte";
+  import PoolsSettings from "./PoolsSettings.svelte";
 
-  type Section = "general" | "agents";
+  type Section = "general" | "agents" | "pools";
 
   let section = $state<Section>("general");
   // visited sections stay mounted so their form state survives tab switches
@@ -14,6 +16,7 @@
     visited = new Set(visited).add(next);
     section = next;
     if (next === "agents" && !agents.loaded) void agents.load();
+    if (next === "pools" && !pools.loaded) void pools.load();
   }
 
   function close(): void {
@@ -63,6 +66,17 @@
           </svg>
           <span>Agents</span>
         </button>
+        <button
+          type="button"
+          class="settings-tab"
+          aria-current={section === "pools" ? "page" : undefined}
+          onclick={() => activate("pools")}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+          </svg>
+          <span>Pools</span>
+        </button>
       </nav>
       <button type="button" class="settings-close" onclick={close} aria-label="close settings" title="close settings">×</button>
     </div>
@@ -80,6 +94,18 @@
             <p class="settings-loading">
               loading agent settings…
               <button type="button" onclick={() => void agents.load()}>retry</button>
+            </p>
+          {/if}
+        </div>
+      {/if}
+      {#if visited.has("pools")}
+        <div class="settings-section-host" hidden={section !== "pools"}>
+          {#if pools.loaded}
+            <PoolsSettings />
+          {:else}
+            <p class="settings-loading">
+              loading pool settings…
+              <button type="button" onclick={() => void pools.load()}>retry</button>
             </p>
           {/if}
         </div>

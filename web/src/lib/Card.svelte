@@ -102,7 +102,7 @@
             ? "checking plan"
             : board.activity[task.id].role === "planner"
               ? "planning"
-              : "building"} · {timeAgo(board.activity[task.id].startedAt)}
+              : "building"} · {timeAgo(board.activity[task.id].startedAt)}{#if board.activity[task.id].model} · {board.activity[task.id].model}{/if}
       </span>
     {/if}
     {#if board.queued[task.id]}

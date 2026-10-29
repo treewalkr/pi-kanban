@@ -2,12 +2,13 @@
 // singletons so every component renders with zero server, and swaps the
 // mutating store methods for in-memory versions so gallery interactions can
 // never write to the real board over the dev API.
-import type { AgentConfig, AgentRole, Attachment, Lane, LanePatch, Task, TaskPatch } from "../../../src/db";
+import type { AgentConfig, AgentRole, Attachment, Lane, LanePatch, Task, TaskPatch, WorkerPool } from "../../../src/db";
 import type { AgentSessionInfo } from "../../../src/autoreview";
 import type { CatalogModel } from "../../../src/models";
 import { newId, slugify } from "../../../src/ids";
 import { board } from "../lib/board.svelte";
 import { agents } from "../lib/agents.svelte";
+import { pools } from "../lib/pools.svelte";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -389,6 +390,21 @@ function stubMutations(): void {
     agents.configs[role] = config;
     return true;
   };
+
+  pools.save = async (pool: WorkerPool): Promise<boolean> => {
+    const idx = pools.pools.findIndex((p) => p.id === pool.id);
+    if (idx !== -1) {
+      pools.pools[idx] = pool;
+    } else {
+      pools.pools.push(pool);
+    }
+    return true;
+  };
+
+  pools.remove = async (id: string): Promise<boolean> => {
+    pools.pools = pools.pools.filter((p) => p.id !== id);
+    return true;
+  };
 }
 
 // ---------- seed ----------
@@ -421,6 +437,34 @@ export function seed(): void {
   agents.skills = [
     { name: "caveman", description: "Terse caveman voice: answer first, fluff gone, every technical fact kept.", path: "~/.pi/agent/skills/caveman" },
     { name: "tdd", description: "Test-driven development. Red-green-refactor, tests worth keeping.", path: "~/.pi/agent/skills/tdd" },
+  ];
+
+  pools.loaded = true;
+  pools.models = [...CATALOG];
+  pools.pools = [
+    {
+      id: "heavy",
+      name: "heavy",
+      enabled: true,
+      roles: ["builder"],
+      slots: [
+        { provider: "zai", model: "glm-5.3", thinking: "max" },
+        { provider: "zai", model: "glm-5.3", thinking: "max" },
+        { provider: "zai", model: "glm-5.3", thinking: "max" },
+      ],
+      updatedAt: now(),
+    },
+    {
+      id: "light",
+      name: "light",
+      enabled: true,
+      roles: ["planner", "reviewer"],
+      slots: [
+        { provider: "anthropic", model: "claude-haiku-4-5", thinking: "low" },
+        { provider: "anthropic", model: "claude-haiku-4-5", thinking: "low" },
+      ],
+      updatedAt: now(),
+    },
   ];
 
   stubMutations();
