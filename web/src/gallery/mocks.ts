@@ -418,6 +418,10 @@ export function seed(): void {
   agents.configs.reviewer = { provider: "anthropic", model: "claude-sonnet-4-6", thinking: "high", timeoutMs: 40 * 60_000 };
   agents.configs.builder = { provider: "zai", model: "glm-5.3", thinking: "medium", skills: ["~/.pi/agent/skills/tdd"] };
   agents.models = [...CATALOG];
+  agents.skills = [
+    { name: "caveman", description: "Terse caveman voice: answer first, fluff gone, every technical fact kept.", path: "~/.pi/agent/skills/caveman" },
+    { name: "tdd", description: "Test-driven development. Red-green-refactor, tests worth keeping.", path: "~/.pi/agent/skills/tdd" },
+  ];
 
   stubMutations();
 }
