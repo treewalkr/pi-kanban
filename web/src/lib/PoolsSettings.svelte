@@ -145,6 +145,15 @@
             >
               <span class="seg-label">plan reviewer</span>
             </button>
+            <button
+              type="button"
+              class="seg-option"
+              class:on={pool.roles.includes("elaborator")}
+              aria-pressed={pool.roles.includes("elaborator")}
+              onclick={() => toggleRole(pool, "elaborator")}
+            >
+              <span class="seg-label">elaborator</span>
+            </button>
           </div>
         </div>
 

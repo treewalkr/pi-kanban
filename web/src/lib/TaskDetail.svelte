@@ -6,7 +6,7 @@
   import IdChip from "./IdChip.svelte";
   import { copyText } from "./copy";
   import { renderMarkdown, toggleTaskLine } from "./markdown";
-  import { laneColor, timeAgo } from "./util";
+  import { laneColor, roleAuthor, timeAgo } from "./util";
   import { canResume } from "./waiting";
 
   const task = board.editing!;
@@ -250,14 +250,7 @@
         </details>
       {/if}
       {#if queuedJob}
-        {@const author =
-          queuedJob.role === "reviewer"
-            ? "pi-reviewer"
-            : queuedJob.role === "plan-reviewer"
-              ? "pi-plan-reviewer"
-              : queuedJob.role === "planner"
-                ? "pi-planner"
-                : "pi-builder"}
+        {@const author = roleAuthor(queuedJob.role)}
         {@const plural = inFlightCount === 1 ? "" : "s"}
         <div class="detail-activity queued">
           <div class="children-head">
@@ -268,7 +261,7 @@
       {#if live}
         <div class="detail-activity">
           <div class="children-head">
-            {live.role === "reviewer" ? "pi-reviewer" : live.role === "plan-reviewer" ? "pi-plan-reviewer" : live.role === "planner" ? "pi-planner" : "pi-builder"} · live · {timeAgo(live.startedAt)}
+            {roleAuthor(live.role)} · live · {timeAgo(live.startedAt)}
           </div>
           <div class="activity-log" bind:this={logEl}>
             {#each live.log as line, i (i)}

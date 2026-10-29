@@ -105,6 +105,15 @@
       >
         <span class="seg-label">plan reviewer</span>
       </button>
+      <button
+        type="button"
+        class="seg-option"
+        class:on={role === "elaborator"}
+        aria-pressed={role === "elaborator"}
+        onclick={() => switchRole("elaborator")}
+      >
+        <span class="seg-label">elaborator</span>
+      </button>
     </div>
   </section>
 

@@ -301,8 +301,8 @@ class BoardStore {
     this.queued = nextQ;
   }
 
-  async addTask(laneId: string, title: string, project = this.projectFilter, parentId?: string): Promise<boolean> {
-    const { error } = await api.tasks.post({ title, lane: laneId, project: project || undefined, parent: parentId });
+  async addTask(laneId: string, title: string, project = this.projectFilter, parentId?: string, elaborate = false): Promise<boolean> {
+    const { error } = await api.tasks.post({ title, lane: laneId, project: project || undefined, parent: parentId, elaborate: elaborate || undefined });
     if (error) {
       this.fail(error);
       return false;

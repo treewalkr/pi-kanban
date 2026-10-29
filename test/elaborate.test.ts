@@ -46,12 +46,7 @@ function startLoop(spawnFn: SpawnFn, dbFile: string) {
   return handle;
 }
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "kanban-elaborate-"));
-  db = new KanbanDb(join(dir, "t.db"));
-});
-
-afterEach(() => {
+function cleanupLoop() {
   stop?.();
   loopDb?.close();
   writer?.close();
@@ -60,7 +55,15 @@ afterEach(() => {
   loopDb = null;
   writer = null;
   loopDir = "";
+}
 
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "kanban-elaborate-"));
+  db = new KanbanDb(join(dir, "t.db"));
+});
+
+afterEach(() => {
+  cleanupLoop();
   db.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -194,14 +197,7 @@ test("elaborator comments are invisible to lane arming — gate, question, revie
     await sleep(100);
     expect(calls.length).toBe(0);
 
-    stop?.();
-    loopDb?.close();
-    writer?.close();
-    rmSync(loopDir, { recursive: true, force: true });
-    stop = null;
-    loopDb = null;
-    writer = null;
-    loopDir = "";
+    cleanupLoop();
   }
 
   // Leg 2: plan card whose last decision comment is a pi-planner question + pi-elaborator comment
@@ -218,14 +214,7 @@ test("elaborator comments are invisible to lane arming — gate, question, revie
     await sleep(100);
     expect(calls.length).toBe(0);
 
-    stop?.();
-    loopDb?.close();
-    writer?.close();
-    rmSync(loopDir, { recursive: true, force: true });
-    stop = null;
-    loopDb = null;
-    writer = null;
-    loopDir = "";
+    cleanupLoop();
   }
 
   // Leg 3: review card whose last decision comment is a pi-reviewer comment + pi-elaborator comment
@@ -243,14 +232,7 @@ test("elaborator comments are invisible to lane arming — gate, question, revie
     await sleep(100);
     expect(calls.length).toBe(0);
 
-    stop?.();
-    loopDb?.close();
-    writer?.close();
-    rmSync(loopDir, { recursive: true, force: true });
-    stop = null;
-    loopDb = null;
-    writer = null;
-    loopDir = "";
+    cleanupLoop();
   }
 });
 
@@ -327,14 +309,7 @@ test("elaboration success records the agent comment; death posts the retry hint"
     expect(comments.at(-1)?.author).toBe(ELABORATOR_AUTHOR);
     expect(comments.some((c) => c.body.startsWith("session died:"))).toBe(false);
 
-    stop?.();
-    loopDb?.close();
-    writer?.close();
-    rmSync(loopDir, { recursive: true, force: true });
-    stop = null;
-    loopDb = null;
-    writer = null;
-    loopDir = "";
+    cleanupLoop();
   }
 
   // Failure leg
@@ -360,14 +335,7 @@ test("elaboration success records the agent comment; death posts the retry hint"
     expect(last?.body).toContain("session died: elaboration");
     expect(last?.body).toContain(`kanban elaborate ${card.id}`);
 
-    stop?.();
-    loopDb?.close();
-    writer?.close();
-    rmSync(loopDir, { recursive: true, force: true });
-    stop = null;
-    loopDb = null;
-    writer = null;
-    loopDir = "";
+    cleanupLoop();
   }
 });
 

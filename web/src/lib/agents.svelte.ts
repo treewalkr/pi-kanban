@@ -11,6 +11,7 @@ const emptyConfigs = (): Record<AgentRole, AgentConfig> => ({
   reviewer: {},
   builder: {},
   "plan-reviewer": {},
+  elaborator: {},
 });
 
 /** Per-role agent settings for the auto-agent loop; failures surface via the board toast. */
@@ -45,6 +46,7 @@ class AgentsStore {
         reviewer: agents.data.reviewer ?? {},
         builder: agents.data.builder ?? {},
         "plan-reviewer": agents.data["plan-reviewer"] ?? {},
+        elaborator: agents.data.elaborator ?? {},
       };
       this.loaded = true;
     }

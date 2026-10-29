@@ -18,11 +18,20 @@ export function timeAgo(ts: number): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
-export function roleVerb(role: AgentRole): "reviewing" | "checking plan" | "planning" | "building" {
+export function roleVerb(role: AgentRole): "reviewing" | "checking plan" | "planning" | "building" | "elaborating" {
   if (role === "reviewer") return "reviewing";
   if (role === "plan-reviewer") return "checking plan";
   if (role === "planner") return "planning";
+  if (role === "elaborator") return "elaborating";
   return "building";
+}
+
+export function roleAuthor(role: AgentRole): string {
+  if (role === "reviewer") return "pi-reviewer";
+  if (role === "plan-reviewer") return "pi-plan-reviewer";
+  if (role === "planner") return "pi-planner";
+  if (role === "elaborator") return "pi-elaborator";
+  return "pi-builder";
 }
 
 export function queuedChip(job: QueuedJobInfo): { label: string; title: string } {

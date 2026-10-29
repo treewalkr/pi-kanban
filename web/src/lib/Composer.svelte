@@ -5,6 +5,7 @@
   let { lane, onclose }: { lane: Lane; onclose: () => void } = $props();
 
   let value = $state("");
+  let elaborate = $state(false);
   let el: HTMLTextAreaElement;
 
   function autofocus(node: HTMLElement) {
@@ -14,7 +15,7 @@
   async function submit() {
     const title = value.trim();
     if (!title) return onclose();
-    if (!(await board.addTask(lane.id, title))) return; // keep the text so a failed post isn't lost
+    if (!(await board.addTask(lane.id, title, undefined, undefined, elaborate))) return; // keep the text so a failed post isn't lost
     value = "";
     el.focus();
   }
@@ -40,6 +41,11 @@
   <div class="composer-actions">
     {#if board.projectFilter}<span class="hint">project: {board.projectFilter}</span>{/if}
     <span class="spacer"></span>
+    <button
+      class="ghost"
+      aria-pressed={elaborate}
+      title="queue a pi-elaborator session to expand the note (intent + acceptance criteria)"
+      onclick={() => (elaborate = !elaborate)}>✨ elaborate</button>
     <button class="ghost" onclick={onclose}>close</button>
   </div>
 </div>
