@@ -18,6 +18,40 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("GET/PUT /agents/pause roundtrip; bad body 422", async () => {
+  const app = createApp(db);
+  const before = (await (await app.handle(new Request("http://localhost/agents/pause"))).json()) as { paused: boolean };
+  expect(before.paused).toBe(false);
+
+  const on = await app.handle(
+    new Request("http://localhost/agents/pause", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paused: true }),
+    }),
+  );
+  expect(on.status).toBe(200);
+  expect(((await on.json()) as { paused: boolean }).paused).toBe(true);
+
+  const bad = await app.handle(
+    new Request("http://localhost/agents/pause", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paused: "yes" }),
+    }),
+  );
+  expect(bad.status).toBe(422); // paused must be a boolean
+
+  const off = await app.handle(
+    new Request("http://localhost/agents/pause", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paused: false }),
+    }),
+  );
+  expect(((await off.json()) as { paused: boolean }).paused).toBe(false);
+});
+
 test("/events streams an initial sync, then a change on API mutations", async () => {
   const app = createApp(db);
   const task = db.createTask({ title: "one" });

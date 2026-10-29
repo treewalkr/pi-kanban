@@ -173,6 +173,10 @@ CREATE TABLE IF NOT EXISTS agent_leases (
   boot_id INTEGER NOT NULL,
   heartbeat_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS board_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 export const DEFAULT_LANES: Array<Omit<Lane, "position">> = [
@@ -814,6 +818,21 @@ export class KanbanDb {
   agentConfig(role: string): AgentConfig | null {
     const row = this.q("SELECT config FROM agent_configs WHERE role = ?").get(role) as { config: string } | null;
     return row ? (JSON.parse(row.config) as AgentConfig) : null;
+  }
+
+  // ---------- board state ----------
+
+  /** True when agent sessions are paused: every auto-agent loop (any process) must refuse to spawn until cleared. */
+  agentsPaused(): boolean {
+    const row = this.q("SELECT value FROM board_state WHERE key = 'agents_paused'").get() as { value: string } | undefined;
+    return row?.value === "1";
+  }
+
+  setAgentsPaused(paused: boolean): boolean {
+    this.q(
+      "INSERT INTO board_state (key, value) VALUES ('agents_paused', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(paused ? "1" : "0");
+    return this.agentsPaused();
   }
 
   // ---------- agent session leases ----------

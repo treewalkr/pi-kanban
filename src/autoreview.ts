@@ -96,6 +96,27 @@ export function activitySnapshot(): AgentSessionInfo[] {
   return [...activityProviders].flatMap((provide) => provide());
 }
 
+const pauseKillers = new Set<() => number>();
+
+/**
+ * Kill every in-flight agent session in this process (the pause action). The
+ * board-level paused flag (db.agentsPaused) is what stops new spawns — in every
+ * process, restarts included — this only ends sessions already running here.
+ * Returns how many were killed. In-flight sessions in other processes run to
+ * completion; their loops then refuse the next spawn.
+ */
+export function killAgentSessions(): number {
+  let killed = 0;
+  for (const kill of pauseKillers) {
+    try {
+      killed += kill();
+    } catch {
+      /* already gone */
+    }
+  }
+  return killed;
+}
+
 /**
  * One pi JSONL event (`--mode json`) → one short log line, or null for noise
  * (usage churn, text deltas). Unknown events carrying errorMessage render as
@@ -433,6 +454,19 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const sessions = new Map<string, AgentSessionInfo>();
   const provide = (): AgentSessionInfo[] => [...sessions.values()];
   activityProviders.add(provide);
+  // kills holds cleanup handles (spawn kills *and* heartbeat clears), so the
+  // session count comes from `sessions` — the in-flight map
+  const killInFlight = (): number => {
+    for (const kill of kills) {
+      try {
+        kill();
+      } catch {
+        /* already gone */
+      }
+    }
+    return sessions.size;
+  };
+  pauseKillers.add(killInFlight);
   let draining = false;
   let stopped = false;
 
@@ -498,7 +532,10 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   };
 
   function scan(): void {
-    if (stopped) return;
+    // the board-level pause gates every loop: no scan work, no capped-cap
+    // comments, nothing — until the flag clears (the pause write itself wakes
+    // the watcher on resume)
+    if (stopped || db.agentsPaused()) return;
     const lanes = new Set(db.lanes().map((l) => l.id));
     if (!lanes.has("review") || !lanes.has("implement")) return;
     for (const task of db.tasks()) {
@@ -535,7 +572,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     if (draining) return;
     draining = true;
     try {
-      while (!stopped && queue.length > 0) {
+      while (!stopped && !db.agentsPaused() && queue.length > 0) {
         const job = queue.shift()!;
         const fresh = db.tasks().find((t) => t.id === job.task.id);
         if (!fresh || roleFor(fresh) !== job.role) continue; // state moved on while queued
@@ -551,7 +588,11 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         const skills = config?.skills?.length ? `${config.skills.length} skill${config.skills.length === 1 ? "" : "s"}` : "";
         log(`${job.role} start ${job.task.id} "${job.task.title}" (${[model, thinking, skills].filter(Boolean).join(" · ")})`);
         const session: AgentSessionInfo = { taskId: job.task.id, role: job.role, startedAt: Date.now(), log: [] };
+        // stop() must be able to silence the heartbeat even when the spawn
+        // promise never settles (a stuck/fake child) — otherwise the 15s tick
+        // lands on a closed db long after the test (or server) tore down
         const beat = setInterval(() => db.heartbeatLease(job.task.id, owner), LEASE_HEARTBEAT_MS);
+        const stopBeat = track(() => clearInterval(beat));
         sessions.set(job.task.id, session);
         const emit = (line: string): void => {
           session.log.push(line);
@@ -591,6 +632,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
             }
           }
           sessions.delete(job.task.id);
+          stopBeat();
           clearInterval(beat);
           if (!stopped) {
             try {
@@ -674,6 +716,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       stopped = true;
       stopWatch();
       activityProviders.delete(provide);
+      pauseKillers.delete(killInFlight);
       // a restart/shutdown kill must not leave the board silent — trace it on
       // every in-flight card (the 10/29 incident: force-restart killed a
       // planner and the card looked untouched, "is it done?" was unanswerable)

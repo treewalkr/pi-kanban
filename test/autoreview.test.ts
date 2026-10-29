@@ -18,6 +18,7 @@ import {
   deathReason,
   durationFor,
   formatPiEvent,
+  killAgentSessions,
   MAX_SKILL_CHARS,
   plannerPrompt,
   planReviewerPrompt,
@@ -131,6 +132,49 @@ describe("skillActivationPrompt", () => {
     const body = out.slice(out.indexOf("\n\n") + 2).replace(/\n<\/skill>$/, "");
     expect(body.length).toBe(MAX_SKILL_CHARS);
     expect(warns[0]).toContain("truncated");
+  });
+});
+
+describe("agent pause", () => {
+  test("a paused board spawns nothing; unpausing resumes on the unpause write itself", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w);
+    w.setAgentsPaused(true);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile); // startup scan is gated too
+    w.createTask({ title: "noise" }); // watcher fires — still nothing
+    await sleep(200);
+    expect(calls.length).toBe(0);
+
+    w.setAgentsPaused(false); // cross-connection write wakes the loop's watcher
+    await sleep(200);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("reviewer");
+    calls[0].finish({ code: 0 });
+  });
+
+  test("killAgentSessions ends in-flight sessions through the pause registry", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    let killed = false;
+    let resolveSpawn!: (r: SpawnResult) => void;
+    const spawnFn: SpawnFn = (_job, ctx) => {
+      ctx.track(() => {
+        killed = true;
+        resolveSpawn({ code: 143 });
+      });
+      return new Promise<SpawnResult>((r) => (resolveSpawn = r));
+    };
+    start(spawnFn, dbFile);
+    await sleep(150); // the reviewer session is in flight
+
+    expect(killAgentSessions()).toBe(1);
+    expect(killed).toBe(true);
+    await sleep(50);
+    // the killed session leaves a death trace; its own comment disarms the card
+    const last = w.comments(card.id).at(-1)!;
+    expect(last.author).toBe(REVIEWER_AUTHOR);
+    expect(last.body).toContain("comment on this card to re-trigger");
   });
 });
 

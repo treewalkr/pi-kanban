@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type Attachment, type Board, type Comment, type Lane, type Task } from "./db";
-import { activitySnapshot } from "./autoreview";
+import { activitySnapshot, killAgentSessions } from "./autoreview";
 import { listPiModels } from "./models";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 
@@ -341,6 +341,19 @@ export const createApp = (
         builder: db.agentConfig("builder"),
         "plan-reviewer": db.agentConfig("plan-reviewer"),
       }),
+    )
+    .get("/agents/pause", (): { paused: boolean } => ({ paused: db.agentsPaused() }))
+    .put(
+      "/agents/pause",
+      ({ body }): { paused: boolean } => {
+        const paused = db.setAgentsPaused(body.paused);
+        if (paused) {
+          const killed = killAgentSessions();
+          if (killed > 0) console.log(`[autoreview] paused — killed ${killed} in-flight session${killed === 1 ? "" : "s"}`);
+        }
+        return { paused };
+      },
+      { body: t.Object({ paused: t.Boolean() }) },
     )
     .get("/pi-models", async (): Promise<{ models: Awaited<ReturnType<typeof listPiModels>> }> => ({
       models: await listPiModels(),
