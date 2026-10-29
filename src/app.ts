@@ -221,7 +221,7 @@ export const createApp = (
       "/tasks/:id/comments",
       ({ params, body, status, set }): Comment => {
         try {
-          const comment = db.createComment(params.id, body);
+          const { comment } = db.comment(params.id, body);
           set.status = 201;
           return comment;
         } catch (e) {

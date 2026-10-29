@@ -674,6 +674,10 @@ test("waiting is null outside the plan lane whatever the thread says", () => {
   const impl = db.createTask({ title: "i", lane: "implement" });
   db.createComment(impl.id, { author: PLAN_REVIEWER_AUTHOR, kind: "review", body: "plan review: pass — ok" });
   expect(db.waiting(impl.id)).toBeNull();
+
+  const parked = db.createTask({ title: "p", lane: "waiting" });
+  db.createComment(parked.id, { author: "pi-planner", kind: "question", body: "hmm?" });
+  expect(db.waiting(parked.id)).toBe("question");
 });
 
 test("session-death comments mark a card dead on any lane", () => {
@@ -712,12 +716,14 @@ test("board() ships a sparse waiting map keyed by task id", () => {
   db.planReview(gate.id, { verdict: "pass", message: "ok", author: PLAN_REVIEWER_AUTHOR });
   const question = db.createTask({ title: "q", lane: "plan" });
   db.createComment(question.id, { author: "pi-planner", kind: "question", body: "sse?" });
+  const parked = db.createTask({ title: "parked", lane: "waiting" });
+  db.createComment(parked.id, { author: "pi-planner", kind: "question", body: "which?" });
   const idle = db.createTask({ title: "idle", lane: "plan" }); // plan lane, nothing owed
   const backlog = db.createTask({ title: "x" }); // question shape, wrong lane
   db.createComment(backlog.id, { author: "pi-planner", kind: "question", body: "ignored" });
 
   const { waiting } = db.board();
-  expect(waiting).toEqual({ [gate.id]: "gate", [question.id]: "question" });
+  expect(waiting).toEqual({ [gate.id]: "gate", [question.id]: "question", [parked.id]: "question" });
   expect(waiting).toEqual(db.waitingStates());
   expect(waiting[backlog.id]).toBeUndefined();
   expect(waiting[idle.id]).toBeUndefined();

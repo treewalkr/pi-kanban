@@ -340,9 +340,17 @@ async function main(): Promise<number> {
         if (!idRef || !body) {
           throw new KanbanError("usage: kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]", "invalid");
         }
-        const comment = db.createComment(idRef, { body, author: str(flags, "author"), kind: str(flags, "kind") });
+        const { comment, task, moved } = db.comment(idRef, { body, author: str(flags, "author"), kind: str(flags, "kind") });
         if (json) jsonOut(comment);
-        else console.log(commentLine(comment));
+        else {
+          console.log(commentLine(comment));
+          if (moved === "parked") {
+            console.log(c.hex("#bc8cff", "☉ parked in Waiting on you — reply to return it"));
+          } else if (moved === "returned") {
+            const lane = db.resolveLane(task.laneId);
+            console.log(c.hex("#bc8cff", `↩ returned to ${lane.name}`));
+          }
+        }
         return 0;
       }
 

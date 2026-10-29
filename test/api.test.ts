@@ -208,6 +208,32 @@ test("GET/POST /tasks/:id/comments thread a card; unknown task 404s, bad body 4x
   expect(badKind.status).toBe(422);
 });
 
+test("POST comment on a parked card returns it to its lane", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "hitl card", lane: "implement" });
+  db.comment(task.id, { kind: "question", body: "which api?" });
+  expect(db.resolveTask(task.id).laneId).toBe("waiting");
+  expect(db.resolveTask(task.id).previousLane).toBe("implement");
+
+  const reply = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ body: "use v2 api" }),
+    }),
+  );
+  expect(reply.status).toBe(201);
+  const comment = (await reply.json()) as any;
+  expect(comment.body).toBe("use v2 api");
+  expect(comment.author).toBe("user");
+
+  const boardRes = await app.handle(new Request("http://localhost/board"));
+  const board = (await boardRes.json()) as any;
+  const returnedTask = board.tasks.find((t: any) => t.id === task.id);
+  expect(returnedTask.laneId).toBe("implement");
+  expect(returnedTask.previousLane).toBeNull();
+});
+
 test("POST /tasks/:id/approve and /reject: the plan gate over HTTP", async () => {
   const app = createApp(db);
   const task = db.createTask({ title: "gate me", lane: "plan" });

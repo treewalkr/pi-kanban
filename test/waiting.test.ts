@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { KanbanDb, type WaitingState } from "../src/db";
 import { canResume, waitingBadge } from "../web/src/lib/waiting";
-import type { WaitingState } from "../src/db";
 
 test("waitingBadge renders each state with the exact label and title", () => {
   expect(waitingBadge("gate", false)).toEqual({
@@ -59,4 +62,106 @@ test("canResume is true only for dead-and-not-busy", () => {
   expect(canResume("dead", true)).toBe(false);
   expect(canResume(undefined, false)).toBe(false);
   expect(canResume(undefined, true)).toBe(false);
+});
+
+test("db.comment parks on question and returns on human reply", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kanban-waiting-test-"));
+  const db = new KanbanDb(join(dir, "t.db"));
+  try {
+    const custom = db.createLane({ name: "Custom" });
+    for (const lane of ["plan", "implement", "review", custom.id]) {
+      const task = db.createTask({ title: `task in ${lane}`, lane });
+      const parkRes = db.comment(task.id, { kind: "question", body: "need input", author: "pi-planner" });
+      expect(parkRes.moved).toBe("parked");
+      expect(parkRes.task.laneId).toBe("waiting");
+      expect(parkRes.task.previousLane).toBe(lane);
+      expect(db.comments(task.id)).toHaveLength(1);
+
+      const returnRes = db.comment(task.id, { body: "here is input", author: "user" });
+      expect(returnRes.moved).toBe("returned");
+      expect(returnRes.task.laneId).toBe(lane);
+      expect(returnRes.task.previousLane).toBeNull();
+      expect(db.comments(task.id)).toHaveLength(2);
+    }
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cleared previous_lane never bounces", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kanban-waiting-test-"));
+  const db = new KanbanDb(join(dir, "t.db"));
+  try {
+    const task = db.createTask({ title: "roundtrip", lane: "implement" });
+    db.comment(task.id, { kind: "question", body: "question?" });
+    const returned = db.comment(task.id, { body: "answer" });
+    expect(returned.task.laneId).toBe("implement");
+    expect(returned.task.previousLane).toBeNull();
+
+    db.moveTask(task.id, "waiting");
+    const inWaiting = db.resolveTask(task.id);
+    expect(inWaiting.laneId).toBe("waiting");
+    expect(inWaiting.previousLane).toBeNull();
+
+    const commentRes = db.comment(task.id, { body: "another human comment" });
+    expect(commentRes.moved).toBeNull();
+    expect(commentRes.task.laneId).toBe("waiting");
+    expect(commentRes.task.previousLane).toBeNull();
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("park/return edge rules", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kanban-waiting-test-"));
+  const db = new KanbanDb(join(dir, "t.db"));
+  try {
+    const manual = db.createTask({ title: "manual", lane: "backlog" });
+    db.moveTask(manual.id, "waiting");
+    expect(db.resolveTask(manual.id).previousLane).toBeNull();
+    const c1 = db.comment(manual.id, { body: "hello", author: "human" });
+    expect(c1.moved).toBeNull();
+    expect(c1.task.laneId).toBe("waiting");
+
+    const parked = db.createTask({ title: "parked", lane: "implement" });
+    db.comment(parked.id, { kind: "question", body: "question?" });
+    const piComment = db.comment(parked.id, { body: "agent chatting", author: "pi-builder" });
+    expect(piComment.moved).toBeNull();
+    expect(piComment.task.laneId).toBe("waiting");
+    expect(piComment.task.previousLane).toBe("implement");
+
+    const q2 = db.comment(parked.id, { kind: "question", body: "second question?", author: "user" });
+    expect(q2.moved).toBeNull();
+    expect(q2.task.laneId).toBe("waiting");
+    expect(q2.task.previousLane).toBe("implement");
+
+    for (const lane of ["done", "archive"]) {
+      const card = db.createTask({ title: `in ${lane}`, lane });
+      const qDone = db.comment(card.id, { kind: "question", body: "question on done" });
+      expect(qDone.moved).toBeNull();
+      expect(qDone.task.laneId).toBe(lane);
+      expect(qDone.task.previousLane).toBeNull();
+    }
+
+    const customLane = db.createLane({ name: "Temporary" });
+    const customCard = db.createTask({ title: "in temp", lane: customLane.id });
+    db.comment(customCard.id, { kind: "question", body: "temp question?" });
+    expect(db.resolveTask(customCard.id).laneId).toBe("waiting");
+    expect(db.resolveTask(customCard.id).previousLane).toBe(customLane.id);
+    db.deleteLane(customLane.id);
+    const deletedReturn = db.comment(customCard.id, { body: "answer after lane deleted" });
+    expect(deletedReturn.moved).toBe("returned");
+    expect(deletedReturn.task.laneId).toBe("backlog");
+    expect(deletedReturn.task.previousLane).toBeNull();
+
+    const parkedForStates = db.createTask({ title: "states", lane: "implement" });
+    db.comment(parkedForStates.id, { kind: "question", body: "states?" });
+    expect(db.waiting(parkedForStates.id)).toBe("question");
+    expect(db.waitingStates()[parkedForStates.id]).toBe("question");
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

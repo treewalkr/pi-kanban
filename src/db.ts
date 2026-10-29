@@ -1058,15 +1058,15 @@ export class KanbanDb {
     return row.n;
   }
 
-  /** Why this card waits on the human; null unless it is a Plan-lane card or has a dead session. */
+  /** Why this card waits on the human; null unless it is a Plan-lane card, waiting-lane card, or has a dead session. */
   waiting(taskRef: string): WaitingState | null {
     const task = this.resolveTask(taskRef);
     const last = this.comments(task.id).at(-1);
     const state = last ? waitingFromLastComment(last) : null;
-    return task.laneId === "plan" || state === "dead" ? state : null;
+    return task.laneId === "plan" || task.laneId === WAITING_LANE_ID || state === "dead" ? state : null;
   }
 
-  /** Waiting state per card (non-null only, plan lane or dead session), keyed by task id — the shape the board payload ships. */
+  /** Waiting state per card (non-null only, plan lane, waiting lane, or dead session), keyed by task id — the shape the board payload ships. */
   waitingStates(): Record<string, WaitingState> {
     // MAX(rowid) picks the last-posted comment per card — comments are append-only
     const rows = this.q(
@@ -1079,12 +1079,53 @@ export class KanbanDb {
     const out: Record<string, WaitingState> = {};
     for (const r of rows) {
       const state = waitingFromLastComment({ author: r.author, kind: r.kind as CommentKind, body: r.body });
-      if (state && (r.lane_id === "plan" || state === "dead")) out[r.task_id] = state;
+      if (state && (r.lane_id === "plan" || r.lane_id === WAITING_LANE_ID || state === "dead")) out[r.task_id] = state;
     }
     return out;
   }
 
   // ---------- comments ----------
+
+  /** Post a comment with the HITL park/return contract, atomically:
+   *  - kind "question" on a card outside waiting/done/archive parks it
+   *    (previous_lane ← home lane, lane → waiting), any author;
+   *  - a human (non-pi-*) non-question comment on a parked card returns it to
+   *    previous_lane and clears it (deleted lane → backlog; no previous_lane → stays);
+   *  - done/archive cards are never parked. */
+  comment(taskRef: string, input: { author?: string; kind?: string; body: string }): {
+    comment: Comment;
+    task: Task;
+    moved: "parked" | "returned" | null;
+  } {
+    let task = this.resolveTask(taskRef);
+    let moved: "parked" | "returned" | null = null;
+    let createdComment!: Comment;
+
+    this.db.transaction(() => {
+      createdComment = this.createComment(task.id, input);
+      const isQuestion = createdComment.kind === "question";
+      const isHuman = !createdComment.author.startsWith("pi-");
+
+      if (isQuestion && task.laneId !== WAITING_LANE_ID && !UNBLOCKED_LANES.includes(task.laneId as any)) {
+        const homeLane = task.laneId;
+        this.updateTask(task.id, { lane: WAITING_LANE_ID });
+        this.q("UPDATE tasks SET previous_lane = ? WHERE id = ?").run(homeLane, task.id);
+        moved = "parked";
+      } else if (task.laneId === WAITING_LANE_ID && task.previousLane && isHuman && !isQuestion) {
+        let target = "backlog";
+        try {
+          target = this.resolveLane(task.previousLane).id;
+        } catch {
+          target = "backlog";
+        }
+        this.updateTask(task.id, { lane: target });
+        moved = "returned";
+      }
+      task = this.resolveTask(task.id);
+    })();
+
+    return { comment: createdComment, task, moved };
+  }
 
   /** Append to a card's thread; kind and author are normalized here so every writer agrees. */
   createComment(taskRef: string, input: { author?: string; kind?: string; body: string }): Comment {
