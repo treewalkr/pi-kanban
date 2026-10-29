@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { KanbanDb, KanbanError, defaultDbPath, type Task, type TaskPatch } from "./db";
+import { KanbanDb, KanbanError, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
 import { c, commentLine, commentThread, laneList, listLanes, searchResults, taskDetail, taskLine } from "./render";
 import { searchBoard } from "./search";
 
@@ -10,7 +10,8 @@ const VERSION = "0.6.0";
 const HELP = `kanban ${VERSION} — task board for the pi agent
 
 usage:
-  kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>] [--top]
+  kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>]
+                      [--priority <high|normal|low>] [--blocked-by <id>]… [--top]
   kanban ls [lane] [--project <tag>] [--json]
   kanban next [--project <tag>] [--json]  (what's next: review → implement → plan → backlog, oldest first)
   kanban search <query…> [--project <tag>] [--json]
@@ -26,7 +27,8 @@ usage:
   kanban brief <id>                         (pickup context: note, plan, thread)
   kanban mv <id> <lane> [--pos <1-based>]     kanban mv <id> --next | --prev
   kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>]
-                          [--parent <id>] [--clear-note] [--clear-parent]
+                          [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>…]
+                          [--clear-note] [--clear-parent] [--clear-blocked-by]
   kanban done <id>
   kanban archive <id>                        (undo: mv <id> <lane>)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
@@ -52,9 +54,9 @@ interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message"]);
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass"]);
-const MULTI_FLAGS = new Set(["finding"]); // repeatable: each occurrence appends one value
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority"]);
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by"]);
+const MULTI_FLAGS = new Set(["finding", "blocked-by"]); // repeatable: each occurrence appends one value
 
 function parse(argv: string[]): Parsed {
   const flags: Record<string, string | true | string[]> = {};
@@ -200,12 +202,15 @@ async function main(): Promise<number> {
       case "add": {
         const title = positional.join(" ");
         if (!title) throw new KanbanError("usage: kanban add <title…>", "invalid");
+        const blockedBy = Array.isArray(flags["blocked-by"]) ? flags["blocked-by"] : undefined;
         const task = db.createTask({
           title,
           note: str(flags, "note"),
           lane: str(flags, "lane"),
           project,
           parent: str(flags, "parent"),
+          priority: str(flags, "priority"),
+          blockedBy,
           index: flags.top ? 0 : (str(flags, "pos") ? Number(str(flags, "pos")) - 1 : undefined),
         });
         if (json) jsonOut(task);
@@ -220,8 +225,12 @@ async function main(): Promise<number> {
           .tasks()
           .filter((t) => (laneRef ? t.laneId === db.resolveLane(laneRef).id : true))
           .filter((t) => (project ? t.project === project : true));
-        if (json) jsonOut(tasks);
-        else console.log(listLanes(db, laneRef, project));
+        if (json) {
+          const map = db.blockedByMap();
+          jsonOut(tasks.map((t) => ({ ...t, blockedBy: map[t.id] ?? [] })));
+        } else {
+          console.log(listLanes(db, laneRef, project));
+        }
         return 0;
       }
 
@@ -254,8 +263,16 @@ async function main(): Promise<number> {
 
       case "show": {
         const task = db.resolveTask(positional[0] ?? "");
-        if (json) jsonOut(task);
-        else console.log(taskDetail(db, task));
+        if (json) {
+          const map = db.blockedByMap();
+          jsonOut({
+            ...task,
+            blockedBy: map[task.id] ?? [],
+            blocking: db.blocking(task.id).map((t) => t.id),
+          });
+        } else {
+          console.log(taskDetail(db, task));
+        }
         return 0;
       }
 
@@ -392,7 +409,15 @@ async function main(): Promise<number> {
         const pos = str(flags, "pos");
         const moved = db.moveTask(task.id, laneRef, pos ? Number(pos) - 1 : undefined);
         if (json) jsonOut(moved);
-        else console.log(taskLine(db, moved));
+        else {
+          console.log(taskLine(db, moved));
+          if (moved.laneId === "plan" || moved.laneId === "implement") {
+            const blockers = db.blockers(moved.id).filter((b) => !UNBLOCKED_LANES.includes(b.laneId as any));
+            if (blockers.length > 0) {
+              console.log(c.hex("#d29922", `⚠ blocked by: ${blockers.map((b) => b.id).join(", ")}`));
+            }
+          }
+        }
         return 0;
       }
 
@@ -406,9 +431,12 @@ async function main(): Promise<number> {
         if (str(flags, "lane") !== undefined) patch.lane = str(flags, "lane");
         if (str(flags, "parent") !== undefined) patch.parent = str(flags, "parent");
         if (flags["clear-parent"]) patch.parent = null;
+        if (str(flags, "priority") !== undefined) patch.priority = str(flags, "priority") as Priority;
+        if (Array.isArray(flags["blocked-by"])) patch.blockedBy = flags["blocked-by"];
+        if (flags["clear-blocked-by"]) patch.blockedBy = [];
         if (Object.keys(patch).length === 0) {
           throw new KanbanError(
-            "nothing to edit — pass --title, --note, --project, --lane, --parent or --clear-note/--clear-parent",
+            "nothing to edit — pass --title, --note, --project, --lane, --parent, --priority, --blocked-by or clear flags",
             "invalid",
           );
         }

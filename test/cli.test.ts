@@ -464,3 +464,92 @@ test("stop: SIGTERMs a live kanban server and frees the port; quiet when none", 
   expect(none.code).toBe(0);
   expect(none.stdout).toContain("no server listening");
 }, 15_000);
+
+test("triage: priority and blocked-by CLI flags, mv warning, ls glyphs, and show detail", async () => {
+  const proj = "triage-cli-test";
+
+  // Create blocker cards
+  const b1Json = JSON.parse((await cli("add", "blocker one", "--project", proj, "--json")).stdout) as Task;
+  const b2Json = JSON.parse((await cli("add", "blocker two", "--project", proj, "--json")).stdout) as Task;
+
+  // Add card with --priority and multiple --blocked-by
+  const depAdd = await cli(
+    "add",
+    "urgent dependent",
+    "--project",
+    proj,
+    "--priority",
+    "high",
+    "--blocked-by",
+    b1Json.id,
+    "--blocked-by",
+    b2Json.id,
+    "--json",
+  );
+  expect(depAdd.code).toBe(0);
+  const dep = JSON.parse(depAdd.stdout) as Task;
+  expect(dep.priority).toBe("high");
+
+  // show prints priority and blocked by lines
+  const show1 = await cli("show", dep.id);
+  expect(show1.code).toBe(0);
+  expect(show1.stdout).toContain("priority: high");
+  expect(show1.stdout).toContain(`blocked by: ${b1Json.id}  blocker one`);
+  expect(show1.stdout).toContain(`blocked by: ${b2Json.id}  blocker two`);
+
+  // blocker show prints blocking lines
+  const showB1 = await cli("show", b1Json.id);
+  expect(showB1.stdout).toContain(`blocking:   ${dep.id}  urgent dependent`);
+
+  // show --json carries blockedBy and blocking
+  const show1Json = JSON.parse((await cli("show", dep.id, "--json")).stdout) as Task & {
+    blockedBy: string[];
+    blocking: string[];
+  };
+  expect(show1Json.blockedBy).toEqual([b1Json.id, b2Json.id]);
+  expect(show1Json.blocking).toEqual([]);
+
+  // mv into plan warns about blockers and exits 0
+  const mvPlan = await cli("mv", dep.id, "plan");
+  expect(mvPlan.code).toBe(0);
+  expect(mvPlan.stdout).toContain(`⚠ blocked by: ${b1Json.id}, ${b2Json.id}`);
+
+  // ls glyphs: ▲ before title, ⛔ after title
+  const lsOut = await cli("ls", "plan", "--project", proj);
+  expect(lsOut.code).toBe(0);
+  expect(lsOut.stdout).toContain("▲ urgent dependent ⛔");
+
+  // ls --json carries priority and blockedBy
+  const lsJson = JSON.parse((await cli("ls", "plan", "--project", proj, "--json")).stdout) as Array<
+    Task & { blockedBy: string[] }
+  >;
+  const found = lsJson.find((t) => t.id === dep.id);
+  expect(found?.priority).toBe("high");
+  expect(found?.blockedBy).toEqual([b1Json.id, b2Json.id]);
+
+  // edit --priority low --clear-blocked-by
+  const edit1 = await cli("edit", dep.id, "--priority", "low", "--clear-blocked-by", "--json");
+  expect(edit1.code).toBe(0);
+  const edited = JSON.parse(edit1.stdout) as Task;
+  expect(edited.priority).toBe("low");
+
+  // show after clear has low priority and no blocked by
+  const show2 = await cli("show", dep.id);
+  expect(show2.stdout).toContain("priority: low");
+  expect(show2.stdout).not.toContain("blocked by:");
+
+  // edit --blocked-by replaces set
+  const edit2 = await cli("edit", dep.id, "--blocked-by", b1Json.id);
+  expect(edit2.code).toBe(0);
+
+  // mv into implement warns with single blocker
+  const mvImp = await cli("mv", dep.id, "implement");
+  expect(mvImp.code).toBe(0);
+  expect(mvImp.stdout).toContain(`⚠ blocked by: ${b1Json.id}`);
+
+  // soft blocking: unblock by moving blocker to done
+  await cli("mv", b1Json.id, "done");
+  // now moving dep within implement does not warn
+  const mvImpAgain = await cli("mv", dep.id, "implement");
+  expect(mvImpAgain.stdout).not.toContain("⚠ blocked by:");
+});

@@ -53,7 +53,9 @@ export function listLanes(db: KanbanDb, laneRef?: string, project?: string): str
         const chip = t.project ? c.dim(` [${t.project}]`) : "";
         const titleWidth = Math.max(20, width - 10 - chip.length - depth * 4);
         const lead = depth === 0 ? "  " : `${"  ".repeat(depth)}└ `;
-        out.push(`${lead}${c.dim(t.id)}  ${truncate(t.title, titleWidth)}${chip}`);
+        const prio = t.priority === "high" ? `${c.red("▲")} ` : t.priority === "low" ? `${c.dim("▼")} ` : "";
+        const blocked = db.isBlocked(t.id) ? ` ${c.hex("#d29922", "⛔")}` : "";
+        out.push(`${lead}${c.dim(t.id)}  ${prio}${truncate(t.title, titleWidth)}${blocked}${chip}`);
         for (const child of db.childrenOf(t.id)) {
           if (visible.has(child.id)) emit(child, depth + 1);
         }
@@ -185,6 +187,17 @@ export function taskDetail(db: KanbanDb, task: Task): string {
   if (task.parentId) {
     const parent = db.tasks().find((t) => t.id === task.parentId);
     out.push(`${c.dim("parent:")}  ${parent ? `${c.dim(parent.id)}  ${parent.title}` : c.dim(task.parentId)}`);
+  }
+  if (task.priority !== "normal") {
+    out.push(`${c.dim("priority:")} ${task.priority}`);
+  }
+  const blockers = db.blockers(task.id);
+  for (const b of blockers) {
+    out.push(`${c.dim("blocked by:")} ${c.dim(b.id)}  ${b.title}`);
+  }
+  const blocking = db.blocking(task.id);
+  for (const b of blocking) {
+    out.push(`${c.dim("blocking:")}   ${c.dim(b.id)}  ${b.title}`);
   }
   out.push(
     `${c.dim("lane:")}    ${c.hex(color, lane?.name ?? task.laneId)}${lane ? c.dim(` (${lane.id})`) : ""}`,

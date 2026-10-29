@@ -758,6 +758,11 @@ export class KanbanDb {
     return rows.map(rowToTask);
   }
 
+  /** A card is blocked if any direct blocker is outside done or archive (soft blocking). */
+  isBlocked(ref: string): boolean {
+    return this.blockers(ref).some((b) => !UNBLOCKED_LANES.includes(b.laneId as any));
+  }
+
   /**
    * Replace a card's blocker set (dedupes). Refuses self-edges and any edge that
    * would close a dependency cycle, checked against the graph minus this card's
