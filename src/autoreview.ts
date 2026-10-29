@@ -293,6 +293,7 @@ export function reviewerPrompt(task: Task): string {
 2. Locate the work: the last handoff message says what changed; use git log, git diff, and the files named in the plan.
 3. Review like a senior engineer: correctness, edge cases, error handling, tests, adherence to the plan and repo conventions (read AGENTS.md if present).
 4. Verify cheaply: run the test suite if it is fast (e.g. bun test).
+5. Prove every finding: each --finding must include the failing repro (command + observed output) or quote the exact code path that breaks. A concern you cannot verify is NOT a finding — post it as a comment instead: kanban comment ${task.id} "<concern>" --author pi-reviewer.
 
 Then record exactly one verdict (never move the card with mv):
 - Pass: kanban review ${task.id} --approve --message "<1-3 sentence summary>" --author pi-reviewer

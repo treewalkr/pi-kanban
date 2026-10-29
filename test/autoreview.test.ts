@@ -456,6 +456,14 @@ describe("auto-review", () => {
     expect(prompt).toContain("--finding");
   });
 
+  test("reviewer prompt demands proof and routes unverifiable concerns to comments", () => {
+    const task = { id: "abc12", title: "proof", laneId: "review" } as never;
+    const prompt = reviewerPrompt(task);
+    expect(prompt).toContain("Prove every finding");
+    expect(prompt).toContain("failing repro (command + observed output)");
+    expect(prompt).toContain(`kanban comment abc12 "<concern>" --author pi-reviewer`);
+  });
+
   test("agentFlags: reviewer defaults to thinking max, builder to nothing", () => {
     withAgentEnv({}, () => {
       expect(agentFlags("reviewer", null)).toEqual(["--thinking", "max"]);
