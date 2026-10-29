@@ -56,6 +56,8 @@
 
   // live agent session on this card (badge's big sibling: the streamed log)
   let live = $derived(board.activity[me.id]);
+  let queuedJob = $derived(board.queued[me.id]);
+  let inFlightCount = $derived(Object.keys(board.activity).length);
   let logEl = $state<HTMLElement | null>(null);
 
   $effect(() => {
@@ -245,6 +247,22 @@
           </summary>
           <div class="detail-note md">{@html renderMarkdown(plan.content)}</div>
         </details>
+      {/if}
+      {#if queuedJob}
+        {@const author =
+          queuedJob.role === "reviewer"
+            ? "pi-reviewer"
+            : queuedJob.role === "plan-reviewer"
+              ? "pi-plan-reviewer"
+              : queuedJob.role === "planner"
+                ? "pi-planner"
+                : "pi-builder"}
+        {@const plural = inFlightCount === 1 ? "" : "s"}
+        <div class="detail-activity queued">
+          <div class="children-head">
+            {author} · queued · {timeAgo(queuedJob.enqueuedAt)} — behind {inFlightCount} running session{plural}
+          </div>
+        </div>
       {/if}
       {#if live}
         <div class="detail-activity">

@@ -1,6 +1,6 @@
 import { api } from "../api";
 import type { Attachment, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
-import type { AgentSessionInfo } from "../../../src/autoreview";
+import type { AgentSessionInfo, QueuedJobInfo } from "../../../src/autoreview";
 import { searchBoard } from "../../../src/search";
 
 type EdenError = { value?: unknown };
@@ -134,6 +134,8 @@ class BoardStore {
   flashId = $state<string | null>(null);
   /** In-flight pi agent sessions, keyed by task id (poll-driven: sessions emit no DB writes). */
   activity = $state<Record<string, AgentSessionInfo>>({});
+  /** Queued agent jobs, no session yet, keyed by task id. */
+  queued = $state<Record<string, QueuedJobInfo>>({});
 
   readonly projects = $derived(
     [...new Set(this.tasks.map((t) => t.project).filter((p) => p !== ""))].sort(),
@@ -294,6 +296,9 @@ class BoardStore {
     const next: Record<string, AgentSessionInfo> = {};
     for (const session of data.sessions) next[session.taskId] = session;
     this.activity = next;
+    const nextQ: Record<string, QueuedJobInfo> = {};
+    for (const job of data.queued ?? []) nextQ[job.taskId] = job;
+    this.queued = nextQ;
   }
 
   async addTask(laneId: string, title: string, project = this.projectFilter, parentId?: string): Promise<boolean> {

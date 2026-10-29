@@ -1441,6 +1441,11 @@ button.id-copy {
   animation: working-pulse 1.6s ease-in-out infinite;
 }
 
+.chip.queued {
+  color: var(--text-dim);
+  border-color: color-mix(in srgb, var(--text-dim) 40%, var(--border));
+}
+
 /* ---------- waiting-on-you badge (computed server-side) ---------- */
 
 .chip.waiting {
@@ -1576,6 +1581,10 @@ button.id-copy {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.detail-activity.queued {
+  border-color: color-mix(in srgb, var(--text-dim) 40%, var(--border));
 }
 
 .activity-log {

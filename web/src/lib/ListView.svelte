@@ -99,6 +99,9 @@
           {#if board.activity[task.id]}
             <span class="chip working" title="pi agent working — open the card for live output">◌ working</span>
           {/if}
+          {#if board.queued[task.id]}
+            <span class="chip queued" title="waiting for the running agent session">⧗ queued</span>
+          {/if}
           <span class="row-meta">
             <IdChip id={task.id} />
             <span class="age" title={new Date(task.updatedAt).toLocaleString()}>{timeAgo(task.updatedAt)}</span>
