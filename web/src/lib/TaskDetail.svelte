@@ -15,6 +15,16 @@
   let ancestors = $derived(board.ancestorsOf(task.id));
   let progress = $derived(board.progressOf(me));
 
+  // dependency chips: direct blockers and dependents (soft edges; done/archive stops blocking)
+  let blockers = $derived.by(() =>
+    (board.blockedBy[me.id] ?? [])
+      .map((id) => board.taskById(id))
+      .filter((t): t is Task => t !== undefined),
+  );
+  let dependents = $derived(
+    board.tasks.filter((t) => (board.blockedBy[t.id] ?? []).includes(me.id)),
+  );
+
   // descendants flattened with depth for the tree list
   let childRows = $derived.by(() => {
     const rows: Array<{ t: Task; depth: number }> = [];
@@ -170,6 +180,33 @@
           <button title="open {a.title}" onclick={() => board.openCard(a)}>{a.title}</button>
         {/each}
       </nav>
+    {/if}
+    {#if blockers.length > 0 || dependents.length > 0}
+      <div class="detail-deps">
+        {#if blockers.length > 0}
+          <div class="dep-row">
+            <span class="dep-k" class:stuck={board.isBlocked(me.id)}>blocked by</span>
+            {#each blockers as b (b.id)}
+              <button class="dep-chip" title="open {b.title}" onclick={() => board.openCard(b)}>
+                <span class="id">{b.id}</span>
+                <span class="t">{b.title}</span>
+                {#if b.laneId === "done" || b.laneId === "archive"}<span class="ok">✓</span>{/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+        {#if dependents.length > 0}
+          <div class="dep-row">
+            <span class="dep-k">blocking</span>
+            {#each dependents as d (d.id)}
+              <button class="dep-chip" title="open {d.title}" onclick={() => board.openCard(d)}>
+                <span class="id">{d.id}</span>
+                <span class="t">{d.title}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
     {/if}
     <h2 class="detail-title">{me.title}</h2>
     <div class="detail-body">

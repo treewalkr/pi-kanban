@@ -11,6 +11,7 @@
   let project = $state(source.project);
   let laneId = $state(source.laneId);
   let parentId = $state(source.parentId ?? "");
+  let priority = $state<Task["priority"]>(source.priority);
   let confirming = $state(false);
 
   // candidates mirror the api rule: depth(candidate) + 1 + subtree height ≤ 2
@@ -37,6 +38,7 @@
       project: project.trim(),
       lane: laneId,
       parent: parentId || null,
+      priority,
     });
     board.closeCard();
   }
@@ -109,6 +111,23 @@
           {#each board.lanes as l (l.id)}<option value={l.id}>{l.name}</option>{/each}
         </select>
       </label>
+    </div>
+    <div class="field">
+      priority
+      <div class="seg">
+        <label class="seg-option">
+          <input type="radio" name="priority" value="high" bind:group={priority} />
+          <span class="seg-label">▲ high</span>
+        </label>
+        <label class="seg-option">
+          <input type="radio" name="priority" value="normal" bind:group={priority} />
+          <span class="seg-label">normal</span>
+        </label>
+        <label class="seg-option">
+          <input type="radio" name="priority" value="low" bind:group={priority} />
+          <span class="seg-label">▼ low</span>
+        </label>
+      </div>
     </div>
     <label>
       parent

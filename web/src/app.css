@@ -1078,6 +1078,7 @@ button.id-copy {
 }
 
 .editor label,
+.editor .field,
 .settings-form label {
   display: flex;
   flex-direction: column;
@@ -1481,6 +1482,78 @@ button.id-copy {
 .card.blocked {
   opacity: 0.65;
   filter: saturate(0.7);
+}
+
+/* dependency chips on the card detail (read-only; edges are edited via the CLI) */
+.detail-deps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 6px;
+}
+
+.dep-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.dep-k {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dep-k.stuck {
+  color: #d29922;
+}
+
+.dep-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dep-chip:hover {
+  border-color: var(--accent-hover);
+  background: var(--bg-hover);
+}
+
+.dep-chip .id {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.dep-chip .t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dep-chip .ok {
+  color: #3fb950;
+}
+
+/* the editor's priority seg: radios stay in the a11y tree but out of sight */
+.editor .seg input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  pointer-events: none;
 }
 
 @keyframes working-pulse {
