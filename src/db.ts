@@ -57,7 +57,7 @@ export type WaitingState = "gate" | "question" | "rerun" | "capped" | "dead";
 /** Author of plan-review verdicts/failure comments — shared by the loop and the waiting classifier. */
 export const PLAN_REVIEWER_AUTHOR = "pi-plan-reviewer";
 
-export type AgentRole = "reviewer" | "builder" | "planner" | "plan-reviewer";
+export type AgentRole = "reviewer" | "builder" | "planner" | "plan-reviewer" | "elaborator";
 
 export type AgentThinking = "" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -139,7 +139,7 @@ const GAP = 100;
 const MIN_GAP = 0.01;
 
 const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "review", "handoff", "approval", "rejection", "question"]);
-const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder", "planner", "plan-reviewer"]);
+const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder", "planner", "plan-reviewer", "elaborator"]);
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lanes (
@@ -212,6 +212,10 @@ CREATE TABLE IF NOT EXISTS card_sessions (
   updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS resume_requests (
+  task_id TEXT PRIMARY KEY REFERENCES tasks (id),
+  requested_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS elaboration_requests (
   task_id TEXT PRIMARY KEY REFERENCES tasks (id),
   requested_at INTEGER NOT NULL
 );
@@ -700,6 +704,7 @@ export class KanbanDb {
     const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
     const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
     const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
+    const delElaborationRequests = this.q("DELETE FROM elaboration_requests WHERE task_id = ?");
     for (const id of [task.id, ...ids]) {
       del.run(id);
       delAttachments.run(id);
@@ -707,6 +712,7 @@ export class KanbanDb {
       delBlockedBy.run(id, id);
       delCardSessions.run(id);
       delResumeRequests.run(id);
+      delElaborationRequests.run(id);
     }
     return task;
   }
@@ -1113,6 +1119,26 @@ export class KanbanDb {
     this.q("DELETE FROM resume_requests WHERE task_id = ?").run(taskId);
   }
 
+  queueElaboration(taskRef: string): void {
+    const task = this.resolveTask(taskRef);
+    this.q(
+      `INSERT INTO elaboration_requests (task_id, requested_at) VALUES (?, ?)
+       ON CONFLICT(task_id) DO UPDATE SET requested_at = excluded.requested_at`,
+    ).run(task.id, Date.now());
+  }
+
+  elaborationRequests(): Array<{ taskId: string; requestedAt: number }> {
+    const rows = this.q("SELECT task_id, requested_at FROM elaboration_requests ORDER BY requested_at ASC").all() as Array<{
+      task_id: string;
+      requested_at: number;
+    }>;
+    return rows.map((r) => ({ taskId: r.task_id, requestedAt: r.requested_at }));
+  }
+
+  clearElaboration(taskId: string): void {
+    this.q("DELETE FROM elaboration_requests WHERE task_id = ?").run(taskId);
+  }
+
   // ---------- agent configs ----------
 
   /** The stored agent config for a role, or null when never set. */
@@ -1192,7 +1218,7 @@ export class KanbanDb {
   /** Full replace of a role's config; empty strings/arrays drop out. */
   setAgentConfig(role: string, config: AgentConfig): AgentConfig {
     if (!AGENT_ROLES.has(role)) {
-      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder | planner | plan-reviewer)`, "invalid");
+      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder | planner | plan-reviewer | elaborator)`, "invalid");
     }
     const clean: AgentConfig = {};
     if (config.provider?.trim()) clean.provider = config.provider.trim();
@@ -1396,6 +1422,7 @@ export class KanbanDb {
       const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
       const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
       const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
+      const delElaborationRequests = this.q("DELETE FROM elaboration_requests WHERE task_id = ?");
       for (const t of this.laneTasks(lane.id)) {
         for (const id of [t.id, ...this.descendantIds(t.id)]) {
           del.run(id);
@@ -1404,6 +1431,7 @@ export class KanbanDb {
           delBlockedBy.run(id, id);
           delCardSessions.run(id);
           delResumeRequests.run(id);
+          delElaborationRequests.run(id);
         }
       }
     }
