@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type Attachment, type Board, type Comment, type Lane, type Task } from "./db";
-import { activitySnapshot, killAgentSessions } from "./autoreview";
+import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type AgentRole, type Attachment, type Board, type Comment, type Lane, type Task } from "./db";
+import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
@@ -181,6 +181,38 @@ export const createApp = (
           return db.attachments(params.id, "session");
         } catch (e) {
           return fail<Attachment[]>(e, status);
+        }
+      },
+      { params: t.Object({ id: t.String() }) },
+    )
+    .post(
+      "/tasks/:id/resume",
+      ({ params, status }): { taskId: string; role: AgentRole; sessionId: string } | unknown => {
+        try {
+          const task = db.resolveTask(params.id);
+          if (db.agentsPaused()) {
+            return status(409, { error: "agent sessions are paused — unpause the loop before resuming", code: "conflict" });
+          }
+          if (db.waiting(task.id) !== "dead") {
+            return status(409, {
+              error: `card '${task.id}' is not waiting on a dead session — comment on it to re-run instead`,
+              code: "conflict",
+            });
+          }
+          if (db.leaseFor(task.id, LEASE_TTL_MS)) {
+            return status(409, { error: `card '${task.id}' already has an agent session in flight`, code: "conflict" });
+          }
+          const session = db.cardSession(task.id);
+          if (!session) {
+            return status(409, {
+              error: `card '${task.id}' has no recorded session to resume — comment on it to re-run instead`,
+              code: "conflict",
+            });
+          }
+          db.queueResume(task.id);
+          return status(202, { taskId: task.id, role: session.role, sessionId: session.sessionId });
+        } catch (e) {
+          return fail(e, status);
         }
       },
       { params: t.Object({ id: t.String() }) },

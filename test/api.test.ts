@@ -443,3 +443,65 @@ test("GET /pi-skills serves the skill catalog", async () => {
     expect(names).toContain("caveman");
   }
 });
+
+test("POST /tasks/:id/resume: 202 with role+sessionId; 404/409s with exact errors", async () => {
+  const app = createApp(db);
+
+  // 1. Unknown card → 404 not-found
+  const notFound = await app.handle(new Request("http://localhost/tasks/nonexistent/resume", { method: "POST" }));
+  expect(notFound.status).toBe(404);
+  expect(await notFound.json()).toEqual({ error: "no task matching 'nonexistent'", code: "not-found" });
+
+  const task = db.createTask({ title: "resume-card", lane: "implement" });
+
+  // 2. Agents paused → 409
+  db.setAgentsPaused(true);
+  const paused = await app.handle(new Request(`http://localhost/tasks/${task.id}/resume`, { method: "POST" }));
+  expect(paused.status).toBe(409);
+  expect(await paused.json()).toEqual({
+    error: "agent sessions are paused — unpause the loop before resuming",
+    code: "conflict",
+  });
+  db.setAgentsPaused(false);
+
+  // 3. Card not waiting on dead session → 409
+  const notDead = await app.handle(new Request(`http://localhost/tasks/${task.id}/resume`, { method: "POST" }));
+  expect(notDead.status).toBe(409);
+  expect(await notDead.json()).toEqual({
+    error: `card '${task.id}' is not waiting on a dead session — comment on it to re-run instead`,
+    code: "conflict",
+  });
+
+  // Post death comment to mark card dead
+  db.createComment(task.id, { author: "pi-builder", kind: "comment", body: "session died: exit 1" });
+  expect(db.waiting(task.id)).toBe("dead");
+
+  // 4. Fresh lease row via tryTakeLease → 409
+  db.tryTakeLease(task.id, "builder", { pid: 99999, bootId: 1 }, 60_000);
+  const leaseHeld = await app.handle(new Request(`http://localhost/tasks/${task.id}/resume`, { method: "POST" }));
+  expect(leaseHeld.status).toBe(409);
+  expect(await leaseHeld.json()).toEqual({
+    error: `card '${task.id}' already has an agent session in flight`,
+    code: "conflict",
+  });
+  db.releaseLease(task.id, { pid: 99999, bootId: 1 });
+
+  // 5. Dead card without pointer (cardSession is null) → 409
+  const noPointer = await app.handle(new Request(`http://localhost/tasks/${task.id}/resume`, { method: "POST" }));
+  expect(noPointer.status).toBe(409);
+  expect(await noPointer.json()).toEqual({
+    error: `card '${task.id}' has no recorded session to resume — comment on it to re-run instead`,
+    code: "conflict",
+  });
+
+  // 6. Happy: death comment + setCardSession + POST → 202 { taskId, role: "builder", sessionId }
+  db.setCardSession(task.id, "builder", "kanban-test-session-123");
+  const happy = await app.handle(new Request(`http://localhost/tasks/${task.id}/resume`, { method: "POST" }));
+  expect(happy.status).toBe(202);
+  expect(await happy.json()).toEqual({
+    taskId: task.id,
+    role: "builder",
+    sessionId: "kanban-test-session-123",
+  });
+  expect(db.resumeRequests()).toEqual([{ taskId: task.id, requestedAt: expect.any(Number) }]);
+});
