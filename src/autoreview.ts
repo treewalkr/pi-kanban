@@ -39,7 +39,8 @@ export interface AgentJob {
   role: AgentRole;
   prompt: string;
   /** Builder jobs come in two flavors: working review findings or building an approved plan. */
-  mode?: "findings" | "plan";
+  mode?: "findings" | "plan" | "resume";
+  sessionId?: string;
 }
 
 export interface SpawnContext {
@@ -89,11 +90,31 @@ export interface AgentSessionInfo {
   log: string[];
 }
 
-const activityProviders = new Set<() => AgentSessionInfo[]>();
+/** A job waiting in the serial drain queue (no session yet), for /activity. */
+export interface QueuedJobInfo {
+  taskId: string;
+  role: AgentRole;
+  enqueuedAt: number;
+}
+
+/** What one autoreview instance exposes to /activity: live sessions plus queued jobs. */
+export interface ActivityReport {
+  sessions: AgentSessionInfo[];
+  queued: QueuedJobInfo[];
+}
+
+const activityProviders = new Set<() => ActivityReport>();
 
 /** In-flight agent sessions across all autoreview instances, for the /activity endpoint. */
-export function activitySnapshot(): AgentSessionInfo[] {
-  return [...activityProviders].flatMap((provide) => provide());
+export function activitySnapshot(): ActivityReport {
+  const sessions: AgentSessionInfo[] = [];
+  const queued: QueuedJobInfo[] = [];
+  for (const provide of activityProviders) {
+    const report = provide();
+    sessions.push(...report.sessions);
+    queued.push(...report.queued);
+  }
+  return { sessions, queued };
 }
 
 const pauseKillers = new Set<() => number>();
@@ -374,7 +395,7 @@ export function deathReason(result: SpawnResult, secs: number, sessionLog: strin
 const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }) => {
   const proc = Bun.spawn({
     // json mode streams JSONL events while the session runs (--print waits for the end)
-    cmd: ["pi", "--mode", "json", "--session-id", sessionIdFor(job), ...agentFlags(job.role, config, log), job.prompt],
+    cmd: ["pi", "--mode", "json", "--session-id", job.sessionId ?? sessionIdFor(job), ...agentFlags(job.role, config, log), job.prompt],
     cwd,
     stdin: "ignore",
     stdout: "pipe",
@@ -426,6 +447,8 @@ const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, config, log, emit, track }
   });
 };
 
+export const LEASE_TTL_MS = 60_000;
+
 export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const db = opts.db;
   const log = opts.log ?? (() => {});
@@ -436,7 +459,6 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   // heartbeated while the session runs, released on finish/shutdown. A lease
   // whose heartbeat went stale (owner killed hard) is reclaimable.
   const owner: LeaseOwner = { pid: process.pid, bootId: Date.now() };
-  const LEASE_TTL_MS = 60_000;
   const LEASE_HEARTBEAT_MS = 15_000;
   const kills = new Set<() => void>();
   const track = (kill: () => void): (() => void) => {
@@ -450,10 +472,13 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const maxPlanBlocks = opts.maxPlanBlocks ?? DEFAULT_MAX_PLAN_BLOCKS;
   const maxParallel = Math.min(8, Math.max(1, parseInt(process.env.KANBAN_AUTOREVIEW_MAX_PARALLEL ?? "", 10) || 1));
 
-  const queue: AgentJob[] = [];
+  const queue: Array<AgentJob & { enqueuedAt: number }> = [];
   const inFlight = new Set<string>();
   const sessions = new Map<string, AgentSessionInfo>();
-  const provide = (): AgentSessionInfo[] => [...sessions.values()];
+  const provide = (): ActivityReport => ({
+    sessions: [...sessions.values()],
+    queued: queue.map(({ task, role, enqueuedAt }) => ({ taskId: task.id, role, enqueuedAt })),
+  });
   activityProviders.add(provide);
   // kills holds cleanup handles (spawn kills *and* heartbeat clears), so the
   // session count comes from `sessions` — the in-flight map
@@ -530,7 +555,11 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
 
   const enqueue = (job: AgentJob): void => {
     if (stopped || inFlight.has(job.task.id) || queue.some((j) => j.task.id === job.task.id)) return;
-    queue.push(job);
+    queue.push({ ...job, enqueuedAt: Date.now() });
+    if (sessions.size > 0 || active >= maxParallel || draining) {
+      const head = [...sessions.values()][0];
+      log(head ? `${job.role} queued ${job.task.id} — behind ${head.role} ${head.taskId}` : `${job.role} queued ${job.task.id}`);
+    }
   };
 
   function scan(): void {
@@ -578,6 +607,8 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       return;
     }
     inFlight.add(job.task.id);
+    job.sessionId ??= sessionIdFor(job);
+    db.setCardSession(job.task.id, job.role, job.sessionId);
     const config = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
     const flags = agentFlags(job.role, config);
     const model = flags.includes("--model") ? flags[flags.indexOf("--model") + 1] : "default model";

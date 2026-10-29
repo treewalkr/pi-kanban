@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,11 +35,18 @@ import {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Run with the agent env vars cleared, then set from `env`, restoring after. */
+const AGENT_ENV_KEYS = ["KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING", "KANBAN_AUTOREVIEW_MAX_PARALLEL"];
+let savedAgentEnv: Record<string, string | undefined> = {};
+
+beforeEach(() => {
+  savedAgentEnv = Object.fromEntries(AGENT_ENV_KEYS.map((k) => [k, process.env[k]]));
+  for (const k of AGENT_ENV_KEYS) delete process.env[k];
+});
+
 function withAgentEnv(env: Record<string, string>, run: () => void): void {
-  const keys = ["KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING", "KANBAN_AUTOREVIEW_MAX_PARALLEL"];
-  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  const saved = Object.fromEntries(AGENT_ENV_KEYS.map((k) => [k, process.env[k]]));
   try {
-    for (const k of keys) delete process.env[k];
+    for (const k of AGENT_ENV_KEYS) delete process.env[k];
     for (const [k, v] of Object.entries(env)) process.env[k] = v;
     run();
   } finally {
@@ -61,6 +68,10 @@ function makeSkill(name: string, body: string): string {
 
 afterEach(() => {
   for (const d of skillDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  for (const [k, v] of Object.entries(savedAgentEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
 });
 
 /** Records every spawn; the test resolves each one when its "agent" is done. */
@@ -339,7 +350,7 @@ describe("auto-review", () => {
     cardInReview(w, "first");
     cardInReview(w, "second");
     const { calls, spawnFn } = fakeSpawn();
-    start(spawnFn, dbFile);
+    withAgentEnv({}, () => start(spawnFn, dbFile));
     expect(calls.length).toBe(1);
     const firstId = calls[0].job.task.id;
     await w.handoff(firstId, "done", { kind: "review", author: REVIEWER_AUTHOR, message: "approved" });
@@ -548,6 +559,19 @@ describe("auto-review", () => {
     expect(planner).not.toBe(later);
   });
 
+  test("every fresh spawn persists its minted session id", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(20);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.sessionId).toBeDefined();
+    expect(calls[0].job.sessionId).toStartWith(`kanban-${card.id}-reviewer-`);
+    const stored = db!.cardSession(card.id);
+    expect(stored).toEqual({ role: "reviewer", sessionId: calls[0].job.sessionId! });
+  });
+
   test("formatPiEvent renders signal events, drops noise", () => {
     expect(formatPiEvent('{"type":"session","version":3,"id":"x","cwd":"/y"}')).toBe("session started");
     expect(
@@ -707,15 +731,15 @@ describe("auto-review", () => {
       return new Promise<SpawnResult>((resolve) => (finish = resolve));
     };
     start(spawnFn, dbFile);
-    expect(activitySnapshot().map((s) => s.taskId)).toEqual([card.id]);
+    expect(activitySnapshot().sessions.map((s) => s.taskId)).toEqual([card.id]);
     ctx.emit("session started");
     ctx.emit("→ bash: bun test");
-    const snap = activitySnapshot()[0]!;
+    const snap = activitySnapshot().sessions[0]!;
     expect(snap.role).toBe("reviewer");
     expect(snap.log).toEqual(["session started", "→ bash: bun test"]);
     finish({ code: 0 });
     await sleep(20);
-    expect(activitySnapshot().some((s) => s.taskId === card.id)).toBe(false);
+    expect(activitySnapshot().sessions.some((s) => s.taskId === card.id)).toBe(false);
   });
 
   test("activity registry: stop() clears sessions even with a pending spawn", () => {
@@ -723,9 +747,85 @@ describe("auto-review", () => {
     cardInReview(w);
     const spawnFn: SpawnFn = () => new Promise<SpawnResult>(() => {});
     const handle = start(spawnFn, dbFile);
-    expect(activitySnapshot().length).toBe(1);
+    expect(activitySnapshot().sessions.length).toBe(1);
     handle.stop();
-    expect(activitySnapshot().length).toBe(0);
+    expect(activitySnapshot().sessions.length).toBe(0);
+  });
+
+  test("queued jobs appear in activitySnapshot while another session runs", async () => {
+    const { dbFile, writer: w } = setup();
+    const first = cardInReview(w, "first");
+    await sleep(2);
+    const second = cardInReview(w, "second");
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({}, () => start(spawnFn, dbFile));
+    expect(calls.length).toBe(1);
+    expect(activitySnapshot().sessions.map((s) => s.taskId)).toEqual([first.id]);
+    expect(activitySnapshot().queued).toEqual([
+      expect.objectContaining({ taskId: second.id, role: "reviewer", enqueuedAt: expect.any(Number) }),
+    ]);
+  });
+
+  test("a queued job moves from queued to sessions when it starts", async () => {
+    const { dbFile, writer: w } = setup();
+    const first = cardInReview(w, "first");
+    await sleep(2);
+    const second = cardInReview(w, "second");
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({}, () => start(spawnFn, dbFile));
+    expect(calls.length).toBe(1);
+    const firstId = calls[0].job.task.id;
+    await w.handoff(firstId, "done", { kind: "review", author: REVIEWER_AUTHOR, message: "approved" });
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+    expect(calls.length).toBe(2);
+    expect(activitySnapshot().sessions.map((s) => s.taskId)).toEqual([second.id]);
+    expect(activitySnapshot().queued).toEqual([]);
+  });
+
+  test("a stale queue entry is dropped when roleFor no longer matches", async () => {
+    const { dbFile, writer: w } = setup();
+    const first = cardInReview(w, "first");
+    await sleep(2);
+    const second = cardInReview(w, "second");
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({}, () => start(spawnFn, dbFile));
+    expect(calls.length).toBe(1);
+    expect(activitySnapshot().queued.map((q) => q.taskId)).toEqual([second.id]);
+    await w.createComment(second.id, { author: REVIEWER_AUTHOR, kind: "comment", body: "no verdict" });
+    await w.handoff(first.id, "done", { kind: "review", author: REVIEWER_AUTHOR, message: "approved" });
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+    expect(calls.length).toBe(1);
+    expect(activitySnapshot().queued).toEqual([]);
+    expect(activitySnapshot().sessions).toEqual([]);
+  });
+
+  test("enqueue logs 'queued — behind' while a session runs", async () => {
+    const { dbFile, writer: w } = setup();
+    const first = cardInReview(w, "first");
+    const logs: string[] = [];
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({}, () => {
+      db = new KanbanDb(dbFile);
+      const handle = startAutoReview({
+        db,
+        cwd: dir,
+        spawnFn,
+        watchIntervalMs: 50,
+        log: (msg) => logs.push(msg),
+      });
+      stop = () => handle.stop();
+    });
+    expect(calls.length).toBe(1);
+    expect(logs.some((l) => l.includes("queued"))).toBe(false);
+
+    const second = cardInReview(w, "second");
+    await sleep(80);
+
+    const queuedLog = logs.find((l) => l.includes("queued"));
+    expect(queuedLog).toBeDefined();
+    expect(queuedLog).toMatch(new RegExp(`^reviewer queued ${second.id} — behind reviewer ${first.id}$`));
   });
 });
 

@@ -109,7 +109,7 @@ export const createApp = (
         if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(origin))
           return status(403, { error: "restart is local-only", code: "forbidden" });
         // in-flight guard: a restart kills running agent sessions — make it explicit
-        const inFlight = opts.sessions ? opts.sessions() : activitySnapshot().length;
+        const inFlight = opts.sessions ? opts.sessions() : activitySnapshot().sessions.length;
         if (inFlight > 0 && query.force !== "true")
           return status(409, {
             error: `${inFlight} agent session(s) in flight — restart kills them; retry with force to proceed`,
@@ -366,9 +366,7 @@ export const createApp = (
     .get("/pi-skills", (): { skills: CatalogSkill[] } => ({
       skills: listPiSkills(),
     }))
-    .get("/activity", (): { sessions: ReturnType<typeof activitySnapshot> } => ({
-      sessions: activitySnapshot(),
-    }))
+    .get("/activity", (): ReturnType<typeof activitySnapshot> => activitySnapshot())
     .put(
       "/agents/:role",
       ({ params, body, status }): AgentConfig | unknown => {

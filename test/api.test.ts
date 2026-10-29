@@ -332,11 +332,11 @@ test("GET /tasks/:id/sessions lists saved agent logs oldest-first", async () => 
   expect(noTask.status).toBe(404);
 });
 
-test("GET /activity lists in-flight agent sessions (none when idle)", async () => {
+test("GET /activity lists in-flight and queued agent jobs (none when idle)", async () => {
   const app = createApp(db);
   const res = await app.handle(new Request("http://localhost/activity"));
   expect(res.status).toBe(200);
-  expect(await res.json()).toEqual({ sessions: [] });
+  expect(await res.json()).toEqual({ sessions: [], queued: [] });
 });
 
 test("GET /health reports a boot stamp so clients can detect restarts", async () => {
