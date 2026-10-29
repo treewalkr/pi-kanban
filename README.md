@@ -105,7 +105,8 @@ without restarting serve:
 | timeout | per-session kill | 1–60 min, default 20 |
 
 Env overrides win over the stored config: `KANBAN_AUTOREVIEW_MODEL`, `KANBAN_AUTOREVIEW_THINKING`
-(set to `""` to disable thinking entirely). Reviewer/builder sessions run in the serve process's
+(set to `""` to disable thinking entirely), and `KANBAN_AUTOREVIEW_MAX_PARALLEL` (concurrent sessions,
+default 1, max 8). Reviewer/builder sessions run in the serve process's
 directory and use the card's plan path and thread to locate the work.
 
 ## Scripts
