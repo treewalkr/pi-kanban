@@ -20,6 +20,8 @@ class AgentsStore {
   configs = $state<Record<AgentRole, AgentConfig>>(emptyConfigs());
   /** pi's catalog for the provider/model selects; empty → the panel falls back to text inputs. */
   models = $state<CatalogModel[]>([]);
+  /** Board-level agent-loop pause: no process spawns (or re-spawns) sessions while set. */
+  paused = $state(false);
 
   private fail(error: EdenError): void {
     const value = error.value as { error?: string } | undefined;
@@ -27,7 +29,7 @@ class AgentsStore {
   }
 
   async load(): Promise<void> {
-    const [agents, models] = await Promise.all([api.agents.get(), api["pi-models"].get()]);
+    const [agents, models, pause] = await Promise.all([api.agents.get(), api["pi-models"].get(), api.agents.pause.get()]);
     if (agents.error) this.fail(agents.error);
     else {
       this.configs = {
@@ -39,6 +41,13 @@ class AgentsStore {
       this.loaded = true;
     }
     if (!models.error) this.models = models.data.models;
+    if (!pause.error) this.paused = pause.data.paused;
+  }
+
+  async setPaused(paused: boolean): Promise<void> {
+    const { error } = await api.agents.pause.put({ paused });
+    if (error) this.fail(error);
+    else this.paused = paused;
   }
 
   async save(role: AgentRole, config: AgentConfig): Promise<boolean> {

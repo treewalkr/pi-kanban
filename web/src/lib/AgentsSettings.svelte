@@ -70,6 +70,19 @@
 
 <div class="settings-general">
   <section class="settings-general-section">
+    <h3 class="settings-general-heading">Agent loop</h3>
+    <p class="settings-general-description">Paused stops every loop process from spawning agent sessions and kills in-flight ones; unpausing resumes on the next board write. Survives restarts — no new session is created for a card while paused.</p>
+    <div class="seg">
+      <button type="button" class="seg-option" class:on={!agents.paused} aria-pressed={!agents.paused} disabled={!agents.paused} onclick={() => agents.setPaused(false)}>
+        <span class="seg-label">running</span>
+      </button>
+      <button type="button" class="seg-option" class:on={agents.paused} aria-pressed={agents.paused} disabled={agents.paused} onclick={() => agents.setPaused(true)}>
+        <span class="seg-label">paused</span>
+      </button>
+    </div>
+  </section>
+
+  <section class="settings-general-section">
     <h3 class="settings-general-heading">Role</h3>
     <p class="settings-general-description">Used by serve --auto-review: the planner writes plans for cards in Plan, the plan reviewer checks them against the template checklist before the human gate, the reviewer checks cards in Review, the builder works blocked findings or builds approved plans. Switching stashes unsaved edits.</p>
     <div class="seg">
