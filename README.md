@@ -88,7 +88,7 @@ every card that lands in Review — approve → Done, block → findings land as
 and a `pi-builder` session works them and hands the card back (stops after 3 block cycles and
 leaves a comment for you). Every step is a thread comment, and each spawn is logged in the serve
 terminal under `[autoreview]`. Each agent spawn gets its own fresh pi session — the card thread
-(`kanban brief`) is the only shared context. If a session dies (model error, quota limit, timeout, or
+(`kanban brief`) is the only shared context. If a session dies (model error, quota limit, stall, timeout, or
 silent exit), the reason and duration are posted to the card thread, an `✗ session died` badge marks
 the card on the board, and any diagnostic stderr tail is saved in the session attachment. When a
 session dies, a **↻ resume session** button appears on the card's detail/activity panel: clicking it
@@ -108,11 +108,12 @@ without restarting serve:
 | context | `--append-system-prompt` | standing instructions, your review lens |
 | tools | `--tools` | pi allow/deny syntax |
 | extra flags | passed through raw | escape hatch |
-| timeout | per-session kill | 1–60 min, default 20 |
+| timeout | total run cap — silent sessions are killed earlier by the stall watchdog | 1 min–24 h, default 2 h |
 
 Env overrides win over the stored config: `KANBAN_AUTOREVIEW_MODEL`, `KANBAN_AUTOREVIEW_THINKING`
-(set to `""` to disable thinking entirely), and `KANBAN_AUTOREVIEW_MAX_PARALLEL` (concurrent sessions,
-default 1, max 8). Reviewer/builder sessions run in the serve process's
+(set to `""` to disable thinking entirely), `KANBAN_AUTOREVIEW_MAX_PARALLEL` (concurrent sessions,
+default 1, max 8), `KANBAN_AUTOREVIEW_TIMEOUT_MS` (total run cap), and `KANBAN_AUTOREVIEW_STALL_MS`
+(stall window). Reviewer/builder sessions run in the serve process's
 directory and use the card's plan path and thread to locate the work.
 
 ## Scripts
