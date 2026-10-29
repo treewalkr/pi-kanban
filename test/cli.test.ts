@@ -108,7 +108,9 @@ test("errors exit 1 with a message on stderr", async () => {
 });
 
 test("help and version exit 0", async () => {
-  expect((await cli("help")).stdout).toContain("usage:");
+  const helpOut = (await cli("help")).stdout;
+  expect(helpOut).toContain("usage:");
+  expect(helpOut).toContain("what's next: lane priority, then card priority, then oldest; skips blocked");
   expect((await cli("version")).stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
 });
 
@@ -432,6 +434,32 @@ test("next --json: Task object; null and exit 0 when nothing to pull forward", a
   const emptyHuman = await cli("next", "--project", emptyProj);
   expect(emptyHuman.code).toBe(0);
   expect(emptyHuman.stdout.trim()).toBe("nothing to pull forward");
+
+  // all candidate cards blocked -> task null + blocked count surfaced in both modes
+  const allBlockedProj = "next-e2e-all-blocked";
+  const blocker = JSON.parse(
+    (await cli("add", "blocker", "--project", "other-proj", "--lane", "backlog", "--json")).stdout,
+  ) as Task;
+  await cli(
+    "add",
+    "blocked card",
+    "--project",
+    allBlockedProj,
+    "--lane",
+    "review",
+    "--blocked-by",
+    blocker.id,
+    "--json",
+  );
+
+  const blockedHuman = await cli("next", "--project", allBlockedProj);
+  expect(blockedHuman.code).toBe(0);
+  expect(blockedHuman.stdout).toContain("nothing to pull forward");
+  expect(blockedHuman.stdout).toContain("⚠ 1 blocked card(s) skipped");
+
+  const blockedJson = await cli("next", "--project", allBlockedProj, "--json");
+  expect(blockedJson.code).toBe(0);
+  expect(JSON.parse(blockedJson.stdout)).toEqual({ task: null, blocked: 1 });
 });
 
 

@@ -13,7 +13,7 @@ usage:
   kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>]
                       [--priority <high|normal|low>] [--blocked-by <id>]… [--top]
   kanban ls [lane] [--project <tag>] [--json]
-  kanban next [--project <tag>] [--json]  (what's next: review → implement → plan → backlog, oldest first)
+  kanban next [--project <tag>] [--json]  (what's next: lane priority, then card priority, then oldest; skips blocked)
   kanban search <query…> [--project <tag>] [--json]
   kanban show <id>
   kanban attach <id> <plan-file>            (re-attach versions; show prints the latest)
@@ -237,13 +237,14 @@ async function main(): Promise<number> {
       case "next": {
         const { task, blocked } = db.nextTask(project);
         if (json) {
-          jsonOut(task ? { ...task, blocked } : null);
-        } else if (task) {
-          const line = taskLine(db, task);
-          const warn = blocked > 0 ? `  ${c.hex("#d29922", `⚠ ${blocked} blocked card(s) skipped`)}` : "";
-          console.log(`${line}${warn}`);
+          jsonOut(task ? { ...task, blocked } : (blocked > 0 ? { task: null, blocked } : null));
         } else {
-          console.log(c.dim("nothing to pull forward"));
+          const warn = blocked > 0 ? `  ${c.hex("#d29922", `⚠ ${blocked} blocked card(s) skipped`)}` : "";
+          if (task) {
+            console.log(`${taskLine(db, task)}${warn}`);
+          } else {
+            console.log(`${c.dim("nothing to pull forward")}${warn}`);
+          }
         }
         return 0;
       }
