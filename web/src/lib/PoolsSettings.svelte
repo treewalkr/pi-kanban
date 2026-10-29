@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { AgentRole, AgentThinking, WorkerPool } from "../../../src/db";
-  import { pools, newPoolDraft } from "./pools.svelte";
+  import { pools } from "./pools.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
 
   let saving = $state<Record<string, boolean>>({});
@@ -20,7 +20,7 @@
   }
 
   function addPool(): void {
-    pools.pools = [...pools.pools, newPoolDraft()];
+    pools.addDraft();
   }
 
   function toggleRole(pool: WorkerPool, role: AgentRole): void {

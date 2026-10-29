@@ -20,10 +20,21 @@ class PoolsStore {
   loaded = $state(false);
   pools = $state<WorkerPool[]>([]);
   models = $state<CatalogModel[]>([]);
+  private drafts = new Set<string>();
 
   private fail(error: EdenError): void {
     const value = error.value as { error?: string } | undefined;
     board.error = value?.error ?? "request failed";
+  }
+
+  addDraft(): WorkerPool {
+    let draft = newPoolDraft();
+    while (this.pools.some((p) => p.id === draft.id) || this.drafts.has(draft.id)) {
+      draft = newPoolDraft();
+    }
+    this.drafts.add(draft.id);
+    this.pools = [...this.pools, draft];
+    return draft;
   }
 
   async load(): Promise<void> {
@@ -34,6 +45,7 @@ class PoolsStore {
     if (poolsRes.error) this.fail(poolsRes.error);
     else {
       this.pools = poolsRes.data.pools ?? [];
+      this.drafts.clear();
       this.loaded = true;
     }
     if (!modelsRes.error) this.models = modelsRes.data.models;
@@ -56,10 +68,16 @@ class PoolsStore {
     } else {
       this.pools.push(data as WorkerPool);
     }
+    this.drafts.delete(pool.id);
     return true;
   }
 
   async remove(id: string): Promise<boolean> {
+    if (this.drafts.has(id)) {
+      this.pools = this.pools.filter((p) => p.id !== id);
+      this.drafts.delete(id);
+      return true;
+    }
     const { error } = await api.pools({ id }).delete();
     if (error) {
       this.fail(error);
