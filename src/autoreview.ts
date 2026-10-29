@@ -26,12 +26,14 @@ export { PLAN_REVIEWER_AUTHOR };
 export const PLANNER_AUTHOR = "pi-planner";
 export const REVIEWER_AUTHOR = "pi-reviewer";
 export const BUILDER_AUTHOR = "pi-builder";
+export const ELABORATOR_AUTHOR = "pi-elaborator";
 
 export const AUTHOR_BY_ROLE: Record<AgentRole, string> = {
   planner: PLANNER_AUTHOR,
   reviewer: REVIEWER_AUTHOR,
   builder: BUILDER_AUTHOR,
   "plan-reviewer": PLAN_REVIEWER_AUTHOR,
+  elaborator: ELABORATOR_AUTHOR,
 };
 
 export interface AgentJob {
@@ -39,7 +41,7 @@ export interface AgentJob {
   role: AgentRole;
   prompt: string;
   /** Builder jobs come in two flavors: working review findings or building an approved plan. */
-  mode?: "findings" | "plan" | "resume";
+  mode?: "findings" | "plan" | "resume" | "elaborate";
   sessionId?: string;
 }
 
@@ -227,6 +229,7 @@ export function resumePrompt(task: Task, role: AgentRole, reason: string): strin
     "plan-reviewer": `; then record exactly one verdict: kanban plan-review ${task.id} (--pass | --block --message "<summary>" [--finding "<checklist hit>"]…) --author pi-plan-reviewer`,
     reviewer: `; then record exactly one verdict: kanban review ${task.id} (--approve | --block --message "<summary>" [--finding "<file:line — issue>"]…) --author pi-reviewer`,
     builder: `; then hand off: kanban handoff ${task.id} review --message "<what you built · test status>" --author pi-builder`,
+    elaborator: `; then finish: kanban edit ${task.id} --note "<the elaborated note>" and kanban comment ${task.id} "elaborated — note now carries intent + acceptance criteria" --author pi-elaborator`,
   };
   return `You are ${AUTHOR_BY_ROLE[role]}. Your previous session on kanban card ${task.id} "${task.title}" died before finishing (${reason}) — this spawn continues that same session, so your earlier context is intact: pick up where you left off, do not restart from scratch.
 
@@ -236,6 +239,21 @@ export function resumePrompt(task: Task, role: AgentRole, reason: string): strin
 4. Never move the card with mv and never run kanban approve/reject — the human owns the gate.
 
 Your last line: one-sentence progress summary.`;
+}
+
+export function elaboratorPrompt(task: Task): string {
+  return `You are pi-elaborator. Kanban card ${task.id} "${task.title}" was just captured with a terse title — elaborate its note so humans and the planner can act on it.
+
+1. Run: kanban show ${task.id} --json — the title, current note, lane, and project.
+2. Write the elaborated note with exactly two sections, markdown:
+   Intent: one or two sentences on what this card wants and why — the title's plain meaning, no invented scope.
+   Acceptance criteria: 2-6 numbered lines starting AC1, AC2, … each concrete and observable from the outside.
+   If the card already has a note, it is the seed: preserve every fact it states inside the elaborated note. Do not invent file paths, APIs, or features; keep the title unchanged.
+3. Save it: kanban edit ${task.id} --note "<the elaborated note>"
+4. Record it: kanban comment ${task.id} "elaborated — note now carries intent + acceptance criteria" --author pi-elaborator
+
+Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate.
+Your last line: one sentence on what the note now covers.`;
 }
 
 export function plannerPrompt(task: Task, now: number = Date.now()): string {
@@ -565,7 +583,10 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
 
   /** What the card needs right now: a planner, a plan reviewer, a reviewer, a builder (two flavors), or nothing. */
   const roleFor = (task: Task): AgentRole | "capped" | "plan-capped" | null => {
-    const thread = db.comments(task.id);
+    // pi-elaborator comments are a side-channel note edit: invisible to every
+    // lane's state machine — a plan-review pass stays at the gate, an open
+    // planner question stays open, a reviewer/builder disarm stays disarmed
+    const thread = db.comments(task.id).filter((c) => c.author !== ELABORATOR_AUTHOR);
     const last = thread.at(-1);
     if (task.laneId === "plan") {
       if (last?.author === PLANNER_AUTHOR) return last.kind === "handoff" ? "plan-reviewer" : null;
@@ -662,6 +683,16 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       db.clearResumeRequest(task.id);
       enqueue(job);
     }
+    for (const req of db.elaborationRequests()) {
+      const task = db.tasks().find((t) => t.id === req.taskId);
+      if (!task) { db.clearElaboration(req.taskId); continue; }
+      if (db.leaseFor(task.id, LEASE_TTL_MS)) continue;
+      // request-driven, not lane-driven: hold the request while a job for this
+      // card is already queued or running so it can never be lost
+      if (inFlight.has(task.id) || queue.some((j) => j.task.id === task.id)) continue;
+      db.clearElaboration(task.id); // safe: scan() is synchronous, not stopped, and enqueue's guards just passed
+      enqueue({ task, role: "elaborator", mode: "elaborate", prompt: elaboratorPrompt(task) });
+    }
     const lanes = new Set(db.lanes().map((l) => l.id));
     if (!lanes.has("review") || !lanes.has("implement")) return;
     for (const task of db.tasks()) {
@@ -713,6 +744,8 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       if (!fresh) return;
       if (job.mode === "resume") {
         if (db.waiting(job.task.id) !== "dead") return;
+      } else if (job.mode === "elaborate") {
+        // request-driven: no roleFor precondition
       } else {
         if (roleFor(fresh) !== job.role) return; // state moved on while queued
       }
@@ -831,6 +864,8 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         if (!fresh) continue;
         if (job.mode === "resume") {
           if (db.waiting(job.task.id) !== "dead") continue;
+        } else if (job.mode === "elaborate") {
+          // request-driven: no roleFor precondition
         } else {
           if (roleFor(fresh) !== job.role) continue;
         }
@@ -859,7 +894,16 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     const last = db.comments(task.id).at(-1);
     const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
     const reason = deathReason(result, secs, session.log);
-    if (job.role === "planner") {
+    if (job.role === "elaborator") {
+      if (last?.author === ELABORATOR_AUTHOR) log(`elaborator ${task.id}: note elaborated`);
+      else {
+        db.createComment(task.id, {
+          author: ELABORATOR_AUTHOR,
+          kind: "comment",
+          body: `${KanbanDb.SESSION_DIED_PREFIX}elaboration ${reason} — retry with kanban elaborate ${task.id}`,
+        });
+      }
+    } else if (job.role === "planner") {
       if (last?.author === PLANNER_AUTHOR) log(`planner ${task.id}: plan attached — over to plan review`);
       else {
         db.createComment(task.id, {
