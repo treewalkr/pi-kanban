@@ -8,6 +8,8 @@ export interface FilePreviewState {
   path: string;
   content: string;
   language: string;
+  size: number;
+  binary: boolean;
   error?: string;
 }
 
@@ -35,6 +37,17 @@ export class FilesStore {
 
   loading = $state<Set<string>>(new Set());
   dirErrors = $state<Map<string, string>>(new Map());
+
+  previewModeHint = $state<"source" | "preview" | "diff" | null>(null);
+  diff = $state<{ path: string; supported: boolean; patch?: string } | null>(null);
+
+  searchQuery = $state("");
+  searchMatches = $state<string[] | null>(null);
+  searching = $state(false);
+  searchError = $state(false);
+
+  changesView = $state(false);
+  lineStats = $state<{ additions: number; deletions: number }>({ additions: 0, deletions: 0 });
 
   setTab(t: SidebarTab): void {
     this.tab = t;
@@ -75,6 +88,10 @@ export class FilesStore {
       this.status = {};
     } else if (statusRes.data) {
       this.status = statusRes.data.files;
+      this.lineStats = {
+        additions: statusRes.data.additions ?? 0,
+        deletions: statusRes.data.deletions ?? 0,
+      };
     }
   }
 
@@ -90,6 +107,10 @@ export class FilesStore {
       this.status = {};
     } else if (statusRes.data) {
       this.status = statusRes.data.files;
+      this.lineStats = {
+        additions: statusRes.data.additions ?? 0,
+        deletions: statusRes.data.deletions ?? 0,
+      };
     }
 
     const nextEntries = new Map(this.entries);
@@ -161,7 +182,9 @@ export class FilesStore {
     }
   }
 
-  async openFile(path: string): Promise<void> {
+  async openFile(path: string, modeHint?: "diff"): Promise<void> {
+    this.previewModeHint = modeHint ?? null;
+    this.diff = null;
     const { data, error } = await api.files.content.get({ query: { path } });
     if (error) {
       const val = (error as { value?: unknown })?.value as
@@ -171,6 +194,8 @@ export class FilesStore {
         path,
         content: "",
         language: "plaintext",
+        size: 0,
+        binary: false,
         error: val?.error ?? "failed to read file",
       };
     } else if (data) {
@@ -178,12 +203,70 @@ export class FilesStore {
         path: data.path,
         content: data.content,
         language: data.language,
+        size: data.size,
+        binary: data.binary,
       };
     }
+    void this.loadDiff();
+  }
+
+  async loadDiff(): Promise<void> {
+    if (!this.preview) return;
+    const p = this.preview.path;
+    try {
+      const res = await api.git.diff.get({ query: { path: p } });
+      if (res.data) {
+        this.diff = { path: p, supported: res.data.supported, patch: res.data.patch };
+      } else {
+        this.diff = { path: p, supported: false };
+      }
+    } catch {
+      this.diff = { path: p, supported: false };
+    }
+  }
+
+  async search(q: string): Promise<void> {
+    this.searchQuery = q;
+    const trimmed = q.trim();
+    if (!trimmed) {
+      this.searchMatches = null;
+      this.searching = false;
+      this.searchError = false;
+      return;
+    }
+    this.searching = true;
+    this.searchError = false;
+    try {
+      const res = await api.files.search.get({ query: { q: trimmed } });
+      if (res.error) {
+        this.searchError = true;
+        this.searchMatches = null;
+      } else if (res.data) {
+        this.searchMatches = res.data.matches;
+      }
+    } catch {
+      this.searchError = true;
+      this.searchMatches = null;
+    } finally {
+      this.searching = false;
+    }
+  }
+
+  clearSearch(): void {
+    this.searchQuery = "";
+    this.searchMatches = null;
+    this.searching = false;
+    this.searchError = false;
+  }
+
+  toggleChangesView(): void {
+    this.changesView = !this.changesView;
   }
 
   closePreview(): void {
     this.preview = null;
+    this.previewModeHint = null;
+    this.diff = null;
   }
 
   childrenOf(dir: string): FileEntry[] {
