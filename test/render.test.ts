@@ -208,12 +208,12 @@ describe("commentThread CLI renderer", () => {
       db.attach(
         cardWith.id,
         "session",
-        "pi-reviewer · anthropic · claude-x · thinking high · 10/30/2026, 10:46 AM · 42s\nmodel: anthropic · claude-x · thinking high",
+        "pi-reviewer · anthropic · claude-x · high · 10/30/2026, 10:46 AM · 42s\nmodel: anthropic · claude-x · high",
         "autoreview",
       );
       const detailWith = stripAnsi(taskDetail(db, db.resolveTask(cardWith.id)));
       expect(detailWith).toContain("sessions:");
-      expect(detailWith).toContain("anthropic · claude-x · thinking high");
+      expect(detailWith).toContain("anthropic · claude-x · high");
 
       const cardWithout = db.createTask({ title: "without sessions", lane: "implement" });
       const detailWithout = stripAnsi(taskDetail(db, db.resolveTask(cardWithout.id)));
@@ -232,12 +232,12 @@ describe("commentThread CLI renderer", () => {
       db.attach(
         card.id,
         "session",
-        "pi-reviewer · anthropic · claude-x · thinking high · 10/30/2026, 10:46 AM · 42s\nmodel: anthropic · claude-x · thinking high",
+        "pi-reviewer · anthropic · claude-x · high · 10/30/2026, 10:46 AM · 42s\nmodel: anthropic · claude-x · high",
         "autoreview",
       );
       const lanesOut = stripAnsi(listLanes(db));
       expect(lanesOut).not.toContain("claude-x");
-      expect(lanesOut).not.toContain("thinking high");
+      expect(lanesOut).not.toContain("· high");
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });

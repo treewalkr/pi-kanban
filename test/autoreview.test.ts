@@ -978,13 +978,13 @@ describe("auto-review", () => {
         model: "claude-x",
         thinking: "high",
       }),
-    ).toBe("anthropic · claude-x · thinking high");
+    ).toBe("anthropic · claude-x · high");
     expect(
       modelConfigLabel({
         model: "gemini-4-argon",
         thinking: "high",
       }),
-    ).toBe("gemini-4-argon · thinking high");
+    ).toBe("gemini-4-argon · high");
     expect(modelConfigLabel({})).toBe("default model");
   });
 
@@ -1330,8 +1330,8 @@ describe("auto-review", () => {
     const logs = db!.attachments(card.id, "session");
     expect(logs.length).toBe(1);
     const lines = logs[0]!.content.split("\n");
-    expect(lines[0]).toStartWith("pi-reviewer · anthropic · claude-x · thinking high · ");
-    expect(lines[1]).toBe("model: anthropic · claude-x · thinking high");
+    expect(lines[0]).toStartWith("pi-reviewer · anthropic · claude-x · high · ");
+    expect(lines[1]).toBe("model: anthropic · claude-x · high");
   });
 
   test("silent sessions still record their header and model config", async () => {
@@ -1364,8 +1364,8 @@ describe("auto-review", () => {
     ctx.emit("→ bash: bun test");
     const snap = activitySnapshot().sessions[0]!;
     expect(snap.role).toBe("reviewer");
-    expect(snap.modelLabel).toBe("default model · thinking max");
-    expect(snap.log).toEqual(["model: default model · thinking max", "session started", "→ bash: bun test"]);
+    expect(snap.modelLabel).toBe("default model · max");
+    expect(snap.log).toEqual(["model: default model · max", "session started", "→ bash: bun test"]);
     finish({ code: 0 });
     await sleep(20);
     expect(activitySnapshot().sessions.some((s) => s.taskId === card.id)).toBe(false);

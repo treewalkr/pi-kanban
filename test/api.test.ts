@@ -774,12 +774,12 @@ test("/activity carries the resolved model per session", async () => {
   expect(models).toContain("gpt-4o");
 
   const labels = data.sessions.map((s) => s.modelLabel);
-  expect(labels).toContain("anthropic · claude-3-5-sonnet · thinking max");
-  expect(labels).toContain("openai · gpt-4o · thinking max");
+  expect(labels).toContain("anthropic · claude-3-5-sonnet · max");
+  expect(labels).toContain("openai · gpt-4o · max");
 
   for (const s of data.sessions) {
     expect(s.pool).toBe("heavy pool");
-    expect(s.modelLabel).toContain("thinking max");
+    expect(s.modelLabel).toContain("· max");
   }
 
   handle.stop();

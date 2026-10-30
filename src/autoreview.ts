@@ -454,9 +454,9 @@ export function resolvedModelConfig(role: AgentRole, cfg: AgentConfig | null): M
   return mc;
 }
 
-/** "anthropic · claude-x · thinking high" — unset parts dropped, model falls back to "default model". */
+/** "anthropic · claude-x · high" — unset parts dropped, model falls back to "default model". */
 export function modelConfigLabel(mc: Partial<ModelConfig>): string {
-  return [mc.provider, mc.model ?? "default model", mc.thinking ? `thinking ${mc.thinking}` : ""].filter(Boolean).join(" · ");
+  return [mc.provider, mc.model ?? "default model", mc.thinking ?? ""].filter(Boolean).join(" · ");
 }
 
 /**
