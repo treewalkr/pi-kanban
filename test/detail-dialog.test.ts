@@ -84,3 +84,33 @@ describe("open card reloads board and thread when its live session ends", () => 
     expect(taskDetailSource).toContain("roleAuthor(live.role)");
   });
 });
+
+describe("card files section (plan pinned + named files, per-file version picker)", () => {
+  test("files ride reloadThread; section and pickers wired as expected", () => {
+    expect(taskDetailSource).toContain("api.tasks({ id: task.id }).files.get()");
+    expect(taskDetailSource).toContain('api.tasks({ id: task.id }).files({ name: kind }).get()');
+    expect(taskDetailSource).toContain('let otherFiles = $derived(cardFiles.filter((f) => f.kind !== "plan"));');
+    expect(taskDetailSource).toContain('<details class="detail-plan card-files">');
+
+    // every version picker stops the summary toggle, both plan and per-file
+    const pickers = taskDetailSource.match(/class="version-pick"/g) ?? [];
+    expect(pickers.length).toBe(2);
+    const stopped = taskDetailSource.match(/onclick=\{\(e\) => e\.stopPropagation\(\)\}/g) ?? [];
+    expect(stopped.length).toBeGreaterThanOrEqual(2);
+
+    // markdown renders inline; anything else is raw pre
+    expect(taskDetailSource).toContain('const isMarkdown = (kind: string): boolean => kind === "plan" || kind.endsWith(".md");');
+    expect(taskDetailSource).toContain('<pre class="file-raw">');
+  });
+
+  test("raw file content scrolls, never wraps (app.css)", () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><style>${appCss}</style></head><body></body></html>`);
+    const rules = Array.from(dom.window.document.styleSheets[0].cssRules);
+    const rule = rules.find(
+      (r) => "selectorText" in r && (r as CSSStyleRule).selectorText === ".card-file .file-raw",
+    ) as CSSStyleRule | undefined;
+    expect(rule).toBeDefined();
+    expect(rule!.style.whiteSpace).toBe("pre");
+    expect(rule!.style.overflowX).toBe("auto");
+  });
+});
