@@ -11,7 +11,7 @@
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import Mark from "./lib/Mark.svelte";
   import { theme, setTheme } from "./lib/theme.svelte";
-  import { Settings } from "@lucide/svelte";
+  import { Settings, Sun, Moon } from "@lucide/svelte";
 
   // initial load, plus catch-up when a modal closes (change events are paused while editing)
   $effect(() => {
@@ -131,7 +131,11 @@
       aria-label="toggle theme"
       title="toggle theme"
     >
-      {theme.name === "dark" ? "○" : "●"}
+      {#if theme.name === "dark"}
+        <Sun size={14} strokeWidth={1.75} />
+      {:else}
+        <Moon size={14} strokeWidth={1.75} />
+      {/if}
     </button>
   </header>
 
