@@ -11,7 +11,8 @@
 
   // ---------- header: new card + search ----------
 
-  const firstLane = $derived(board.lanes.find((l) => !l.fixed));
+  // new cards land in Backlog (the API's bare-add default), not the first non-fixed lane
+  const firstLane = $derived(board.lanes.find((l) => l.id === "backlog") ?? board.lanes.find((l) => !l.fixed));
 
   async function newCard(): Promise<void> {
     const lane = firstLane;
