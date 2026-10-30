@@ -20,6 +20,7 @@ usage:
   kanban unlink <id> <other>
   kanban elaborate <id>                     (queue AI note elaboration; runs on the auto-agent loop)
   kanban attach <id> <plan-file>            (re-attach versions; show prints the latest)
+  kanban ws <id> <branch>                    (record/clear where the card's implementation lives)
   kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]
   kanban comments <id>
   kanban handoff <id> <lane> --message <text> [--author <name>]   (atomic move + thread record)
@@ -63,7 +64,7 @@ interface Parsed {
 }
 
 const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority"]);
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by", "elaborate"]);
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by"]); // repeatable: each occurrence appends one value
 
 function parse(argv: string[]): Parsed {
@@ -403,6 +404,19 @@ async function main(): Promise<number> {
         const plan = db.attach(idRef, "plan", content, resolve(file));
         if (json) jsonOut(plan);
         else out(`${c.green("✓")} attached plan ${c.dim(`v${plan.version}`)} to ${c.dim(plan.taskId)}`);
+        return 0;
+      }
+
+      case "ws": {
+        const [idRef, branch, ...extra] = positional;
+        const clear = !!flags.clear;
+        if (!idRef || extra.length > 0 || (clear && branch) || (!clear && !branch)) {
+          throw new KanbanError("usage: kanban ws <id> <branch> | kanban ws <id> --clear", "invalid");
+        }
+        const task = db.updateTask(idRef, { workspace: clear ? null : branch });
+        if (json) jsonOut(task);
+        else if (clear) out(`${c.green("✓")} workspace cleared on ${c.dim(task.id)}`);
+        else out(`${c.green("✓")} workspace ${c.dim(branch)} recorded on ${c.dim(task.id)}`);
         return 0;
       }
 

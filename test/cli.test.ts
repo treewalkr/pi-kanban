@@ -953,5 +953,49 @@ test("link/unlink roundtrip: ✓ output, show --json, unlink --json", async () =
   expect(reUnlinkPlain.stdout).toContain("were not linked");
 });
 
+test("ws set → show → clear roundtrip", async () => {
+  const addRes = await cli("add", "Workspace card", "--json");
+  expect(addRes.code).toBe(0);
+  const task = JSON.parse(addRes.stdout) as Task;
+
+  // bare ws <id> -> exit 1, usage message
+  const bareRes = await cli("ws", task.id);
+  expect(bareRes.code).toBe(1);
+  expect(bareRes.stderr).toContain("usage: kanban ws <id> <branch> | kanban ws <id> --clear");
+
+  // both branch and --clear -> exit 1, usage message
+  const bothRes = await cli("ws", task.id, "acme", "--clear");
+  expect(bothRes.code).toBe(1);
+  expect(bothRes.stderr).toContain("usage: kanban ws <id> <branch> | kanban ws <id> --clear");
+
+  // ws <id> acme exit 0, stdout ✓ workspace acme recorded on <id>
+  const setRes = await cli("ws", task.id, "acme");
+  expect(setRes.code).toBe(0);
+  expect(setRes.stdout).toContain(`✓ workspace acme recorded on ${task.id}`);
+
+  // show --json -> workspace: "acme"
+  const showJson = await cli("show", task.id, "--json");
+  expect(showJson.code).toBe(0);
+  expect(JSON.parse(showJson.stdout).workspace).toBe("acme");
+
+  // show (text) prints workspace: acme
+  const showText = await cli("show", task.id);
+  expect(showText.code).toBe(0);
+  expect(showText.stdout).toContain("workspace: acme");
+
+  // --clear -> ✓ workspace cleared on <id> and workspace: null
+  const clearRes = await cli("ws", task.id, "--clear");
+  expect(clearRes.code).toBe(0);
+  expect(clearRes.stdout).toContain(`✓ workspace cleared on ${task.id}`);
+
+  const showClearedJson = await cli("show", task.id, "--json");
+  expect(showClearedJson.code).toBe(0);
+  expect(JSON.parse(showClearedJson.stdout).workspace).toBeNull();
+
+  const showClearedText = await cli("show", task.id);
+  expect(showClearedText.code).toBe(0);
+  expect(showClearedText.stdout).toContain("workspace: —");
+});
+
 
 

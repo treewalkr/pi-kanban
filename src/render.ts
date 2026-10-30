@@ -211,6 +211,7 @@ export function taskDetail(db: KanbanDb, task: Task): string {
   out.push(
     `${c.dim("lane:")}    ${c.hex(color, lane?.name ?? task.laneId)}${lane ? c.dim(` (${lane.id})`) : ""}`,
     `${c.dim("project:")} ${task.project || c.dim("—")}`,
+    `${c.dim("workspace:")} ${task.workspace ?? c.dim("—")}`,
     `${c.dim("created:")} ${new Date(task.createdAt).toLocaleString()}`,
     `${c.dim("updated:")} ${new Date(task.updatedAt).toLocaleString()}`,
   );
