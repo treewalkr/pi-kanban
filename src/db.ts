@@ -589,6 +589,10 @@ export class KanbanDb {
     mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
+    // Serve's lease heartbeats and agent CLI writes share this file; without a
+    // busy timeout any write collision throws SQLITE_BUSY immediately (the
+    // 10/31 heartbeatLease crash). 5s of retry covers every writer here.
+    this.db.exec("PRAGMA busy_timeout = 5000;");
     this.ensureParentColumn();
     this.migratePriorityColumn();
     this.migratePreviousLaneColumn();
