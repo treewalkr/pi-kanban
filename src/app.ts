@@ -5,7 +5,8 @@ import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview"
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
-import { gitCheckout, gitInfo, type GitInfo } from "./git";
+import { gitCheckout, gitInfo, gitStatusMap, type GitFileCode, type GitInfo } from "./git";
+import { listFiles, readFile, type FileEntry } from "./files";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
 
@@ -48,7 +49,8 @@ export const createApp = (
     onDevRestart?: () => Promise<void>;
     onServeRestart?: () => Promise<void>;
     sessions?: () => number;
-  } = {}, // test seams for /restart
+    filesRoot?: string;
+  } = {}, // test seams for /restart and /files
 ) => {
   const bus = createChangeBus();
   const booted = Date.now(); // lets clients tell an old server from a restarted one
@@ -146,6 +148,47 @@ export const createApp = (
         }
       },
       { body: t.Object({ branch: t.String({ minLength: 1 }) }) },
+    )
+    .get(
+      "/files",
+      async ({ query, status }): Promise<{ path: string; entries: FileEntry[] } | unknown> => {
+        try {
+          const root = opts.filesRoot ?? process.cwd();
+          const dirPath = query.path ?? "";
+          return status(200, { path: dirPath, entries: await listFiles(root, dirPath) });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        query: t.Object({
+          path: t.Optional(t.String({ default: "" })),
+        }),
+      },
+    )
+    .get(
+      "/files/content",
+      async ({ query, status }): Promise<{ path: string; content: string; language: string } | unknown> => {
+        try {
+          const root = opts.filesRoot ?? process.cwd();
+          const file = await readFile(root, query.path);
+          return status(200, { path: query.path, content: file.content, language: file.language });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        query: t.Object({
+          path: t.String({ minLength: 1 }),
+        }),
+      },
+    )
+    .get(
+      "/git/status",
+      async (): Promise<{ files: Record<string, GitFileCode> }> => {
+        const root = opts.filesRoot ?? process.cwd();
+        return { files: await gitStatusMap(root) };
+      },
     )
     .post(
       "/tasks/:id/plan",
