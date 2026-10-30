@@ -2,15 +2,39 @@ import { api } from "../api";
 import type { Attachment, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
 import type { AgentSessionInfo, QueuedJobInfo } from "../../../src/autoreview";
 import { searchBoard } from "../../../src/search";
+import { initialProject, parseProjectHash, projectHash } from "./viewhash";
 
 type EdenError = { value?: unknown };
 
-function loadProjectFilter(): string {
+function readHash(): string {
   try {
-    return localStorage.getItem("kanban-project") ?? "";
+    return (typeof window !== "undefined" ? window.location?.hash : "") ?? "";
   } catch {
     return "";
   }
+}
+
+function writeHash(hash: string): void {
+  try {
+    const loc = typeof window !== "undefined" ? window.location : undefined;
+    const path = loc?.pathname ?? "";
+    const search = loc?.search ?? "";
+    const url = `${path}${search}${hash}`;
+    const h = (globalThis as any).history ?? (typeof history !== "undefined" ? history : undefined);
+    h?.replaceState?.(null, "", url);
+  } catch {
+    /* history unavailable */
+  }
+}
+
+function loadProjectFilter(): string {
+  let stored = "";
+  try {
+    stored = localStorage.getItem("kanban-project") ?? "";
+  } catch {
+    /* storage unavailable */
+  }
+  return initialProject(stored, readHash());
 }
 
 function loadPrioFilter(): "high" | "" {
@@ -72,6 +96,14 @@ class BoardStore {
       else localStorage.setItem("kanban-project", v);
     } catch {
       /* storage unavailable — the filter still works for this session */
+    }
+    writeHash(projectHash(v));
+  }
+
+  applyProjectHash(): void {
+    const project = parseProjectHash(readHash());
+    if (project !== this.#projectFilter) {
+      this.projectFilter = project;
     }
   }
 
@@ -165,7 +197,17 @@ class BoardStore {
     [...new Set(this.tasks.map((t) => t.project).filter((p) => p !== ""))].sort(),
   );
 
-  readonly activeCount = $derived(this.tasks.filter((t) => t.laneId !== "archive").length);
+  readonly visibleLanes = $derived(
+    this.lanes
+      .map((lane, index) => ({ lane, index }))
+      .filter(({ lane }) => this.#projectFilter === "" || this.visibleTasks(lane.id).length > 0),
+  );
+
+  readonly activeCount = $derived(
+    this.tasks.filter(
+      (t) => t.laneId !== "archive" && (this.#projectFilter === "" || t.project === this.#projectFilter),
+    ).length,
+  );
   readonly waitingCount = $derived(this.tasks.filter((t) => t.laneId === "waiting").length);
 
   // a search that matches archived cards reveals the collapsed strip
