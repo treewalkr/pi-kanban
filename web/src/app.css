@@ -1778,6 +1778,10 @@ button:focus-visible {
   .id, .age, .chip, .cycle-chip, .count, .lane-dwell, .badge, .detail-meta {
     font-size: 11px;
   }
+
+  .dep-add input {
+    font-size: 16px;
+  }
 }
 
 /* collapsed archive strip */
@@ -3511,6 +3515,13 @@ button:focus-visible {
 
   .child-row {
     padding: 6px 2px;
+  }
+
+  .dep-add input,
+  .dep-add-btn,
+  .dep-x {
+    min-height: 28px;
+    padding: 4px 8px;
   }
 }
 
