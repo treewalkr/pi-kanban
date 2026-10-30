@@ -111,7 +111,9 @@
     if (await board.addTask(me.laneId, title, undefined, task.id)) subtaskTitle = "";
   }
 
-  // the plan gate: approve arms the plan-build builder, reject re-arms the planner
+  // the plan gate: approve arms the plan-build builder, reject re-arms the planner —
+  // both work on a card parked in Waiting on you from Plan (a passed review)
+  const atPlanGate = $derived(me.laneId === "plan" || (me.laneId === "waiting" && me.previousLane === "plan"));
   let rejecting = $state(false);
   let rejectMsg = $state("");
 
@@ -368,7 +370,7 @@
     {/if}
     <div class="editor-actions">
       <IdChip id={me.id} />
-      {#if me.laneId === "plan"}
+      {#if atPlanGate}
         {#if rejecting}
           <form
             class="reject-form"
