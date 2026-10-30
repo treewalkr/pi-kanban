@@ -644,6 +644,24 @@ export class KanbanDb {
     return s;
   }
 
+  /**
+   * this.db.transaction(fn)(), retried on SQLITE_BUSY. bun:sqlite only issues
+   * deferred BEGINs; under WAL, a transaction that reads then writes fails
+   * with SQLITE_BUSY (snapshot) the instant another connection commits in
+   * between, and busy_timeout cannot rescue it — the whole transaction must
+   * re-run. Server loop + agent CLIs share the file, so this is routine.
+   */
+  private tx<T>(fn: () => T, attempts = 5): T {
+    for (let i = 0; ; i++) {
+      try {
+        return this.db.transaction(fn)();
+      } catch (err) {
+        if (i === attempts - 1 || (err as { code?: string }).code !== "SQLITE_BUSY") throw err;
+        Bun.sleepSync(25 * (i + 1));
+      }
+    }
+  }
+
   private seedLanes(): void {
     const count = this.q("SELECT COUNT(*) AS n FROM lanes").get() as { n: number };
     if (count.n > 0) return;
@@ -993,7 +1011,7 @@ export class KanbanDb {
     for (let attempt = 0; attempt < 5; attempt++) {
       const id = newId();
       try {
-        this.db.transaction(() => {
+        this.tx(() => {
           this.q(
             "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, previous_lane, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           ).run(id, title, input.note ?? "", lane.id, input.project ?? "", parent?.id ?? null, null, priority, position, now, now);
@@ -1001,7 +1019,7 @@ export class KanbanDb {
           if (input.blockedBy !== undefined) {
             this.setBlockedBy(id, input.blockedBy);
           }
-        })();
+        });
         this.renormalizeIfTight(lane.id);
         return this.resolveTask(id);
       } catch (err) {
@@ -1287,13 +1305,13 @@ export class KanbanDb {
     const del = this.q("DELETE FROM blocked_by WHERE card_id = ?");
     const ins = this.q("INSERT INTO blocked_by (card_id, blocker_id, created_at) VALUES (?, ?, ?)");
     const now = Date.now();
-    this.db.transaction(() => {
+    this.tx(() => {
       del.run(task.id);
       for (const b of uniqueBlockers) {
         ins.run(task.id, b.id, now);
       }
       this.q("UPDATE tasks SET updated_at = ? WHERE id = ?").run(now, task.id);
-    })();
+    });
   }
 
   /** Sparse card-id → direct blocker ids, for the board payload and CLI --json. */
@@ -1323,13 +1341,13 @@ export class KanbanDb {
     const now = Date.now();
     const ins = this.q("INSERT OR IGNORE INTO card_links (card_a, card_b, created_at) VALUES (?, ?, ?)");
     const bump = this.q("UPDATE tasks SET updated_at = ? WHERE id = ?");
-    this.db.transaction(() => {
+    this.tx(() => {
       const res = ins.run(cardA, cardB, now);
       if (res.changes > 0) {
         bump.run(now, cardA);
         bump.run(now, cardB);
       }
-    })();
+    });
     return this.linksOf(a.id);
   }
 
@@ -1345,7 +1363,7 @@ export class KanbanDb {
     const del = this.q("DELETE FROM card_links WHERE card_a = ? AND card_b = ?");
     const bump = this.q("UPDATE tasks SET updated_at = ? WHERE id = ?");
     let removed = false;
-    this.db.transaction(() => {
+    this.tx(() => {
       const res = del.run(cardA, cardB);
       if (res.changes > 0) {
         removed = true;
@@ -1353,7 +1371,7 @@ export class KanbanDb {
         bump.run(now, cardA);
         bump.run(now, cardB);
       }
-    })();
+    });
     return removed;
   }
 
@@ -1501,7 +1519,7 @@ export class KanbanDb {
     let moved: "parked" | "returned" | null = null;
     let createdComment!: Comment;
 
-    this.db.transaction(() => {
+    this.tx(() => {
       createdComment = this.createComment(task.id, input);
       const isQuestion = createdComment.kind === "question";
       const isHuman = !createdComment.author.startsWith("pi-");
@@ -1520,7 +1538,7 @@ export class KanbanDb {
         moved = "returned";
       }
       task = this.resolveTask(task.id);
-    })();
+    });
 
     return { comment: createdComment, task, moved };
   }
@@ -1743,7 +1761,7 @@ export class KanbanDb {
     const task = this.resolveTask(taskRef);
     const kind = input.kind ?? "handoff";
     const findings = (input.findings ?? []).map((f) => f.trim()).filter(Boolean);
-    return this.db.transaction((): { task: Task; comment: Comment } => {
+    return this.tx((): { task: Task; comment: Comment } => {
       const note = findings.length > 0 ? `${task.note}\n${findings.map((f) => `- [ ] ${f}`).join("\n")}` : undefined;
       const moved = this.updateTask(
         task.id,
@@ -1752,7 +1770,7 @@ export class KanbanDb {
       );
       const comment = this.createComment(task.id, { author: input.author, kind, body: input.message });
       return { task: moved, comment };
-    })();
+    });
   }
 
   /** True when the card sits at the plan gate: in Plan, or parked in Waiting on you from Plan. */
@@ -1768,7 +1786,7 @@ export class KanbanDb {
     }
     const plan = this.attachment(task.id, "plan");
     if (!plan) throw new KanbanError(`card '${task.id}' has no attached plan to approve`, "conflict");
-    return this.db.transaction((): { task: Task; comment: Comment } => {
+    return this.tx((): { task: Task; comment: Comment } => {
       const task2 = this.updateTask(
         task.id,
         { lane: "implement" },
@@ -1780,7 +1798,7 @@ export class KanbanDb {
         body: input.message?.trim() || `plan v${plan.version} approved — build it`,
       });
       return { task: task2, comment };
-    })();
+    });
   }
 
   /** The other gate arm: reject with feedback — comment stays, card ends in Plan (a parked card returns first); the feedback steers the next plan. */
@@ -1791,12 +1809,12 @@ export class KanbanDb {
     }
     const body = message.trim();
     if (!body) throw new KanbanError("rejection feedback must not be empty — it steers the next plan", "invalid");
-    return this.db.transaction((): { task: Task; comment: Comment; returned: boolean } => {
+    return this.tx((): { task: Task; comment: Comment; returned: boolean } => {
       const returned = task.laneId === WAITING_LANE_ID;
       const task2 = returned ? this.updateTask(task.id, { lane: "plan" }) : task;
       const comment = this.createComment(task.id, { author: input.author, kind: "rejection", body: `plan rejected: ${body}` });
       return { task: task2, comment, returned };
-    })();
+    });
   }
 
   /** Plan-review verdict prefixes — the autoreview loop arms on these exact strings. */
@@ -1827,11 +1845,11 @@ export class KanbanDb {
     }
     const prefix = input.verdict === "pass" ? KanbanDb.PLAN_REVIEW_PASS : KanbanDb.PLAN_REVIEW_BLOCK;
     const body = `${prefix}${message ? ` — ${message}` : ""}${findings.map((f) => `\n- ${f}`).join("")}`;
-    return this.db.transaction((): { comment: Comment; task: Task } => {
+    return this.tx((): { comment: Comment; task: Task } => {
       const comment = this.createComment(task.id, { author: input.author, kind: "review", body });
       if (input.verdict === "pass") this.parkInWaiting(task.id, "plan");
       return { comment, task: this.resolveTask(task.id) };
-    })();
+    });
   }
 
   // ---------- card sessions & resume requests ----------
@@ -1946,7 +1964,7 @@ export class KanbanDb {
 
   tryTakeLease(taskId: string, role: string, owner: LeaseOwner, staleAfterMs: number): boolean {
     const now = Date.now();
-    return this.db.transaction((): boolean => {
+    return this.tx((): boolean => {
       const row = this.q("SELECT heartbeat_at FROM agent_leases WHERE task_id = ?").get(taskId) as
         | { heartbeat_at: number }
         | undefined;
@@ -1955,7 +1973,7 @@ export class KanbanDb {
         "INSERT OR REPLACE INTO agent_leases (task_id, role, owner_pid, boot_id, heartbeat_at) VALUES (?, ?, ?, ?, ?)",
       ).run(taskId, role, owner.pid, owner.bootId, now);
       return true;
-    })();
+    });
   }
 
   heartbeatLease(taskId: string, owner: LeaseOwner): void {
