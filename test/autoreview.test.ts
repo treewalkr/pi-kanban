@@ -25,8 +25,10 @@ import {
   killAgentSessions,
   MAX_SKILL_CHARS,
   mergeSlotConfig,
+  modelConfigLabel,
   plannerPrompt,
   planReviewerPrompt,
+  resolvedModelConfig,
   resumePrompt,
   reviewerPrompt,
   sessionIdFor,
@@ -921,6 +923,66 @@ describe("auto-review", () => {
     withAgentEnv({ KANBAN_AUTOREVIEW_MODEL: "openai/o3", KANBAN_AUTOREVIEW_THINKING: "" }, () => {
       expect(agentFlags("reviewer", { thinking: "max" })).toEqual(["--model", "openai/o3"]);
     });
+  });
+
+  test("resolvedModelConfig: env beats config beats role default; provider passes through; empty env thinking disables", () => {
+    withAgentEnv({}, () => {
+      expect(resolvedModelConfig("reviewer", null)).toEqual({ thinking: "max" });
+      expect(resolvedModelConfig("builder", null)).toEqual({});
+      expect(
+        resolvedModelConfig("reviewer", {
+          provider: "anthropic",
+          model: "claude-x",
+          thinking: "high",
+        }),
+      ).toEqual({
+        provider: "anthropic",
+        model: "claude-x",
+        thinking: "high",
+      });
+    });
+
+    withAgentEnv(
+      {
+        KANBAN_AUTOREVIEW_MODEL: "openai/o3",
+        KANBAN_AUTOREVIEW_THINKING: "low",
+      },
+      () => {
+        expect(
+          resolvedModelConfig("reviewer", {
+            provider: "anthropic",
+            model: "claude-x",
+            thinking: "high",
+          }),
+        ).toEqual({
+          provider: "anthropic",
+          model: "openai/o3",
+          thinking: "low",
+        });
+      },
+    );
+
+    withAgentEnv({ KANBAN_AUTOREVIEW_THINKING: "" }, () => {
+      const mc = resolvedModelConfig("reviewer", { thinking: "max" });
+      expect(mc.thinking).toBeUndefined();
+    });
+  });
+
+  test("modelConfigLabel: provider · model · thinking, default-model fallback, unset parts dropped", () => {
+    expect(
+      modelConfigLabel({
+        provider: "anthropic",
+        model: "claude-x",
+        thinking: "high",
+      }),
+    ).toBe("anthropic · claude-x · thinking high");
+    expect(
+      modelConfigLabel({
+        model: "gemini-4-argon",
+        thinking: "high",
+      }),
+    ).toBe("gemini-4-argon · thinking high");
+    expect(modelConfigLabel({})).toBe("default model");
   });
 
   test("defaults: 2h total cap, 10 min stall window", () => {

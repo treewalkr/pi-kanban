@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { KanbanDb, PLAN_REVIEWER_AUTHOR, type AgentConfig, type AgentRole, type LeaseOwner, type PoolSlot, type Task, type WorkerPool } from "./db";
+import { KanbanDb, PLAN_REVIEWER_AUTHOR, type AgentConfig, type AgentRole, type AgentThinking, type LeaseOwner, type PoolSlot, type Task, type WorkerPool } from "./db";
 
 export type { AgentRole };
 export { PLAN_REVIEWER_AUTHOR };
@@ -399,6 +399,35 @@ export function mergeSlotConfig(cfg: AgentConfig | null, slot: PoolSlot | undefi
   return Object.keys(result).length > 0 ? result : null;
 }
 
+/** The resolved model config of one spawn — what actually ran. */
+export interface ModelConfig {
+  provider?: string;
+  model?: string; // absent = pi's default model
+  thinking?: AgentThinking; // AgentThinking imported (type-only) from ./db
+}
+
+/** Env > config > role-default resolution — the same one agentFlags applies. */
+export function resolvedModelConfig(role: AgentRole, cfg: AgentConfig | null): ModelConfig {
+  const envModel = process.env.KANBAN_AUTOREVIEW_MODEL?.trim();
+  const envThinking = process.env.KANBAN_AUTOREVIEW_THINKING;
+  let thinking: AgentThinking | undefined =
+    (envThinking !== undefined && envThinking.trim() !== "" ? (envThinking.trim() as AgentThinking) : undefined) ||
+    (cfg?.thinking ? cfg.thinking : undefined) ||
+    (role === "reviewer" || role === "planner" || role === "plan-reviewer" ? "max" : undefined);
+  if (envThinking === "") thinking = undefined;
+  const mc: ModelConfig = {};
+  if (cfg?.provider) mc.provider = cfg.provider;
+  const model = envModel || cfg?.model;
+  if (model) mc.model = model;
+  if (thinking) mc.thinking = thinking;
+  return mc;
+}
+
+/** "anthropic · claude-x · thinking high" — unset parts dropped, model falls back to "default model". */
+export function modelConfigLabel(mc: Partial<ModelConfig>): string {
+  return [mc.provider, mc.model ?? "default model", mc.thinking ? `thinking ${mc.thinking}` : ""].filter(Boolean).join(" · ");
+}
+
 /**
  * pi flags for a role: env (KANBAN_AUTOREVIEW_MODEL / KANBAN_AUTOREVIEW_THINKING)
  * beats the board config, which beats the built-in default (reviewer thinks max;
@@ -407,16 +436,11 @@ export function mergeSlotConfig(cfg: AgentConfig | null, slot: PoolSlot | undefi
  * prompt (skillActivationPrompt); warnings from that go to onWarn.
  */
 export function agentFlags(role: AgentRole, cfg: AgentConfig | null, onWarn?: (message: string) => void): string[] {
-  const envModel = process.env.KANBAN_AUTOREVIEW_MODEL?.trim();
-  const envThinking = process.env.KANBAN_AUTOREVIEW_THINKING;
-  let thinking =
-    envThinking?.trim() || cfg?.thinking || (role === "reviewer" || role === "planner" || role === "plan-reviewer" ? "max" : "");
-  if (envThinking === "") thinking = ""; // explicitly disabled via env
+  const mc = resolvedModelConfig(role, cfg);
   const args: string[] = [];
-  if (cfg?.provider) args.push("--provider", cfg.provider);
-  const model = envModel || cfg?.model;
-  if (model) args.push("--model", model);
-  if (thinking) args.push("--thinking", thinking);
+  if (mc.provider) args.push("--provider", mc.provider);
+  if (mc.model) args.push("--model", mc.model);
+  if (mc.thinking) args.push("--thinking", mc.thinking);
   for (const skill of cfg?.skills ?? []) args.push("--skill", skill);
   const activated = skillActivationPrompt(cfg?.skills ?? [], onWarn);
   const appended = [cfg?.context, activated].filter(Boolean).join("\n\n");
