@@ -6,7 +6,7 @@
   import IdChip from "./IdChip.svelte";
   import { copyText } from "./copy";
   import { renderMarkdown, toggleTaskLine } from "./markdown";
-  import { laneColor, roleAuthor, timeAgo } from "./util";
+  import { canPromoteToPlan, laneColor, roleAuthor, timeAgo } from "./util";
   import { canResume } from "./waiting";
 
   const task = board.editing!;
@@ -68,6 +68,7 @@
 
   let laneIndex = $derived(Math.max(0, board.lanes.findIndex((l) => l.id === me.laneId)));
   let laneName = $derived(board.lanes[laneIndex]?.name ?? me.laneId);
+  let canPromote = $derived(canPromoteToPlan(me, board.lanes));
   let subtaskTitle = $state("");
 
   const fmt = (ts: number) => new Date(ts).toLocaleString();
@@ -389,6 +390,9 @@
         {/if}
       {/if}
       <span class="spacer"></span>
+      {#if canPromote}
+        <button class="ghost" onclick={() => toLane("plan")}>→ plan</button>
+      {/if}
       {#if me.laneId !== "done"}
         <button class="ghost" onclick={() => toLane("done")}>✓ done</button>
       {/if}
