@@ -47,6 +47,7 @@ kanban comment <id> <text…> [--kind comment|review|handoff|question] · commen
 kanban handoff <id> <lane> --message <text>   # atomic move + thread record
 kanban review <id> (--approve | --block --message <text> [--finding <text>]…)
 kanban approve <id> · reject <id> --message <text>   # the human plan gate
+kanban stats [id] [--json]          # board summary, or one card's lane times / cycle / gate metrics
 kanban check [--json] · stop · help
 ```
 

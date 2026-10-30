@@ -9,6 +9,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 - `skills/pi-kanban/SKILL.md` — pi skill, installed to `~/.pi/agent/skills/pi-kanban/` by `scripts/install.sh`
 - `data/kanban.db` — SQLite DB (gitignored); `KANBAN_DB` env var overrides the path (tests use this)
 - `worker_pools` table (`src/db.ts`) + `/pools` routes (`src/app.ts`) — parallel worker pools for auto-review
+- `lane_events` table (`src/db.ts`) + `/stats` route (`src/app.ts`) + `kanban stats` — audit trail and board analytics
 
 ## Rules
 

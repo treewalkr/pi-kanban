@@ -124,6 +124,7 @@ kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>] 
 kanban done <id>                                                      # shortcut → Done
 kanban archive <id>                                                   # shortcut → Archive (undo: mv <id> <lane>)
 kanban check [--json]                                                 # board-health lint: done parents w/ active children, children behind parent, planless build cards (advisory, exit 0)
+kanban stats [id] [--json]                                           # board summary, or one card's lane times / cycle / gate metrics
 kanban rm <id> [--force]                                              # delete card (a parent needs --force; cascades)
 kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force]  # manage lanes
 kanban serve [--port <n>] [--open] [--auto-review]            # start web UI (default 127.0.0.1:4600); --auto-review: pi plans Plan-lane cards and reviews Review-lane cards
