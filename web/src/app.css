@@ -188,17 +188,42 @@ button {
   margin-bottom: 10px;
 }
 
+/* The brand, pi-web's (Brand.svelte): a button whose click scrambles the
+   name into the version in the accent for a few seconds. No box: focus is
+   a ring, and only from the keyboard. */
 .sidebar-brand {
   display: flex;
   align-items: center;
   gap: 7px;
+  margin: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   font-family: var(--font-mono);
   font-weight: 700;
   font-size: 15px;
   letter-spacing: -0.01em;
+  line-height: normal;
   color: var(--text);
   min-width: 6ch;
+  white-space: nowrap;
+  text-align: left;
+  cursor: default;
   user-select: none;
+}
+
+.sidebar-brand:focus {
+  outline: none;
+}
+
+.sidebar-brand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sidebar-brand.is-version {
+  color: var(--accent);
 }
 
 .sidebar-brand .mark {

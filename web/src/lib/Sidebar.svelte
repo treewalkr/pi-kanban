@@ -1,7 +1,7 @@
 <script lang="ts">
   import { board } from "./board.svelte";
   import { ui } from "./ui.svelte";
-  import Mark from "./Mark.svelte";
+  import Brand from "./Brand.svelte";
   import PathLabel from "./PathLabel.svelte";
   import Dropdown from "./Dropdown.svelte";
   import { Check, ChevronDown, FolderOpen, GitBranch, Loader2, Plus, Search } from "@lucide/svelte";
@@ -125,7 +125,7 @@
 
 <div class="sidebar-head">
   <div class="sidebar-head-row">
-    <div class="sidebar-brand"><Mark />kanban</div>
+    <Brand />
     <div class="sidebar-tools">
       <button
         class="side-btn"
