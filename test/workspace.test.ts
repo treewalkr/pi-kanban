@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -172,5 +172,16 @@ describe("scripts/workspace.sh", () => {
     const tooFewArgsRes = await runWorkspace(repo, ["new"]);
     expect(tooFewArgsRes.code).toBe(1);
     expect(tooFewArgsRes.stderr).toContain("workspace: usage: scripts/workspace.sh <new|done> <slug>");
+  });
+
+  test("AGENTS.md documents the workspace workflow", () => {
+    const agentsMd = readFileSync(join(import.meta.dir, "..", "AGENTS.md"), "utf-8");
+    expect(agentsMd).toContain("## Git workspaces");
+
+    const section = agentsMd.split("## Git workspaces")[1];
+    expect(section).toContain("scripts/workspace.sh new");
+    expect(section).toContain("scripts/workspace.sh done");
+    expect(section).toContain("bun install");
+    expect(section).toContain("git worktree list");
   });
 });
