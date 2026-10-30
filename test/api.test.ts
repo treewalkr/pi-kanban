@@ -885,3 +885,83 @@ test("GET /git reports the serving repo; checkout refuses unknown branches", asy
   const after = (await afterRes.json()) as { branch: string };
   expect(after.branch).toBe(info.branch);
 });
+
+test("POST/DELETE /tasks/:id/links roundtrip; self-link 400; unknown target 404", async () => {
+  const app = createApp(db);
+  const a = db.createTask({ title: "Card A" });
+  const b = db.createTask({ title: "Card B" });
+
+  // self-link 400
+  const selfRes = await app.handle(
+    new Request(`http://localhost/tasks/${a.id}/links`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target: a.id }),
+    }),
+  );
+  expect(selfRes.status).toBe(400);
+  const selfBody = (await selfRes.json()) as any;
+  expect(selfBody.code).toBe("invalid");
+
+  // unknown target 404
+  const unknownRes = await app.handle(
+    new Request(`http://localhost/tasks/${a.id}/links`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target: "nonexistent" }),
+    }),
+  );
+  expect(unknownRes.status).toBe(404);
+  const unknownBody = (await unknownRes.json()) as any;
+  expect(unknownBody.code).toBe("not-found");
+
+  // POST 201
+  const linkRes = await app.handle(
+    new Request(`http://localhost/tasks/${a.id}/links`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target: b.id }),
+    }),
+  );
+  expect(linkRes.status).toBe(201);
+  const linkBody = (await linkRes.json()) as { linked: Array<{ id: string }> };
+  expect(linkBody.linked.some((t) => t.id === b.id)).toBe(true);
+
+  // DELETE 200 { ok: true, removed: true }
+  const delRes = await app.handle(
+    new Request(`http://localhost/tasks/${a.id}/links/${b.id}`, {
+      method: "DELETE",
+    }),
+  );
+  expect(delRes.status).toBe(200);
+  expect(await delRes.json()).toEqual({ ok: true, removed: true });
+
+  // repeat DELETE { ok: true, removed: false }
+  const repeatDel = await app.handle(
+    new Request(`http://localhost/tasks/${a.id}/links/${b.id}`, {
+      method: "DELETE",
+    }),
+  );
+  expect(repeatDel.status).toBe(200);
+  expect(await repeatDel.json()).toEqual({ ok: true, removed: false });
+});
+
+test("board payload lists a link from both connected cards", async () => {
+  const app = createApp(db);
+  const a = db.createTask({ title: "Card A" });
+  const b = db.createTask({ title: "Card B" });
+
+  await app.handle(
+    new Request(`http://localhost/tasks/${a.id}/links`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target: b.id }),
+    }),
+  );
+
+  const boardRes = await app.handle(new Request("http://localhost/board"));
+  expect(boardRes.status).toBe(200);
+  const board = (await boardRes.json()) as any;
+  expect(board.links[a.id]).toContain(b.id);
+  expect(board.links[b.id]).toContain(a.id);
+});

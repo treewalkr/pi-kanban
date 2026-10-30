@@ -288,6 +288,37 @@ export const createApp = (
       { params: t.Object({ id: t.String() }) },
     )
     .post(
+      "/tasks/:id/links",
+      ({ params, body, status, set }): { linked: Task[] } => {
+        try {
+          const linked = db.linkCards(params.id, body.target);
+          set.status = 201;
+          return { linked };
+        } catch (e) {
+          return fail<{ linked: Task[] }>(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Object({
+          target: t.String({ minLength: 1 }),
+        }),
+      },
+    )
+    .delete(
+      "/tasks/:id/links/:targetId",
+      ({ params, status }): { ok: true; removed: boolean } => {
+        try {
+          return { ok: true, removed: db.unlinkCards(params.id, params.targetId) };
+        } catch (e) {
+          return fail<{ ok: true; removed: boolean }>(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String(), targetId: t.String() }),
+      },
+    )
+    .post(
       "/tasks/:id/comments",
       ({ params, body, status, set }): Comment => {
         try {
