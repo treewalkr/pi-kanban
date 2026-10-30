@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Attachment, Comment, Task } from "../../../src/db";
   import { isAgentChatter, latestStateIndex } from "../../../src/thread";
+  import { Sparkles } from "@lucide/svelte";
   import { api } from "../api";
   import { board } from "./board.svelte";
   import IdChip from "./IdChip.svelte";
@@ -408,9 +409,12 @@
       {/if}
       {#if !queuedJob && !live}
         <button
-          class="ghost"
+          class="ghost icon-only"
+          aria-label="queue a pi-elaborator session to expand the note (intent + acceptance criteria) and fix an obviously broken title"
           title="queue a pi-elaborator session to expand the note (intent + acceptance criteria) and fix an obviously broken title"
-          onclick={() => board.elaborate(me.id)}>✨ elaborate</button>
+          onclick={() => board.elaborate(me.id)}>
+          <Sparkles size={13} strokeWidth={1.75} />
+        </button>
       {/if}
       <span class="spacer"></span>
       {#if canPromote}
