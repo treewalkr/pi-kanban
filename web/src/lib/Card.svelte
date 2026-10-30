@@ -6,7 +6,7 @@
   import { renderMarkdown } from "./markdown";
   import { CircleSlash } from "@lucide/svelte";
   import { cycleChip } from "./statsview";
-  import { queuedChip, timeAgo } from "./util";
+  import { canPromoteToPlan, queuedChip, timeAgo } from "./util";
   import { waitingBadge } from "./waiting";
 
   let { task, child = false }: { task: Task; child?: boolean } = $props();
@@ -17,6 +17,7 @@
   let parent = $derived(task.parentId ? board.taskById(task.parentId) : undefined);
   let parentChip = $derived(!!parent && !board.nestsUnder(task));
   let waiting = $derived(waitingBadge(board.waiting[task.id], !!board.activity[task.id] || !!board.queued[task.id]));
+  let canPromote = $derived(canPromoteToPlan(task, board.lanes));
 
   function openDetail(e: Event): void {
     e.stopPropagation();
@@ -51,6 +52,19 @@
     board.dropHint = null;
   }}
 >
+  {#if canPromote}
+    <button
+      class="promote"
+      title="move to Plan"
+      onclick={(e) => {
+        e.stopPropagation();
+        board.moveTask(task.id, "plan");
+      }}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      → Plan
+    </button>
+  {/if}
   {#if parentChip && parent}
     <button
       class="parent-chip"

@@ -1081,6 +1081,7 @@ button:focus-visible {
 }
 
 .card {
+  position: relative;
   background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -1110,6 +1111,9 @@ button:focus-visible {
   :is(.card, .row).flash {
     animation: none;
     border-color: var(--accent);
+  }
+  .promote {
+    transition: none;
   }
 }
 
@@ -1321,6 +1325,37 @@ button.id-copy {
 }
 
 .parent-chip:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 55%, var(--text-muted));
+}
+
+/* hover-only → Plan quick action on Backlog cards (c5ytf) */
+.promote {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 7px;
+  cursor: pointer;
+}
+
+.card:hover .promote,
+.card:focus-within .promote {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.promote:hover,
+.promote:focus-visible {
   color: var(--text);
   border-color: color-mix(in srgb, var(--border) 55%, var(--text-muted));
 }
