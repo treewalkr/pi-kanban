@@ -18,6 +18,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 - SQL lives in `src/db.ts` only; the API and CLI are thin layers over its query functions
 - Ports: API `4600`, web dev `5174`; server binds `127.0.0.1` only — never expose off localhost. Reproducing board behavior: always `scripts/repro.sh` (scratch port ≥ 4611, temp DB, TTL, auto-cleanup) — never `PORT=4600`, never `KANBAN_SHARE_PORT=1`, and kill repro servers before the session ends
 - After plan approval, attach the plan to its card before implementing: write it to a file, run `kanban attach <id> <plan-file>`; re-attaching a revised plan versions it. The human records the verdict with `kanban approve <id>` (arms the plan-build agent) or `kanban reject <id> --message <feedback>` (planner re-plans) — agents never run the gate themselves
+- When a human overrides a review verdict or catches what review missed, append one dated line to `REVIEW.md` — the auto-review agents read it every session
 
 ## Commits
 

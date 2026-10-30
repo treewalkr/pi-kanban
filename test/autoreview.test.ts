@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { KanbanDb } from "../src/db";
 import {
   BUILDER_AUTHOR,
@@ -609,6 +610,22 @@ describe("auto-review", () => {
     expect(prompt).toContain("Check board truthfulness");
     expect(prompt).toContain("their lanes must match the work");
     expect(prompt).toContain("block finding");
+  });
+
+  test("REVIEW.md seeds landed rules and the append format", () => {
+    const body = readFileSync(fileURLToPath(new URL("../REVIEW.md", import.meta.url)), "utf8");
+    expect(body).toContain("Findings require proof");
+    expect(body).toContain("(brs9w)");
+    expect(body).toContain("[blocker] / [minor] / [nit]");
+    expect(body).toContain("(xetf8)");
+    expect(body).toContain("## Lessons");
+    expect(body).toContain("<!-- format: - YYYY-MM-DD");
+    expect(body).not.toContain("5pa2e");
+  });
+
+  test("AGENTS.md documents the REVIEW.md append rule", () => {
+    const body = readFileSync(fileURLToPath(new URL("../AGENTS.md", import.meta.url)), "utf8");
+    expect(body).toContain("append one dated line to `REVIEW.md`");
   });
 
   test("agentFlags: reviewer defaults to thinking max, builder to nothing", () => {
