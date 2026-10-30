@@ -227,4 +227,56 @@ describe("Files & Git Status API routes", () => {
     const allBody = (await allRes.json()) as { matches: string[] };
     expect(allBody.matches.length).toBeLessThanOrEqual(20);
   });
+
+  test("GET /git/diff returns patches for modified, untracked, deleted files", async () => {
+    const app = createApp(db, { filesRoot: repoDir });
+
+    // Modified file
+    const modRes = await app.handle(new Request("http://localhost/git/diff?path=m.txt"));
+    expect(modRes.status).toBe(200);
+    const modBody = (await modRes.json()) as { supported: boolean; status?: string; patch?: string };
+    expect(modBody.supported).toBe(true);
+    expect(modBody.status).toBe("modified");
+    expect(modBody.patch).toContain("@@");
+
+    // Untracked file
+    const untrackedRes = await app.handle(
+      new Request("http://localhost/git/diff?path=docs/intro.md")
+    );
+    expect(untrackedRes.status).toBe(200);
+    const untrackedBody = (await untrackedRes.json()) as {
+      supported: boolean;
+      status?: string;
+      patch?: string;
+    };
+    expect(untrackedBody.supported).toBe(true);
+    expect(untrackedBody.status).toBe("untracked");
+    expect(untrackedBody.patch).toContain("new file mode 100644");
+    expect(untrackedBody.patch).toContain("@@ -0,0 +1,1 @@");
+
+    // Clean file -> supported: false
+    const cleanRes = await app.handle(new Request("http://localhost/git/diff?path=hello.ts"));
+    expect(cleanRes.status).toBe(200);
+    const cleanBody = (await cleanRes.json()) as { supported: boolean };
+    expect(cleanBody.supported).toBe(false);
+
+    // Missing file -> supported: false
+    const missRes = await app.handle(new Request("http://localhost/git/diff?path=missing.txt"));
+    expect(missRes.status).toBe(200);
+    const missBody = (await missRes.json()) as { supported: boolean };
+    expect(missBody.supported).toBe(false);
+
+    // Deleted file
+    writeFileSync(join(repoDir, "to-del.txt"), "delete me\n");
+    Bun.spawnSync({ cmd: ["git", "add", "to-del.txt"], cwd: repoDir });
+    Bun.spawnSync({ cmd: ["git", "commit", "-m", "add to-del"], cwd: repoDir });
+    rmSync(join(repoDir, "to-del.txt"));
+
+    const delRes = await app.handle(new Request("http://localhost/git/diff?path=to-del.txt"));
+    expect(delRes.status).toBe(200);
+    const delBody = (await delRes.json()) as { supported: boolean; status?: string; patch?: string };
+    expect(delBody.supported).toBe(true);
+    expect(delBody.status).toBe("deleted");
+    expect(delBody.patch).toContain("@@");
+  });
 });

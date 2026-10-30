@@ -6,7 +6,7 @@ import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview"
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
-import { gitCheckout, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitInfo } from "./git";
+import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
 import { contentTypeFor, listFiles, rawFilePath, readFile, searchFiles, type FileEntry } from "./files";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
@@ -269,6 +269,18 @@ export const createApp = (
           gitLineStats(root),
         ]);
         return { files, additions: stats.additions, deletions: stats.deletions };
+      },
+    )
+    .get(
+      "/git/diff",
+      async ({ query }): Promise<GitFileDiff> => {
+        const root = opts.filesRoot ?? process.cwd();
+        return gitFileDiff(root, query.path);
+      },
+      {
+        query: t.Object({
+          path: t.String({ minLength: 1 }),
+        }),
       },
     )
     .post(
