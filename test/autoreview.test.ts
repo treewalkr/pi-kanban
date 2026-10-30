@@ -1314,30 +1314,36 @@ describe("auto-review", () => {
     expect(logs[0]!.content).toContain("quota exceeded");
   });
 
-  test("finished sessions save their log on the card; silent ones save nothing", async () => {
+  test("every finished session records its model config in header and first log line", async () => {
     const { dbFile, writer: w } = setup();
     const card = cardInReview(w);
-    let talkative = true;
+    w.setAgentConfig("reviewer", { provider: "anthropic", model: "claude-x", thinking: "high" });
     const spawnFn: SpawnFn = (_job, context) => {
-      if (talkative) {
-        context.emit("session started");
-        context.emit("→ bash: bun test");
-      }
-      return Promise.resolve({ code: talkative ? 0 : 1 });
+      context.emit("session started");
+      return Promise.resolve({ code: 0 });
     };
     start(spawnFn, dbFile);
-    await sleep(20);
+    await sleep(30);
     const logs = db!.attachments(card.id, "session");
     expect(logs.length).toBe(1);
-    expect(logs[0]!.source).toBe("autoreview");
-    expect(logs[0]!.content).toContain("pi-reviewer"); // header names the role
-    expect(logs[0]!.content).toContain("→ bash: bun test");
+    const lines = logs[0]!.content.split("\n");
+    expect(lines[0]).toStartWith("pi-reviewer · anthropic · claude-x · thinking high · ");
+    expect(lines[1]).toBe("model: anthropic · claude-x · thinking high");
+  });
 
-    // a silent session (nothing emitted) attaches nothing
-    talkative = false;
-    w.createComment(card.id, { author: "user", body: "re-arm" }); // any comment re-arms review
-    await sleep(200);
-    expect(db!.attachments(card.id, "session").length).toBe(1);
+  test("silent sessions still record their header and model config", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = w.createTask({ title: "silent builder", lane: "plan" });
+    w.attach(card.id, "plan", "# Plan", "user");
+    w.approveTask(card.id, { author: "user" }); // moves to implement, arms builder
+    const spawnFn: SpawnFn = () => Promise.resolve({ code: 0 });
+    start(spawnFn, dbFile);
+    await sleep(40);
+    const logs = db!.attachments(card.id, "session");
+    expect(logs.length).toBe(1);
+    const lines = logs[0]!.content.split("\n");
+    expect(lines[0]).toStartWith("pi-builder · default model · ");
+    expect(lines[1]).toBe("model: default model");
   });
 
   test("activity registry: session lists with emitted lines, clears when the job ends", async () => {
@@ -1355,7 +1361,8 @@ describe("auto-review", () => {
     ctx.emit("→ bash: bun test");
     const snap = activitySnapshot().sessions[0]!;
     expect(snap.role).toBe("reviewer");
-    expect(snap.log).toEqual(["session started", "→ bash: bun test"]);
+    expect(snap.modelLabel).toBe("default model · thinking max");
+    expect(snap.log).toEqual(["model: default model · thinking max", "session started", "→ bash: bun test"]);
     finish({ code: 0 });
     await sleep(20);
     expect(activitySnapshot().sessions.some((s) => s.taskId === card.id)).toBe(false);
@@ -1523,14 +1530,16 @@ describe("auto-review", () => {
     await sleep(50);
 
     ctx.emit("→ bash: bun test");
-    expect(activitySnapshot().sessions.find((s) => s.taskId === card.id)?.log).toEqual(["→ bash: bun test"]);
+    const snap = activitySnapshot().sessions.find((s) => s.taskId === card.id);
+    expect(snap?.modelLabel).toBe("default model");
+    expect(snap?.log).toEqual(["model: default model", "→ bash: bun test"]);
 
     finish({ code: 0 });
     await sleep(50);
 
     const attachments = db!.attachments(card.id, "session");
     expect(attachments.length).toBe(1);
-    expect(attachments[0].content).toMatch(/^pi-builder ·/);
+    expect(attachments[0].content).toMatch(/^pi-builder · default model ·/);
   });
 
   test("the resume-start comment clears waiting-dead; a second death re-posts a fresh reason", async () => {

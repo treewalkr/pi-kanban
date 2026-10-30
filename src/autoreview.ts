@@ -98,6 +98,7 @@ export interface AgentSessionInfo {
   startedAt: number;
   log: string[];
   model?: string;
+  modelLabel?: string;
   pool?: string;
 }
 
@@ -827,20 +828,18 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       }
       const roleConfig = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
       const config = mergeSlotConfig(roleConfig, slot);
-      const flags = agentFlags(job.role, config);
-      const model = flags.includes("--model") ? flags[flags.indexOf("--model") + 1] : "default model";
-      const thinking = flags.includes("--thinking") ? `thinking ${flags[flags.indexOf("--thinking") + 1]}` : "";
+      const mc = resolvedModelConfig(job.role, config);
+      const label = modelConfigLabel(mc);
       const skills = config?.skills?.length ? `${config.skills.length} skill${config.skills.length === 1 ? "" : "s"}` : "";
       const via = pool ? `via pool ${pool.name} slot ${slotIndex}` : "via default slot";
-      log(`${job.role} start ${job.task.id} "${job.task.title}" (${[model, thinking, skills].filter(Boolean).join(" · ")}) ${via}`);
-      const modelIndex = flags.indexOf("--model");
-      const resolvedModel = modelIndex !== -1 ? flags[modelIndex + 1] : undefined;
+      log(`${job.role} start ${job.task.id} "${job.task.title}" (${[label, skills].filter(Boolean).join(" · ")}) ${via}`);
       const session: AgentSessionInfo = {
         taskId: job.task.id,
         role: job.role,
         startedAt: Date.now(),
         log: [],
-        ...(resolvedModel ? { model: resolvedModel } : {}),
+        modelLabel: label,
+        ...(mc.model ? { model: mc.model } : {}),
         ...(pool ? { pool: pool.name } : {}),
       };
       // stop() must be able to silence the heartbeat even when the spawn
@@ -854,6 +853,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         if (session.log.length > MAX_LOG_LINES) session.log.shift();
         log(`${job.role} ${job.task.id} │ ${line}`);
       };
+      emit(`model: ${label}`);
       const jobKills = new Set<() => void>();
       const jobTrack = (kill: () => void): (() => void) => {
         const untrack = track(kill);
@@ -881,7 +881,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         // keep the transcript on the card — the live view evaporates when the session ends
         if (!stopped && session.log.length > 0) {
           const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
-          const header = `${AUTHOR_BY_ROLE[job.role]} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
+          const header = `${AUTHOR_BY_ROLE[job.role]} · ${label} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
           try {
             db.attach(job.task.id, "session", `${header}\n${session.log.join("\n")}`, "autoreview");
           } catch (err) {
