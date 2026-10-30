@@ -4,7 +4,10 @@ A local-first Kanban board for the [pi](https://github.com/badlogic/pi-mono) cod
 track task state — one SQLite file, a web UI for humans, and a CLI for agents.
 
 Lanes default to the working workflow — **Backlog → Plan → Test + Implement → Review → Done →
-Archive** — and are customizable. Archive keeps finished cards out of the way: a collapsed strip
+Archive** — and are customizable, behind a fixed **Waiting on you** lane that always comes
+first: an agent's `question` comment parks the card there (a `↩ from <lane>` chip remembers its
+home lane) and any human reply returns it. Archive keeps finished cards out of the way: a
+collapsed strip
 on the board (click to expand, drag onto it to archive), `kanban archive <id>` from the CLI.
 
 Cards nest into an **epic → story → subtask** hierarchy (max depth 3). Same-lane children render
@@ -51,7 +54,7 @@ kanban add Fix login redirect --note "bounces to / after oauth" --project my-app
 kanban add "Fix login redirect" --elaborate # queues pi-elaborator to expand note with intent + AC
 kanban mv <id> plan            # or --next / --prev
 kanban ls [--project my-app] [--json]
-kanban next [--project my-app]      # what's next: lane priority, then card priority, then oldest; skips blocked
+kanban next [--project my-app]      # what's next: lane priority, then card priority, then oldest; skips blocked, prints blocked + waiting counts
 kanban search <query> [--project my-app]   # ranked: titles, checklist lines, notes
 kanban add Write e2e tests --parent <id>   # subtask — inherits the parent's lane
 kanban edit <id> --parent <id> · --clear-parent
@@ -59,7 +62,7 @@ kanban show <id> · done <id> · archive <id> · edit <id> …
 kanban rm <id> --force         # deleting a parent cascades its subtree
 kanban lane ls | add | rename | rm
 kanban attach <id> <plan-file> # versioned plan attach — re-attaching versions it
-kanban comment <id> <text…> · comments <id>   # card thread (--kind comment|review|handoff|question)
+kanban comment <id> <text…> · comments <id>   # card thread (--kind comment|review|handoff|question; question parks in Waiting on you, any human reply returns it)
 kanban handoff <id> <lane> --message <text>    # atomic move + thread record
 kanban brief <id>              # pickup context: note, plan, thread
 kanban review <id> (--approve | --block --message <text>) · plan-review <id> (--pass | --block …)
@@ -87,7 +90,8 @@ database and pushes changes to the web UI over SSE, so the board updates live.
 `pi-planner` picks up every card in the Plan lane, explores the repo, and attaches a versioned
 implementation plan written from the shared template ([plan-template.md](skills/pi-kanban/plan-template.md));
 when an answer would genuinely change the plan it asks first (`question` comments, each with a
-recommended default) and waits for your reply. A `pi-plan-reviewer` then checks every plan
+recommended default) and waits for your reply — the card parks in **Waiting on you** until you
+answer. A `pi-plan-reviewer` then checks every plan
 against the template's review checklist before the human gate — block bounces back to the
 planner with findings (max 2 rounds per human comment, then the card waits for you), pass leaves
 it at the gate. The human owns the gate — `kanban approve <id>` (or ✓ in the web card) arms
