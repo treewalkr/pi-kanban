@@ -13,7 +13,9 @@
   let renameValue = $state("");
 
   let visible = $derived(board.visibleTasks(lane.id));
-  let count = $derived(board.laneCount(lane.id));
+  let count = $derived(
+    board.projectFilter !== "" ? board.visibleTasks(lane.id).length : board.laneCount(lane.id),
+  );
   let hint = $derived(
     board.dropHint && board.dropHint.laneId === lane.id ? board.dropHint.index : -1,
   );

@@ -41,6 +41,13 @@
     };
   });
 
+  // reflect address-bar hash edits and back/forward navigation in the project focus
+  $effect(() => {
+    const onHashChange = () => board.applyProjectHash();
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  });
+
   // agent sessions run for minutes without touching the db, so poll for them
   $effect(() => {
     const poll = () => {
@@ -163,8 +170,8 @@
     <ListView />
   {:else}
     <main class="board" bind:this={boardEl}>
-      {#each board.lanes as lane, i (lane.id)}
-        <LaneView {lane} index={i} />
+      {#each board.visibleLanes as { lane, index } (lane.id)}
+        <LaneView {lane} {index} />
       {/each}
       <AddLane />
     </main>
