@@ -28,15 +28,17 @@ describe("boot() occupied-port guard (seams per plan AC3)", () => {
   // guard tests must boot with the ambient env a user would have — not whatever
   // the test process inherited (an agent session spawned by the 4600 server
   // carries KANBAN_SHARE_PORT=1/TOKEN, which would flip E3's base guard into
-  // the share path and silently bind)
-  const SHARE_VARS = ["KANBAN_SHARE_PORT", "KANBAN_SHARE_TOKEN", "KANBAN_SHARE_FORCE"] as const;
-  let savedShareEnv: Record<string, string | undefined> = {};
+  // the share path and silently bind; it also carries KANBAN_AUTO_REVIEW=1,
+  // which would start a real agent loop against the production DB from inside
+  // bun test — the 10/30 exit-143 session deaths)
+  const SCRUB_VARS = ["KANBAN_SHARE_PORT", "KANBAN_SHARE_TOKEN", "KANBAN_SHARE_FORCE", "KANBAN_AUTO_REVIEW"] as const;
+  let savedEnv: Record<string, string | undefined> = {};
   beforeEach(() => {
-    savedShareEnv = Object.fromEntries(SHARE_VARS.map((k) => [k, process.env[k]]));
-    for (const k of SHARE_VARS) delete process.env[k];
+    savedEnv = Object.fromEntries(SCRUB_VARS.map((k) => [k, process.env[k]]));
+    for (const k of SCRUB_VARS) delete process.env[k];
   });
   afterEach(() => {
-    for (const [k, v] of Object.entries(savedShareEnv)) {
+    for (const [k, v] of Object.entries(savedEnv)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
