@@ -123,7 +123,7 @@ describe("pools store", () => {
         name: "heavy",
         enabled: true,
         roles: ["reviewer"],
-        slots: [{}],
+        slots: [{ provider: "", model: "", thinking: "" }],
         updatedAt: 123,
       },
     ]);
