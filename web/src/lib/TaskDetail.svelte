@@ -158,13 +158,39 @@
   // finished agent sessions saved on the card (live one renders above these)
   let sessionLogs = $state<Attachment[]>([]);
 
+  // card files (plan + named attachments): latest per name on open; a file's full
+  // version history is fetched lazily when its section is expanded (drives the picker)
+  let cardFiles = $state<Attachment[]>([]);
+  let versionsByKind = $state<Record<string, Attachment[]>>({});
+  let pickedVersion = $state<Record<string, number>>({});
+
+  async function loadVersions(kind: string, e: Event): Promise<void> {
+    const details = e.currentTarget as HTMLDetailsElement;
+    if (!details.open || versionsByKind[kind]) return;
+    const res = await api.tasks({ id: task.id }).files({ name: kind }).get();
+    if (res.error) return;
+    versionsByKind[kind] = res.data;
+    if (!pickedVersion[kind]) pickedVersion[kind] = res.data.at(-1)?.version ?? 1;
+  }
+
+  // what to render for a kind: the picked version once its history loaded, else the latest
+  function shownVersion(kind: string, latest: Attachment): Attachment {
+    const want = pickedVersion[kind];
+    return want === undefined ? latest : (versionsByKind[kind]?.find((v) => v.version === want) ?? latest);
+  }
+
+  const isMarkdown = (kind: string): boolean => kind === "plan" || kind.endsWith(".md");
+  let otherFiles = $derived(cardFiles.filter((f) => f.kind !== "plan"));
+
   async function reloadThread(): Promise<void> {
-    const [commentsRes, sessionsRes] = await Promise.all([
+    const [commentsRes, sessionsRes, filesRes] = await Promise.all([
       api.tasks({ id: task.id }).comments.get(),
       api.tasks({ id: task.id }).sessions.get(),
+      api.tasks({ id: task.id }).files.get(),
     ]);
     if (!commentsRes.error) comments = commentsRes.data;
     if (!sessionsRes.error) sessionLogs = sessionsRes.data;
+    if (!filesRes.error) cardFiles = filesRes.data;
   }
 
   $effect(() => {
@@ -283,11 +309,21 @@
         <p class="detail-note empty">no note</p>
       {/if}
       {#if plan}
-        <details class="detail-plan">
+        <details class="detail-plan" ontoggle={(e) => loadVersions("plan", e)}>
           <summary>
             plan
             <span class="plan-meta">
-              v{plan.version} · {timeAgo(plan.createdAt)}{#if plan.source} · <button
+              {#if (versionsByKind["plan"]?.length ?? 0) > 1}
+                <select
+                  class="version-pick"
+                  aria-label="plan version"
+                  onclick={(e) => e.stopPropagation()}
+                  onchange={(e) => (pickedVersion["plan"] = Number((e.target as HTMLSelectElement).value))}>
+                  {#each versionsByKind["plan"].slice().reverse() as v (v.version)}
+                    <option value={v.version} selected={pickedVersion["plan"] === v.version}>v{v.version}</option>
+                  {/each}
+                </select>
+              {:else}v{plan.version}{/if} · {timeAgo(shownVersion("plan", plan).createdAt)}{#if plan.source} · <button
                 class="plan-path"
                 class:copied={pathCopied}
                 title={plan.source}
@@ -295,7 +331,41 @@
               >{/if}
             </span>
           </summary>
-          <div class="detail-note md">{@html renderMarkdown(plan.content)}</div>
+          <div class="detail-note md">{@html renderMarkdown(shownVersion("plan", plan).content)}</div>
+        </details>
+      {/if}
+      {#if otherFiles.length > 0}
+        <details class="detail-plan card-files">
+          <summary>
+            files · {otherFiles.length}
+            <span class="plan-meta">card attachments — `kanban cat` prints them from the CLI</span>
+          </summary>
+          {#each otherFiles as f (f.kind)}
+            {@const shown = shownVersion(f.kind, f)}
+            <details class="session-log card-file" ontoggle={(e) => loadVersions(f.kind, e)}>
+              <summary>
+                {f.kind}
+                <span class="plan-meta">
+                  {#if (versionsByKind[f.kind]?.length ?? 0) > 1}
+                    <select
+                      class="version-pick"
+                      aria-label={`${f.kind} version`}
+                      onclick={(e) => e.stopPropagation()}
+                      onchange={(e) => (pickedVersion[f.kind] = Number((e.target as HTMLSelectElement).value))}>
+                      {#each versionsByKind[f.kind].slice().reverse() as v (v.version)}
+                        <option value={v.version} selected={pickedVersion[f.kind] === v.version}>v{v.version}</option>
+                      {/each}
+                    </select>
+                  {:else}v{shown.version}{/if} · {timeAgo(shown.createdAt)}
+                </span>
+              </summary>
+              {#if isMarkdown(f.kind)}
+                <div class="detail-note md">{@html renderMarkdown(shown.content)}</div>
+              {:else}
+                <pre class="file-raw">{shown.content}</pre>
+              {/if}
+            </details>
+          {/each}
         </details>
       {/if}
       {#if queuedJob}
