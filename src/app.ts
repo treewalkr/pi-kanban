@@ -1,11 +1,11 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardStatsPayload, type Comment, type Lane, type Task, type WorkerPool } from "./db";
+import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type Lane, type Task, type WorkerPool } from "./db";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
-import { gitCheckout, gitInfo, gitStatusMap, type GitFileCode, type GitInfo } from "./git";
+import { gitCheckout, gitInfo, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitInfo } from "./git";
 import { listFiles, readFile, type FileEntry } from "./files";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
@@ -135,7 +135,21 @@ export const createApp = (
         },
       },
     )
-    .get("/board", (): Board => db.board())
+    .get("/board", async (): Promise<BoardPayload> => {
+      const board = db.board();
+      const root = opts.filesRoot ?? process.cwd();
+      const recordedBranches = board.tasks
+        .map((t) => t.workspace)
+        .filter((w): w is string => typeof w === "string" && w.length > 0);
+      const live = await resolveWorkspaces(root, recordedBranches);
+      const workspaces: Record<string, CardWorkspace> = {};
+      for (const task of board.tasks) {
+        if (task.workspace && live[task.workspace]) {
+          workspaces[task.id] = live[task.workspace];
+        }
+      }
+      return { ...board, workspaces };
+    })
     .get("/stats", (): BoardStatsPayload => db.boardStats())
     .get("/git", (): Promise<GitInfo | { repo: false }> => gitInfo(process.cwd()))
     .post(
@@ -418,6 +432,7 @@ export const createApp = (
           project: t.Optional(t.String()),
           lane: t.Optional(t.String()),
           parent: t.Optional(t.Nullable(t.String())),
+          workspace: t.Optional(t.Nullable(t.String())),
           priority: t.Optional(t.Enum({ high: "high", normal: "normal", low: "low" })),
           blockedBy: t.Optional(t.Array(t.String())),
           index: t.Optional(t.Number({ minimum: 0 })),
