@@ -303,4 +303,27 @@ describe("commentThread CLI renderer", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("taskDetail lists card files with version and size; absent when only plan", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kanban-render-files-"));
+    const db = new KanbanDb(join(dir, "t.db"));
+    try {
+      const card = db.createTask({ title: "Card with files" });
+      db.attach(card.id, "plan", "# Plan v1\nStep 1", "plan.md");
+
+      const planOnlyOut = stripAnsi(taskDetail(db, card));
+      expect(planOnlyOut).toContain("plan: v1 · plan.md");
+      expect(planOnlyOut).not.toContain("files:");
+      expect(planOnlyOut).not.toContain("(kanban cat");
+
+      db.attach(card.id, "design", "Design document content", "design.md");
+      const withFilesOut = stripAnsi(taskDetail(db, card));
+      expect(withFilesOut).toContain("files:");
+      expect(withFilesOut).toContain("design v1 · 23b · design.md");
+      expect(withFilesOut).toContain("(kanban cat <id> <name> prints one)");
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

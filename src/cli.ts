@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { KanbanDb, KanbanError, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
-import { c, commentLine, commentThread, laneList, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
+import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
+import { c, commentLine, commentThread, fileSize, laneList, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
 import { searchBoard } from "./search";
 
 const VERSION = "0.6.0";
@@ -19,7 +19,9 @@ usage:
   kanban link <id> <other>                (relate two cards; visible from both)
   kanban unlink <id> <other>
   kanban elaborate <id>                     (queue AI note elaboration; runs on the auto-agent loop)
-  kanban attach <id> <plan-file>            (re-attach versions; show prints the latest)
+  kanban attach <id> <file> [--as <name>]   (default name: plan; re-attach versions; show prints the latest)
+  kanban files <id> [--json]                  (card files: name · vN · size · source)
+  kanban cat <id> <name> [--v <n>]            (print a file's content, latest or a given version)
   kanban ws <id> <branch>                    (record/clear where the card's implementation lives)
   kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]
   kanban comments <id>
@@ -63,7 +65,7 @@ interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority"]);
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v"]);
 const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by"]); // repeatable: each occurrence appends one value
 
@@ -375,8 +377,14 @@ async function main(): Promise<number> {
         const idRef = positional[0];
         if (!idRef) throw new KanbanError("usage: kanban brief <id>", "invalid");
         const task = db.resolveTask(idRef);
-        if (json) jsonOut({ task, plan: db.attachment(task.id, "plan"), comments: db.comments(task.id) });
-        else out(taskDetail(db, task)); // thread-aware: note, plan, and comments in one read
+        if (json)
+          jsonOut({
+            task,
+            plan: db.attachment(task.id, "plan"),
+            files: db.latestFiles(task.id),
+            comments: db.comments(task.id),
+          });
+        else out(taskDetail(db, task)); // thread-aware: note, plan, files, and comments in one read
         return 0;
       }
 
@@ -394,16 +402,51 @@ async function main(): Promise<number> {
 
       case "attach": {
         const [idRef, file] = positional;
-        if (!idRef || !file) throw new KanbanError("usage: kanban attach <id> <plan-file>", "invalid");
+        if (!idRef || !file) throw new KanbanError("usage: kanban attach <id> <file> [--as <name>]", "invalid");
+        const name = typeof flags.as === "string" && flags.as ? flags.as : "plan";
+        if (RESERVED_FILE_NAMES.has(name)) throw new KanbanError(`'${name}' is reserved for the agent loop`, "invalid");
         let content: string;
         try {
           content = readFileSync(file, "utf8");
         } catch (err) {
-          throw new KanbanError(`cannot read plan file '${file}': ${(err as Error).message}`, "invalid");
+          throw new KanbanError(`cannot read file '${file}': ${(err as Error).message}`, "invalid");
         }
-        const plan = db.attach(idRef, "plan", content, resolve(file));
-        if (json) jsonOut(plan);
-        else out(`${c.green("✓")} attached plan ${c.dim(`v${plan.version}`)} to ${c.dim(plan.taskId)}`);
+        const stored = db.attach(idRef, name, content, resolve(file));
+        if (json) jsonOut(stored);
+        else out(`${c.green("✓")} attached ${c.bold(name)} ${c.dim(`v${stored.version}`)} to ${c.dim(stored.taskId)}`);
+        return 0;
+      }
+
+      case "files": {
+        const [idRef] = positional;
+        if (!idRef) throw new KanbanError("usage: kanban files <id> [--json]", "invalid");
+        const files = db.latestFiles(idRef);
+        if (json) jsonOut(files);
+        else if (files.length === 0) out(c.dim("no files"));
+        else
+          for (const f of files) {
+            const size = fileSize(f.content.length);
+            out(`${c.bold(f.kind)}  ${c.dim(`v${f.version} · ${size}${f.source ? ` · ${f.source}` : ""}`)}`);
+          }
+        return 0;
+      }
+
+      case "cat": {
+        const [idRef, name] = positional;
+        if (!idRef || !name) throw new KanbanError("usage: kanban cat <id> <name> [--v <n>]", "invalid");
+        const versions = db.attachments(idRef, name);
+        if (versions.length === 0) {
+          const names = db.latestFiles(idRef).map((f) => f.kind);
+          throw new KanbanError(`no file '${name}' on card — files: ${names.join(", ") || "(none)"}`, "not-found");
+        }
+        const want = typeof flags.v === "string" && flags.v !== "" ? Number(flags.v) : null;
+        const pick = want === null ? versions.at(-1) : versions.find((x) => x.version === want);
+        if (!pick)
+          throw new KanbanError(
+            `no v${want} of '${name}' — versions v1–v${versions.at(-1)!.version}`,
+            "not-found",
+          );
+        out(pick.content); // raw content, pipeable
         return 0;
       }
 

@@ -191,11 +191,83 @@ test("attach versions a plan file; show prints the latest; bad file fails", asyn
 
   const badFile = await cli("attach", task.id, join(dir, "nope.md"));
   expect(badFile.code).toBe(1);
-  expect(badFile.stderr).toContain("cannot read plan file");
+  expect(badFile.stderr).toContain("cannot read file");
 
   const usage = await cli("attach", task.id);
   expect(usage.code).toBe(1);
   expect(usage.stderr).toContain("usage: kanban attach");
+
+  await cli("rm", task.id, "--json");
+});
+
+test("attach --as, files, cat: named card files with versioned reads", async () => {
+  const added = await cli("add", "card files", "--json");
+  const task = JSON.parse(added.stdout) as Task;
+
+  const designFile = join(dir, "design.md");
+  await Bun.write(designFile, "# design v1\nthree columns");
+  const first = await cli("attach", task.id, designFile, "--as", "design.md", "--json");
+  expect(JSON.parse(first.stdout)).toMatchObject({ kind: "design.md", version: 1 });
+
+  await Bun.write(designFile, "# design v2\nthree columns, tuned");
+  const second = await cli("attach", task.id, designFile, "--as", "design.md");
+  expect(second.stdout).toContain("attached design.md v2");
+
+  const logFile = join(dir, "repro.txt");
+  await Bun.write(logFile, "port 4611: ok");
+  await cli("attach", task.id, logFile, "--as", "repro-log.txt");
+
+  const files = await cli("files", task.id);
+  expect(files.stdout).toContain("design.md");
+  expect(files.stdout).toContain("repro-log.txt");
+  expect(files.stdout).toContain("v2");
+  expect(files.stdout).not.toContain("no files");
+
+  const show = await cli("show", task.id);
+  expect(show.stdout).toContain("files:");
+  expect(show.stdout).toContain("design.md v2");
+  expect(show.stdout).toContain("(kanban cat");
+
+  const catLatest = await cli("cat", task.id, "design.md");
+  expect(catLatest.stdout).toBe("# design v2\nthree columns, tuned\n");
+  const catOld = await cli("cat", task.id, "design.md", "--v", "1");
+  expect(catOld.stdout).toBe("# design v1\nthree columns\n");
+
+  const unknown = await cli("cat", task.id, "nope.md");
+  expect(unknown.code).toBe(1);
+  expect(unknown.stderr).toContain("no file 'nope.md'");
+  expect(unknown.stderr).toContain("design.md"); // error lists what exists
+  expect(unknown.stderr).toContain("repro-log.txt");
+
+  const badVersion = await cli("cat", task.id, "design.md", "--v", "9");
+  expect(badVersion.code).toBe(1);
+  expect(badVersion.stderr).toContain("no v9 of 'design.md'");
+
+  const brief = await cli("brief", task.id, "--json");
+  expect(JSON.parse(brief.stdout).files.map((f: { kind: string }) => f.kind)).toEqual([
+    "design.md",
+    "repro-log.txt",
+  ]);
+
+  await cli("rm", task.id, "--json");
+});
+
+test("attach rejects reserved and malformed names up front", async () => {
+  const added = await cli("add", "name rules", "--json");
+  const task = JSON.parse(added.stdout) as Task;
+  const file = join(dir, "any.md");
+  await Bun.write(file, "content");
+
+  const reserved = await cli("attach", task.id, file, "--as", "session");
+  expect(reserved.code).toBe(1);
+  expect(reserved.stderr).toContain("reserved");
+
+  const bad = await cli("attach", task.id, file, "--as", "Design Doc");
+  expect(bad.code).toBe(1);
+  expect(bad.stderr).toContain("invalid file name");
+
+  const empty = await cli("files", task.id);
+  expect(empty.stdout).toContain("no files");
 
   await cli("rm", task.id, "--json");
 });

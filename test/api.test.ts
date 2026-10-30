@@ -111,6 +111,54 @@ test("POST /tasks/:id/plan stores a version; GET returns the latest or 404", asy
   expect(noTask.status).toBe(404);
 });
 
+test("/files routes: attach named file, list latest, version history; reserved + bad names rejected", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "one" });
+  const post = (body: unknown) =>
+    app.handle(
+      new Request(`http://localhost/tasks/${task.id}/files`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  const created = await post({ name: "design.md", content: "v1", source: "/tmp/design.md" });
+  expect(created.status).toBe(201);
+  expect(await created.json()).toMatchObject({ kind: "design.md", version: 1 });
+  expect((await post({ name: "design.md", content: "v2" })).status).toBe(201);
+
+  const planViaFiles = await post({ name: "plan", content: "# plan through the generic route" });
+  expect(planViaFiles.status).toBe(201); // plan is the gate slot, writable like any file
+
+  const reserved = await post({ name: "session", content: "spoof" });
+  expect(reserved.status).toBe(400);
+  expect(await reserved.json()).toMatchObject({ code: "invalid" });
+
+  const badName = await post({ name: "Design Doc", content: "x" });
+  expect(badName.status).toBe(400);
+  expect(await badName.json()).toMatchObject({ code: "invalid" });
+
+  const listed = await app.handle(new Request(`http://localhost/tasks/${task.id}/files`));
+  expect(listed.status).toBe(200);
+  const files = (await listed.json()) as Array<{ kind: string; version: number }>;
+  expect(files.map((f) => [f.kind, f.version])).toEqual([
+    ["design.md", 2],
+    ["plan", 1],
+  ]);
+
+  const history = await app.handle(new Request(`http://localhost/tasks/${task.id}/files/design.md`));
+  const versions = (await history.json()) as Array<{ version: number; content: string }>;
+  expect(versions.map((v) => [v.version, v.content])).toEqual([
+    [1, "v1"],
+    [2, "v2"],
+  ]);
+
+  const unknown = await app.handle(new Request(`http://localhost/tasks/${task.id}/files/nope.md`));
+  expect(unknown.status).toBe(200);
+  expect(await unknown.json()).toEqual([]);
+});
+
 test("/board carries the latest plan per card", async () => {
   const app = createApp(db);
   const task = db.createTask({ title: "one" });

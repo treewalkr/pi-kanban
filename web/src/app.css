@@ -2936,6 +2936,29 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+/* version picker inside a section summary — stopPropagation keeps the section open */
+.detail-plan .version-pick {
+  font: inherit;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+/* raw (non-markdown) card file content: scrollbar, not wrap */
+.card-file .file-raw {
+  margin: 0;
+  padding: 8px 11px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-muted);
+}
+
 .detail-plan .plan-path {
   padding: 0;
   border: 0;

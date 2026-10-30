@@ -114,7 +114,9 @@ kanban next [--project <tag>] [--json]                           # what's next: 
 kanban search <query…> [--project <tag>] [--json]                     # ranked matches: titles, checklist lines, notes, plans
 kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers, from-lane
 kanban link <id> <other> · unlink <id> <other>                        # relate / unrelate two cards (undirected; visible from both)
-kanban attach <id> <plan-file>                                        # attach/version a plan; show prints the latest
+kanban attach <id> <file> [--as <name>]                               # attach/version a card file (default name: plan); show prints the latest
+kanban files <id>                                                     # card files: name · vN · size · source
+kanban cat <id> <name> [--v <n>]                                      # print a file's content (latest, or a given version)
 kanban ws <id> <branch>                                               # record/clear where the card's implementation lives (--clear to unset)
 kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]  # append to the card's thread (question parks the card)
 kanban comments <id>                                                  # read the thread, oldest first
@@ -122,7 +124,7 @@ kanban handoff <id> <lane> --message <text> [--author <name>]         # atomic m
 kanban review <id> (--approve | --block --message <text> [--finding <text>]…)  # approve → Done; block → Implement + findings
 kanban approve <id>                       # plan gate: approve the attached plan → Implement (arms plan-build; works on Waiting-on-you cards parked from Plan)
 kanban reject <id> --message <feedback>   # plan gate: reject with feedback → planner re-plans (a parked card returns to Plan first)
-kanban brief <id>                                                     # full pickup context: note, latest plan, thread
+kanban brief <id>                                                     # full pickup context: note, latest plan, files, thread
 kanban mv <id> <lane> [--pos <1-based>]                               # move / reorder
 kanban mv <id> --next | --prev                                        # advance / pull back one lane
 kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--clear-blocked-by] [--clear-note] [--clear-parent]
@@ -178,11 +180,18 @@ kanban help | version                                                 # CLI help
   `n=$(cat <<'EOF' … EOF); kanban edit <id> --note "$n"`.
 - **`lane rm --force`** deletes the lane *and every card in it* — it does not
   relocate them. Move cards out first unless you mean to drop them.
-- **Plans**: `kanban attach <id> <plan-file>` stores the file's text on the
-  card (source path kept as metadata); attach again to version it. `show <id>`
-  prints the latest plan, and the web UI shows it as a collapsed markdown
-  section in the card detail — the plan lives on the card, not in a scratch
-  file. Search matches plan text too.
+- **Plans & card files**: `kanban attach <id> <plan-file>` stores the file's
+  text on the card (source path kept as metadata); attach again to version it.
+  `show <id>` prints the latest plan plus a `files:` inventory, and the web UI
+  shows them as collapsed markdown sections in the card detail — the plan lives
+  on the card, not in a scratch file. Search matches plan text too. Any other
+  text artifact attaches under a name: `kanban attach <id> <file> --as <name>`
+  (design docs, repro logs, review notes, API contracts). Names are lowercase
+  kebab with an optional extension — `design`, `repro-log.txt` — pick a stable
+  descriptive name and keep it across revisions (re-attaching versions it);
+  invalid names are rejected with the rule in the error. Read one back with
+  `kanban cat <id> <name> [--v <n>]`; a wrong name lists what the card has.
+  `session` is reserved for the agent loop.
 - **Threads**: every card carries a comment thread — the card *is* the forum.
   Kinds: `comment` (default), `review`, `handoff`, `question` (agent asking you something — parks the card in Waiting on you; any human reply returns it),
 `approval`, `rejection` (gate verdicts, human-only). `--author` names the writer:

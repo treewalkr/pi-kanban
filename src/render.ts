@@ -179,6 +179,11 @@ export function searchResults(db: KanbanDb, query: string, results: SearchResult
   return out.join("\n");
 }
 
+/** Human byte size for file listings — 999b, then 1.4k. */
+export function fileSize(len: number): string {
+  return len > 1024 ? `${(len / 1024).toFixed(1)}k` : `${len}b`;
+}
+
 /** Full detail view of one task. */
 export function taskDetail(db: KanbanDb, task: Task): string {
   const lanes = db.lanes();
@@ -224,6 +229,14 @@ export function taskDetail(db: KanbanDb, task: Task): string {
     const meta = [`v${plan.version}`, plan.source, new Date(plan.createdAt).toLocaleString()].filter(Boolean).join(" · ");
     out.push(`${c.dim("plan:")} ${c.dim(meta)}`);
     for (const line of plan.content.split("\n")) out.push(`  ${line}`);
+  }
+  const files = db.latestFiles(task.id).filter((f) => f.kind !== "plan");
+  if (files.length > 0) {
+    out.push(c.dim("files:"));
+    for (const f of files) {
+      out.push(`  ${f.kind} ${c.dim(`v${f.version} · ${fileSize(f.content.length)}${f.source ? ` · ${f.source}` : ""}`)}`);
+    }
+    out.push(c.dim("  (kanban cat <id> <name> prints one)"));
   }
   const sessions = db.attachments(task.id, "session");
   if (sessions.length > 0) {
