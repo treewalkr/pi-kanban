@@ -78,6 +78,8 @@ class BoardStore {
   waiting = $state<Record<string, WaitingState>>({});
   /** Sparse card-id → direct blocker ids (board payload). */
   blockedBy = $state<Record<string, string[]>>({});
+  /** Sparse card-id → linked card ids, both directions (board payload). */
+  links = $state<Record<string, string[]>>({});
   stats = $state<BoardStatsPayload | null>(null);
   loading = $state(true);
   error = $state("");
@@ -359,6 +361,7 @@ class BoardStore {
     this.plans = boardRes.data.plans;
     this.waiting = boardRes.data.waiting ?? {}; // guards the dev-restart window against a pre-change API payload
     this.blockedBy = boardRes.data.blockedBy ?? {};
+    this.links = boardRes.data.links ?? {};
     this.loading = false;
     // a stored project whose tag no longer exists (renamed, or its last card dropped the tag)
     // resets to "all" — an active filter with no visible chip would be a silent empty board
@@ -390,6 +393,22 @@ class BoardStore {
 
   async updateTask(id: string, patch: TaskPatch): Promise<void> {
     const { error } = await api.tasks({ id }).patch(patch);
+    if (error) return this.fail(error);
+    await this.refresh();
+  }
+
+  async addLink(id: string, target: string): Promise<boolean> {
+    const { error } = await api.tasks({ id }).links.post({ target });
+    if (error) {
+      this.fail(error);
+      return false;
+    }
+    await this.refresh();
+    return true;
+  }
+
+  async removeLink(id: string, targetId: string): Promise<void> {
+    const { error } = await api.tasks({ id }).links({ targetId }).delete();
     if (error) return this.fail(error);
     await this.refresh();
   }

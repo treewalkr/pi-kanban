@@ -2467,6 +2467,61 @@ button.id-copy {
   color: #3fb950;
 }
 
+.dep-x {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.dep-x:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.dep-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dep-add input {
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  color: var(--text);
+  width: 90px;
+}
+
+.dep-add input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.dep-add-btn {
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.dep-add-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
 /* the editor's priority seg: radios stay in the a11y tree but out of sight */
 .editor .seg input {
   position: absolute;

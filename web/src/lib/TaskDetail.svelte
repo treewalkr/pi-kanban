@@ -39,6 +39,11 @@
   let dependents = $derived(
     board.tasks.filter((t) => (board.blockedBy[t.id] ?? []).includes(me.id)),
   );
+  let links = $derived.by(() =>
+    (board.links[me.id] ?? [])
+      .map((id) => board.taskById(id))
+      .filter((t): t is Task => t !== undefined),
+  );
 
   // descendants flattened with depth for the tree list
   let childRows = $derived.by(() => {
@@ -71,6 +76,12 @@
   let laneName = $derived(board.lanes[laneIndex]?.name ?? me.laneId);
   let canPromote = $derived(canPromoteToPlan(me, board.lanes));
   let subtaskTitle = $state("");
+  let linkTarget = $state("");
+  async function addLink() {
+    const t = linkTarget.trim();
+    if (!t) return;
+    if (await board.addLink(me.id, t)) linkTarget = "";
+  }
 
   const fmt = (ts: number) => new Date(ts).toLocaleString();
 
@@ -218,33 +229,44 @@
         {/each}
       </nav>
     {/if}
-    {#if blockers.length > 0 || dependents.length > 0}
-      <div class="detail-deps">
-        {#if blockers.length > 0}
-          <div class="dep-row">
-            <span class="dep-k" class:stuck={board.isBlocked(me.id)}>blocked by</span>
-            {#each blockers as b (b.id)}
-              <button class="dep-chip" title="open {b.title}" onclick={() => board.openCard(b)}>
-                <span class="id">{b.id}</span>
-                <span class="t">{b.title}</span>
-                {#if b.laneId === "done" || b.laneId === "archive"}<span class="ok">✓</span>{/if}
-              </button>
-            {/each}
-          </div>
-        {/if}
-        {#if dependents.length > 0}
-          <div class="dep-row">
-            <span class="dep-k">blocking</span>
-            {#each dependents as d (d.id)}
-              <button class="dep-chip" title="open {d.title}" onclick={() => board.openCard(d)}>
-                <span class="id">{d.id}</span>
-                <span class="t">{d.title}</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
+    <div class="detail-deps">
+      {#if blockers.length > 0}
+        <div class="dep-row">
+          <span class="dep-k" class:stuck={board.isBlocked(me.id)}>blocked by</span>
+          {#each blockers as b (b.id)}
+            <button class="dep-chip" title="open {b.title}" onclick={() => board.openCard(b)}>
+              <span class="id">{b.id}</span>
+              <span class="t">{b.title}</span>
+              {#if b.laneId === "done" || b.laneId === "archive"}<span class="ok">✓</span>{/if}
+            </button>
+          {/each}
+        </div>
+      {/if}
+      {#if dependents.length > 0}
+        <div class="dep-row">
+          <span class="dep-k">blocking</span>
+          {#each dependents as d (d.id)}
+            <button class="dep-chip" title="open {d.title}" onclick={() => board.openCard(d)}>
+              <span class="id">{d.id}</span>
+              <span class="t">{d.title}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+      <div class="dep-row">
+        <span class="dep-k">linked</span>
+        {#each links as l (l.id)}
+          <button class="dep-chip" title="open {l.title}" onclick={() => board.openCard(l)}>
+            <span class="id">{l.id}</span><span class="t">{l.title}</span>
+          </button>
+          <button class="dep-x" title="unlink {l.title}" onclick={() => board.removeLink(me.id, l.id)}>✕</button>
+        {/each}
+        <span class="dep-add">
+          <input placeholder="link by id…" bind:value={linkTarget} onkeydown={(e) => e.key === "Enter" && addLink()} />
+          <button class="dep-add-btn" onclick={addLink}>link</button>
+        </span>
       </div>
-    {/if}
+    </div>
     <h2 class="detail-title">{me.title}</h2>
     <div class="detail-body">
       {#if me.note}
