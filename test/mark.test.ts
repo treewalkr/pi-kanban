@@ -17,9 +17,9 @@ function srgbToLinear(c: number): number {
 function hexToLuminance(hex: string): number {
   const clean = hex.replace("#", "");
   const num = parseInt(clean, 16);
-  const r = ((num >> 16) & 255) / 255;
-  const g = ((num >> 8) & 255) / 255;
-  const b = (num & 255) / 255;
+  const r = ((num >> 16) & 0xff) / 255;
+  const g = ((num >> 8) & 0xff) / 255;
+  const b = ((num >> 0) & 0xff) / 255;
   return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
 }
 
@@ -31,52 +31,20 @@ function contrast(hex1: string, hex2: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-interface RectGeometry {
-  x: string;
-  y: string;
-  width: string;
-  height: string;
-  rx: string;
+/** The `d` of every path, in order. */
+function extractPaths(svgContent: string): string[] {
+  return Array.from(svgContent.matchAll(/<path\s+[^>]*d="([^"]+)"/g)).map((m) => m[1]);
 }
 
-function extractRectGeometries(svgContent: string): RectGeometry[] {
-  const rectMatches = Array.from(svgContent.matchAll(/<rect\s+([^>]+)\/>/g));
-  return rectMatches.map((m) => {
-    const attrs = m[1];
-    const get = (name: string) => attrs.match(new RegExp(`${name}="([^"]+)"`))?.[1] ?? "";
-    return {
-      x: get("x"),
-      y: get("y"),
-      width: get("width"),
-      height: get("height"),
-      rx: get("rx"),
-    };
-  });
-}
-
-test("favicon.svg serves a three-bar transparent mark at 16×16", () => {
+test("favicon.svg serves the lucide kanban glyph at 24×24", () => {
   expect(existsSync(faviconPath)).toBe(true);
   const content = readFileSync(faviconPath, "utf-8");
 
-  expect(content).toContain('viewBox="0 0 16 16"');
-
-  const rectMatches = Array.from(content.matchAll(/<rect\s+([^>]+)\/>/g));
-  expect(rectMatches.length).toBe(3);
-
-  for (const match of rectMatches) {
-    const attrs = match[1];
-    expect(attrs).toContain('fill="#648ee1"');
-
-    // Ensure no background rect spanning full 16x16
-    const widthMatch = attrs.match(/width="([^"]+)"/);
-    const heightMatch = attrs.match(/height="([^"]+)"/);
-    expect(widthMatch).not.toBeNull();
-    expect(heightMatch).not.toBeNull();
-    const w = parseFloat(widthMatch![1]);
-    const h = parseFloat(heightMatch![1]);
-    expect(w).toBeLessThan(16);
-    expect(h).toBeLessThan(16);
-  }
+  expect(content).toContain('viewBox="0 0 24 24"');
+  // Three hanging columns, stroked in the brand color, transparent background.
+  expect(extractPaths(content)).toEqual(["M5 3v14", "M12 3v8", "M19 3v18"]);
+  expect(content).toContain('fill="none"');
+  expect(content).toContain('stroke="#648ee1"');
 });
 
 test("favicon color is legible on dark and light chrome (WCAG >= 3:1)", () => {
@@ -101,24 +69,18 @@ test("header mark and favicon share the same geometry", () => {
   const faviconContent = readFileSync(faviconPath, "utf-8");
   const markContent = readFileSync(markPath, "utf-8");
 
-  expect(faviconContent).toContain('viewBox="0 0 16 16"');
-  expect(markContent).toContain('viewBox="0 0 16 16"');
+  expect(faviconContent).toContain('viewBox="0 0 24 24"');
+  expect(markContent).toContain('viewBox="0 0 24 24"');
 
-  const faviconRects = extractRectGeometries(faviconContent);
-  const markRects = extractRectGeometries(markContent);
-
-  expect(faviconRects.length).toBe(3);
-  expect(markRects).toEqual(faviconRects);
+  expect(extractPaths(markContent)).toEqual(extractPaths(faviconContent));
+  // Same stroke weight, so the favicon and the header read as one glyph.
+  const width = (content: string) => content.match(/stroke-width="([^"]+)"/)?.[1];
+  expect(width(markContent)).toBe(width(faviconContent));
 });
 
 test("header mark is theme-driven via currentColor and --accent", () => {
   const markContent = readFileSync(markPath, "utf-8");
-  const markRects = Array.from(markContent.matchAll(/<rect\s+([^>]+)\/>/g));
-  expect(markRects.length).toBe(3);
-
-  for (const match of markRects) {
-    expect(match[1]).toContain('fill="currentColor"');
-  }
+  expect(markContent).toContain('stroke="currentColor"');
   expect(markContent).not.toMatch(/#[0-9a-fA-F]{3,8}/);
 
   const cssContent = readFileSync(appCssPath, "utf-8");
@@ -129,16 +91,14 @@ test("header mark is theme-driven via currentColor and --accent", () => {
   expect(markCss).not.toContain("background");
 });
 
-test("mark has no sub-pixel detail", () => {
-  const faviconContent = readFileSync(faviconPath, "utf-8");
-  const markContent = readFileSync(markPath, "utf-8");
-
-  for (const content of [faviconContent, markContent]) {
-    expect(content).not.toContain("stroke");
-    const rects = extractRectGeometries(content);
-    for (const r of rects) {
-      expect(parseFloat(r.width)).toBeGreaterThanOrEqual(3);
-    }
+test("mark stays bold at small sizes: stroke-width 2, round caps", () => {
+  for (const path of [faviconPath, markPath]) {
+    const content = readFileSync(path, "utf-8");
+    expect(content).toContain('stroke-width="2"');
+    expect(content).toContain('stroke-linecap="round"');
+    // The glyph is pure stroke: no filled shapes hiding in it.
+    expect(content).not.toMatch(/<rect/);
+    expect(content).not.toMatch(/fill="#/);
   }
 });
 
