@@ -1,7 +1,7 @@
 <script lang="ts">
   import { board } from "./lib/board.svelte";
   import { agents } from "./lib/agents.svelte";
-  import { ui } from "./lib/ui.svelte";
+  import { ui, startViewportSync } from "./lib/ui.svelte";
   import { eventsUrl } from "./api";
   import LaneView from "./lib/Lane.svelte";
   import ListView from "./lib/ListView.svelte";
@@ -102,6 +102,9 @@
     el.classList.add("flash");
     setTimeout(() => el.classList.remove("flash"), 1500);
   });
+
+  // narrow viewports: the sidebar starts (and becomes) a closed drawer over the board
+  $effect(() => startViewportSync());
 
   // wheel over the board background (not over a lane) pans the lanes horizontally
   $effect(() => {

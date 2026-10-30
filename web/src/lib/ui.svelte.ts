@@ -78,3 +78,22 @@ class UiStore {
 }
 
 export const ui = new UiStore();
+
+export type NarrowMedia = {
+  matches: boolean;
+  addEventListener(type: "change", cb: () => void): void;
+  removeEventListener(type: "change", cb: () => void): void;
+};
+
+/** Closes the sidebar whenever the viewport is (or becomes) narrow (<640px drawer breakpoint). */
+export function startViewportSync(
+  mq: NarrowMedia = matchMedia("(max-width: 640px)"),
+): () => void {
+  if (mq.matches) ui.sidebarOpen = false;
+  const onChange = () => {
+    if (mq.matches) ui.sidebarOpen = false;
+  };
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+
