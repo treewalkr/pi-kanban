@@ -1179,3 +1179,189 @@ test("lane_events: backfill approximates from thread anchors and is idempotent",
   reopened2.close();
 });
 
+test("cardStats: lane times, cycle, current-lane age, gate wait (incl. lane-skipping card)", () => {
+  const now = 20_000;
+  // Card 1: created at 1000 in backlog, never moved
+  const raw = new Database(join(dir, "t.db"));
+  const tNever = db.createTask({ title: "never moved", lane: "backlog" });
+  raw.run("UPDATE tasks SET created_at = 1000 WHERE id = ?", [tNever.id]);
+  raw.run("UPDATE lane_events SET created_at = 1000 WHERE task_id = ?", [tNever.id]);
+
+  const statsNever = db.cardStats(tNever.id, now);
+  expect(statsNever.laneTimes).toEqual([{ laneId: "backlog", ms: 19_000 }]);
+  expect(statsNever.reachedDone).toBe(false);
+  expect(statsNever.cycleMs).toBe(19_000);
+  expect(statsNever.currentLaneMs).toBe(19_000);
+  expect(statsNever.gateWaitMs).toBe(0);
+  expect(statsNever.reviewToDoneMs).toBeNull();
+
+  // Card 2: created at 1000, jumped directly backlog -> done at 5000 (skipping lanes)
+  const tSkip = db.createTask({ title: "skipped lanes", lane: "backlog" });
+  db.moveTask(tSkip.id, "done");
+  raw.run("UPDATE tasks SET created_at = 1000 WHERE id = ?", [tSkip.id]);
+  raw.run("UPDATE lane_events SET created_at = 1000 WHERE task_id = ? AND to_lane_id = 'backlog'", [tSkip.id]);
+  raw.run("UPDATE lane_events SET created_at = 5000 WHERE task_id = ? AND to_lane_id = 'done'", [tSkip.id]);
+
+  const statsSkip = db.cardStats(tSkip.id, now);
+  expect(statsSkip.laneTimes).toEqual([
+    { laneId: "backlog", ms: 4000 },
+    { laneId: "done", ms: 15_000 },
+  ]);
+  expect(statsSkip.reachedDone).toBe(true);
+  expect(statsSkip.cycleMs).toBe(4000); // 5000 - 1000
+  expect(statsSkip.currentLaneMs).toBe(15_000); // 20000 - 5000
+  expect(statsSkip.gateWaitMs).toBe(0);
+  expect(statsSkip.reviewToDoneMs).toBeNull();
+
+  // Card 3: multi-hop: backlog(1000) -> plan(3000) -> implement(7000) -> review(12000) -> done(16000)
+  const tHop = db.createTask({ title: "multi-hop", lane: "backlog" });
+  db.moveTask(tHop.id, "plan");
+  db.moveTask(tHop.id, "implement");
+  db.moveTask(tHop.id, "review");
+  db.moveTask(tHop.id, "done");
+  raw.run("UPDATE tasks SET created_at = 1000 WHERE id = ?", [tHop.id]);
+  raw.run("UPDATE lane_events SET created_at = 1000 WHERE task_id = ? AND to_lane_id = 'backlog'", [tHop.id]);
+  raw.run("UPDATE lane_events SET created_at = 3000 WHERE task_id = ? AND to_lane_id = 'plan'", [tHop.id]);
+  raw.run("UPDATE lane_events SET created_at = 7000 WHERE task_id = ? AND to_lane_id = 'implement'", [tHop.id]);
+  raw.run("UPDATE lane_events SET created_at = 12000 WHERE task_id = ? AND to_lane_id = 'review'", [tHop.id]);
+  raw.run("UPDATE lane_events SET created_at = 16000 WHERE task_id = ? AND to_lane_id = 'done'", [tHop.id]);
+
+  const statsHop = db.cardStats(tHop.id, now);
+  // backlog: 3000 - 1000 = 2000
+  // plan: 7000 - 3000 = 4000
+  // implement: 12000 - 7000 = 5000
+  // review: 16000 - 12000 = 4000
+  // done: 20000 - 16000 = 4000
+  expect(statsHop.laneTimes).toEqual([
+    { laneId: "backlog", ms: 2000 },
+    { laneId: "plan", ms: 4000 },
+    { laneId: "implement", ms: 5000 },
+    { laneId: "review", ms: 4000 },
+    { laneId: "done", ms: 4000 },
+  ]);
+  const sumMs = statsHop.laneTimes.reduce((acc, lt) => acc + lt.ms, 0);
+  expect(sumMs).toBe(now - 1000); // 19000
+  expect(statsHop.gateWaitMs).toBe(4000); // plan lane duration
+  expect(statsHop.reviewToDoneMs).toBe(4000); // 16000 - 12000
+  expect(statsHop.cycleMs).toBe(15_000); // 16000 - 1000
+  expect(statsHop.currentLaneMs).toBe(4000); // 20000 - 16000
+  raw.close();
+});
+
+test("cardStats: loop-health counters (plan-review blocks, review blocks, cap hits, plan versions, session durations)", () => {
+  const t = db.createTask({ title: "loop health card", lane: "implement" });
+
+  // 1 planReviewBlocks
+  db.createComment(t.id, {
+    author: PLAN_REVIEWER_AUTHOR,
+    kind: "review",
+    body: `${KanbanDb.PLAN_REVIEW_BLOCK} — missing checklist`,
+  });
+
+  // reviewBlocks: 3 reviewer comments, 1 reviewer approve with matching done-event/actor -> 3 - 1 = 2
+  db.createComment(t.id, {
+    author: "pi-reviewer",
+    kind: "review",
+    body: "findings blocker: broken test",
+  });
+  db.createComment(t.id, {
+    author: "pi-reviewer",
+    kind: "review",
+    body: "findings blocker: bad types",
+  });
+  // The approval:
+  db.createComment(t.id, {
+    author: "pi-reviewer",
+    kind: "review",
+    body: "approved",
+  });
+  // matching done event:
+  db.moveTask(t.id, "done", undefined, { cause: "review", actor: "pi-reviewer" });
+
+  // cappedHits: 1 plan review cap, 1 auto-review stop cap
+  db.createComment(t.id, {
+    author: PLAN_REVIEWER_AUTHOR,
+    kind: "comment",
+    body: `${KanbanDb.PLAN_REVIEW_CAP}: too many attempts`,
+  });
+  db.createComment(t.id, {
+    author: "pi-reviewer",
+    kind: "comment",
+    body: "auto-review stopped: block cycles reached the cap (3 cycles)",
+  });
+
+  // planVersions: 2 plans
+  db.attach(t.id, "plan", "# Plan v1");
+  db.attach(t.id, "plan", "# Plan v2");
+
+  // sessions: 2 session logs, one with 37s header, one unparseable
+  db.attach(t.id, "session", "pi-reviewer · claude · 10/30/2026, 12:00:00 PM · 37s\nlog line 1\nlog line 2");
+  db.attach(t.id, "session", "malformed header without duration\nlog line");
+
+  const stats = db.cardStats(t.id);
+  expect(stats.planReviewBlocks).toBe(1);
+  expect(stats.reviewBlocks).toBe(2);
+  expect(stats.cappedHits).toBe(2);
+  expect(stats.planVersions).toBe(2);
+  expect(stats.sessions).toEqual({ count: 2, totalMs: 37_000 });
+});
+
+test("boardStats: wip, throughput weeks, lane dwell averages, projects, cycle average", () => {
+  // Empty board stats
+  const emptyStats = db.boardStats(100_000);
+  expect(emptyStats.board.wip).toBe(0);
+  expect(emptyStats.board.cycleAvgMs).toBeNull();
+  expect(emptyStats.board.throughput).toHaveLength(8);
+  expect(emptyStats.board.projects).toEqual([]);
+  expect(emptyStats.board.laneDwell).toEqual({});
+
+  // Seed tasks
+  // t1: active, project: "", created at 1000 in backlog
+  // t2: active, project: "infra", created at 2000 in implement
+  // t3: done, project: "infra", created at 3000, entered done at 8000 (cycle = 5000)
+  // t4: archive, project: "web", created at 4000, entered done at 6000 then archive (cycle = 2000)
+  const t1 = db.createTask({ title: "t1", lane: "backlog", project: "" });
+  const t2 = db.createTask({ title: "t2", lane: "implement", project: "infra" });
+  const t3 = db.createTask({ title: "t3", lane: "implement", project: "infra" });
+  db.moveTask(t3.id, "done");
+  const t4 = db.createTask({ title: "t4", lane: "implement", project: "web" });
+  db.moveTask(t4.id, "done");
+  db.moveTask(t4.id, "archive");
+
+  const raw = new Database(join(dir, "t.db"));
+  raw.run("UPDATE tasks SET created_at = 3000 WHERE id = ?", [t3.id]);
+  raw.run("UPDATE lane_events SET created_at = 8000 WHERE task_id = ? AND to_lane_id = 'done'", [t3.id]);
+  raw.run("UPDATE tasks SET created_at = 4000 WHERE id = ?", [t4.id]);
+  raw.run("UPDATE lane_events SET created_at = 6000 WHERE task_id = ? AND to_lane_id = 'done'", [t4.id]);
+  raw.close();
+
+  const now = 20_000;
+  const payload = db.boardStats(now);
+  // wip: t1, t2 are active (not done/archive) -> 2
+  expect(payload.board.wip).toBe(2);
+
+  // cycleAvgMs: t3 cycle = 8000 - 3000 = 5000, t4 cycle = 6000 - 4000 = 2000 -> avg = 3500
+  expect(payload.board.cycleAvgMs).toBe(3500);
+
+  // projects: sorted by project asc, "" included
+  // "": 1 total, 1 active, 0 done
+  // "infra": 2 total, 1 active, 1 done (t3 reached done)
+  // "web": 1 total, 0 active, 1 done (t4 reached done)
+  expect(payload.board.projects).toEqual([
+    { project: "", total: 1, active: 1, done: 0 },
+    { project: "infra", total: 2, active: 1, done: 1 },
+    { project: "web", total: 1, active: 0, done: 1 },
+  ]);
+
+  // throughput: 8 weeks, oldest first
+  expect(payload.board.throughput).toHaveLength(8);
+  const totalDoneInThroughput = payload.board.throughput.reduce((acc, w) => acc + w.done, 0);
+  expect(totalDoneInThroughput).toBe(2); // t3 and t4 both entered done
+
+  // laneDwell: keys only visited lanes with mean over visitors
+  expect(payload.board.laneDwell.backlog).toBeDefined();
+  expect(payload.board.laneDwell.implement).toBeDefined();
+  expect(payload.board.laneDwell.done).toBeDefined();
+  expect(payload.board.laneDwell.waiting).toBeUndefined(); // no task entered waiting
+});
+

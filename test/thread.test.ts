@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   clockTime,
+  formatDuration,
   isAgentChatter,
   isStateKind,
   KIND_TAG_COLORS,
@@ -44,6 +45,14 @@ describe("thread presentation helpers", () => {
     expect(relTime(fixedNow - 23 * 60 * 60 * 1000, fixedNow)).toBe("23h ago");
     expect(relTime(fixedNow - 24 * 60 * 60 * 1000, fixedNow)).toBe("1d ago");
     expect(relTime(fixedNow - 48 * 60 * 60 * 1000, fixedNow)).toBe("2d ago");
+  });
+
+  test("formatDuration brackets: seconds, minutes, hours, days, weeks", () => {
+    expect(formatDuration(5_000)).toBe("5s");
+    expect(formatDuration(90_000)).toBe("2m");
+    expect(formatDuration(7_199_000)).toBe("2h");
+    expect(formatDuration(3 * 86_400_000)).toBe("3d");
+    expect(formatDuration(30 * 86_400_000)).toBe("4w");
   });
 
   test("clockTime formats 24-hour zero-padded time", () => {

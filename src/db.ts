@@ -121,6 +121,57 @@ export interface LaneEvent {
   createdAt: number;
 }
 
+export interface SessionStats {
+  count: number;
+  totalMs: number;
+}
+
+export interface CardStats {
+  taskId: string;
+  laneTimes: Array<{ laneId: string; ms: number }>; // board lane order; only lanes the card entered; ms may be 0
+  cycleMs: number; // first done-entry − createdAt; now − createdAt when never done
+  currentLaneMs: number; // now − last event's created_at
+  gateWaitMs: number; // total ms in lane "plan"
+  reachedDone: boolean; // ≥1 event with to_lane_id = "done"
+  reviewToDoneMs: number | null; // first done-entry − latest review-entry event at/before it; null when the card never entered both
+  planReviewBlocks: number; // comments kind="review", author=pi-plan-reviewer, body startsWith "plan review: block"
+  reviewBlocks: number; // decision D7
+  cappedHits: number; // comments body startsWith "plan review cap reached" OR "auto-review stopped: block cycles reached the cap"
+  planVersions: number; // attachments kind="plan" count (re-plans = planVersions − 1)
+  sessions: SessionStats; // kind="session" attachments; totalMs parsed from first line `· Ns` (regex /(\d+)s\s*$/), unparseable headers add 0
+}
+
+export interface ThroughputWeek {
+  weekStart: number;
+  done: number;
+} // Monday 00:00 local ms
+
+export interface LaneDwellStat {
+  avgMs: number;
+  cards: number;
+}
+
+export interface ProjectRow {
+  project: string;
+  total: number;
+  active: number;
+  done: number;
+}
+
+export interface BoardStats {
+  wip: number; // tasks lane_id NOT IN ('done','archive')
+  throughput: ThroughputWeek[]; // exactly 8 entries, oldest first, includes current week (zero weeks kept)
+  laneDwell: Record<string, LaneDwellStat>; // key = lane id; only lanes ≥1 card entered; mean per-card total dwell, open segment counted to `now`; all tasks incl. archived
+  projects: ProjectRow[]; // sorted by project asc, "" included; active = current lane not done/archive; done = ever entered done
+  cycleAvgMs: number | null; // mean cycleMs over reachedDone cards; null when none
+}
+
+export interface BoardStatsPayload {
+  board: BoardStats;
+  cards: Record<string, CardStats>;
+  generatedAt: number;
+}
+
 export interface Board {
   lanes: Lane[];
   tasks: Task[];
@@ -407,6 +458,116 @@ export function waitingFromLastComment(last: Pick<Comment, "author" | "kind" | "
     return "rerun";
   }
   return null;
+}
+
+function computeCardStats(
+  task: Task,
+  events: LaneEvent[],
+  comments: Comment[],
+  attachments: Attachment[],
+  boardLanes: Lane[],
+  now: number,
+): CardStats {
+  const evs =
+    events.length > 0
+      ? events
+      : [
+          {
+            id: "",
+            taskId: task.id,
+            fromLaneId: null,
+            toLaneId: task.laneId,
+            cause: "create" as LaneEventCause,
+            actor: "user",
+            createdAt: task.createdAt,
+          },
+        ];
+
+  const visitedLanes = new Set<string>();
+  const dwellMap = new Map<string, number>();
+
+  for (let i = 0; i < evs.length; i++) {
+    const e = evs[i];
+    visitedLanes.add(e.toLaneId);
+    const duration =
+      i < evs.length - 1 ? Math.max(0, evs[i + 1].createdAt - e.createdAt) : Math.max(0, now - e.createdAt);
+    dwellMap.set(e.toLaneId, (dwellMap.get(e.toLaneId) ?? 0) + duration);
+  }
+
+  const laneTimes: Array<{ laneId: string; ms: number }> = [];
+  for (const lane of boardLanes) {
+    if (visitedLanes.has(lane.id)) {
+      laneTimes.push({ laneId: lane.id, ms: dwellMap.get(lane.id) ?? 0 });
+    }
+  }
+  for (const laneId of visitedLanes) {
+    if (!boardLanes.some((l) => l.id === laneId)) {
+      laneTimes.push({ laneId, ms: dwellMap.get(laneId) ?? 0 });
+    }
+  }
+
+  const firstDone = evs.find((e) => e.toLaneId === "done");
+  const reachedDone = firstDone !== undefined;
+  const cycleMs = reachedDone ? Math.max(0, firstDone.createdAt - task.createdAt) : Math.max(0, now - task.createdAt);
+  const lastEvent = evs[evs.length - 1];
+  const currentLaneMs = Math.max(0, now - lastEvent.createdAt);
+  const gateWaitMs = dwellMap.get("plan") ?? 0;
+
+  let reviewToDoneMs: number | null = null;
+  if (reachedDone) {
+    const doneIndex = evs.indexOf(firstDone!);
+    const doneAt = firstDone!.createdAt;
+    let latestReviewAt: number | null = null;
+    for (let i = 0; i < doneIndex; i++) {
+      if (evs[i].toLaneId === "review" && evs[i].createdAt <= doneAt) {
+        latestReviewAt = evs[i].createdAt;
+      }
+    }
+    if (latestReviewAt !== null) {
+      reviewToDoneMs = Math.max(0, doneAt - latestReviewAt);
+    }
+  }
+
+  const planReviewBlocks = comments.filter(
+    (c) => c.kind === "review" && c.author === PLAN_REVIEWER_AUTHOR && c.body.startsWith(KanbanDb.PLAN_REVIEW_BLOCK),
+  ).length;
+
+  const reviewerComments = comments.filter((c) => c.kind === "review" && c.author === "pi-reviewer").length;
+  const reviewerDoneEvents = evs.filter(
+    (e) => e.cause === "review" && e.toLaneId === "done" && e.actor === "pi-reviewer",
+  ).length;
+  const reviewBlocks = Math.max(0, reviewerComments - reviewerDoneEvents);
+
+  const cappedHits = comments.filter(
+    (c) =>
+      c.body.startsWith(KanbanDb.PLAN_REVIEW_CAP) ||
+      c.body.startsWith("auto-review stopped: block cycles reached the cap"),
+  ).length;
+
+  const planVersions = attachments.filter((a) => a.kind === "plan").length;
+
+  const sessions = attachments.filter((a) => a.kind === "session");
+  let totalSessionMs = 0;
+  for (const s of sessions) {
+    const firstLine = s.content.split("\n")[0] ?? "";
+    const match = firstLine.match(/(\d+)s\s*$/);
+    if (match) totalSessionMs += Number(match[1]) * 1000;
+  }
+
+  return {
+    taskId: task.id,
+    laneTimes,
+    cycleMs,
+    currentLaneMs,
+    gateWaitMs,
+    reachedDone,
+    reviewToDoneMs,
+    planReviewBlocks,
+    reviewBlocks,
+    cappedHits,
+    planVersions,
+    sessions: { count: sessions.length, totalMs: totalSessionMs },
+  };
 }
 
 export class KanbanDb {
@@ -1323,6 +1484,156 @@ export class KanbanDb {
     return (
       this.q("SELECT * FROM lane_events ORDER BY created_at, rowid").all() as LaneEventRow[]
     ).map(rowToLaneEvent);
+  }
+
+  cardStats(taskRef: string, now: number = Date.now()): CardStats {
+    const task = this.resolveTask(taskRef);
+    const events = this.laneEvents(task.id);
+    const comments = this.comments(task.id);
+    const attachments = this.attachments(task.id, "plan").concat(this.attachments(task.id, "session"));
+    const boardLanes = this.lanes();
+    return computeCardStats(task, events, comments, attachments, boardLanes, now);
+  }
+
+  boardStats(now: number = Date.now()): BoardStatsPayload {
+    const allLanes = this.lanes();
+    const allTasks = this.tasks();
+    const allEvents = this.laneEvents();
+    const allComments = (
+      this.q("SELECT * FROM comments ORDER BY created_at, rowid").all() as CommentRow[]
+    ).map(rowToComment);
+    const allAttachments = (
+      this.q("SELECT * FROM attachments WHERE kind IN ('plan', 'session') ORDER BY version ASC").all() as AttachmentRow[]
+    ).map(rowToAttachment);
+
+    const eventsByTask = new Map<string, LaneEvent[]>();
+    for (const e of allEvents) {
+      let list = eventsByTask.get(e.taskId);
+      if (!list) {
+        list = [];
+        eventsByTask.set(e.taskId, list);
+      }
+      list.push(e);
+    }
+
+    const commentsByTask = new Map<string, Comment[]>();
+    for (const c of allComments) {
+      let list = commentsByTask.get(c.taskId);
+      if (!list) {
+        list = [];
+        commentsByTask.set(c.taskId, list);
+      }
+      list.push(c);
+    }
+
+    const attachmentsByTask = new Map<string, Attachment[]>();
+    for (const a of allAttachments) {
+      let list = attachmentsByTask.get(a.taskId);
+      if (!list) {
+        list = [];
+        attachmentsByTask.set(a.taskId, list);
+      }
+      list.push(a);
+    }
+
+    const cardStatsMap: Record<string, CardStats> = {};
+    for (const task of allTasks) {
+      cardStatsMap[task.id] = computeCardStats(
+        task,
+        eventsByTask.get(task.id) ?? [],
+        commentsByTask.get(task.id) ?? [],
+        attachmentsByTask.get(task.id) ?? [],
+        allLanes,
+        now,
+      );
+    }
+
+    const wip = allTasks.filter((t) => t.laneId !== "done" && t.laneId !== "archive").length;
+
+    function startOfLocalWeek(ts: number): number {
+      const d = new Date(ts);
+      d.setHours(0, 0, 0, 0);
+      const day = d.getDay();
+      const diff = (day + 6) % 7;
+      d.setDate(d.getDate() - diff);
+      return d.getTime();
+    }
+
+    const weekStarts: number[] = [];
+    const cur = new Date(startOfLocalWeek(now));
+    for (let i = 0; i < 8; i++) {
+      weekStarts.unshift(cur.getTime());
+      cur.setDate(cur.getDate() - 7);
+    }
+
+    const doneCounts = new Array(8).fill(0);
+    for (const e of allEvents) {
+      if (e.toLaneId === "done") {
+        const eWeek = startOfLocalWeek(e.createdAt);
+        const idx = weekStarts.indexOf(eWeek);
+        if (idx >= 0) {
+          doneCounts[idx]++;
+        }
+      }
+    }
+    const throughput: ThroughputWeek[] = weekStarts.map((weekStart, i) => ({
+      weekStart,
+      done: doneCounts[i],
+    }));
+
+    const laneVisitors = new Map<string, { totalMs: number; cards: number }>();
+    for (const stats of Object.values(cardStatsMap)) {
+      for (const lt of stats.laneTimes) {
+        const curDwell = laneVisitors.get(lt.laneId) ?? { totalMs: 0, cards: 0 };
+        curDwell.totalMs += lt.ms;
+        curDwell.cards += 1;
+        laneVisitors.set(lt.laneId, curDwell);
+      }
+    }
+    const laneDwell: Record<string, LaneDwellStat> = {};
+    for (const [laneId, data] of laneVisitors.entries()) {
+      if (data.cards > 0) {
+        laneDwell[laneId] = {
+          avgMs: Math.round(data.totalMs / data.cards),
+          cards: data.cards,
+        };
+      }
+    }
+
+    const projectMap = new Map<string, { total: number; active: number; done: number }>();
+    for (const task of allTasks) {
+      const p = task.project;
+      const curP = projectMap.get(p) ?? { total: 0, active: 0, done: 0 };
+      curP.total += 1;
+      if (task.laneId !== "done" && task.laneId !== "archive") {
+        curP.active += 1;
+      }
+      if (cardStatsMap[task.id]?.reachedDone) {
+        curP.done += 1;
+      }
+      projectMap.set(p, curP);
+    }
+    const projects: ProjectRow[] = Array.from(projectMap.entries())
+      .map(([project, counts]) => ({ project, ...counts }))
+      .sort((a, b) => a.project.localeCompare(b.project));
+
+    const reachedDoneStats = Object.values(cardStatsMap).filter((s) => s.reachedDone);
+    const cycleAvgMs =
+      reachedDoneStats.length === 0
+        ? null
+        : Math.round(reachedDoneStats.reduce((acc, s) => acc + s.cycleMs, 0) / reachedDoneStats.length);
+
+    return {
+      board: {
+        wip,
+        throughput,
+        laneDwell,
+        projects,
+        cycleAvgMs,
+      },
+      cards: cardStatsMap,
+      generatedAt: now,
+    };
   }
 
   /**

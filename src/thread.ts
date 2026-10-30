@@ -24,6 +24,14 @@ export function clockTime(ts: number): string {
   return `${hh}:${mm}`;
 }
 
+export function formatDuration(ms: number): string {
+  if (ms < 10_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  if (ms < 14 * 86_400_000) return `${Math.round(ms / 86_400_000)}d`;
+  return `${Math.round(ms / 604_800_000)}w`;
+}
+
 export function relTime(ts: number, now: number = Date.now()): string {
   const diffMs = Math.max(0, now - ts);
   const diffSec = Math.floor(diffMs / 1000);
