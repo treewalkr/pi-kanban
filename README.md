@@ -4,9 +4,10 @@ A local-first kanban board for the [pi](https://github.com/badlogic/pi-mono) cod
 one SQLite file, a web UI for humans, a CLI for agents.
 
 Cards flow **Backlog → Plan → Test + Implement → Review → Done → Archive** (lanes are
-customizable), behind a fixed **Waiting on you** lane: an agent's `question` comment parks
-the card there — a `↩ from <lane>` chip remembers its home lane, and any human reply
-returns it. Cards nest into an **epic → story → subtask** hierarchy; every card moves
+customizable), behind a fixed **Waiting on you** lane: an agent's `question` comment or a
+passed plan review parks the card there — a `↩ from <lane>` chip remembers its home lane,
+and any human reply (or the approve/reject gate) returns it. Cards nest into an
+**epic → story → subtask** hierarchy; every card moves
 independently. The CLI writes the DB directly (no server needed for agent-side CRUD); the
 server pushes live updates to the web UI over SSE.
 
@@ -62,8 +63,8 @@ under `[autoreview]`.
 | --- | --- |
 | `pi-elaborator` | expands terse notes into intent + acceptance criteria (`--elaborate`, or ✨ in the composer) |
 | `pi-planner` | plans every Plan-lane card from the [shared template](skills/pi-kanban/plan-template.md); asks `question` comments (with recommended defaults) when an answer would change the plan — the card parks in **Waiting on you** until you reply |
-| `pi-plan-reviewer` | checks each plan against the template checklist — block bounces to the planner (max 2 rounds), pass leaves it at the gate |
-| **you** | `kanban approve` arms the builder; `reject --message` re-plans. The gate is human-only. |
+| `pi-plan-reviewer` | checks each plan against the template checklist — block bounces to the planner (max 2 rounds), pass parks the card in **Waiting on you** |
+| **you** | `kanban approve` arms the builder; `reject --message` re-plans. The gate is human-only and works right from Waiting on you. |
 | `pi-builder` | builds the approved plan, tests, hands off to review |
 | `pi-reviewer` | reviews every card in Review — approve → Done; block → findings land as a `- [ ]` checklist the builder works (max 3 cycles, then it waits for you) |
 

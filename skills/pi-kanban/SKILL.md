@@ -21,7 +21,7 @@ Keep the board truthful as you work. Lanes and their meaning, in order:
 6. **Done** — finished
 7. **Archive** — kept for reference, out of the active board
 
-The HITL rule: HITL tickets never resolve without the human — the agent never answers its own questions. When an agent needs human direction or a plan decision, it asks with `kanban comment <id> "<problem + recommended default>" --kind question` (each question with a recommended default). Posting a `question` comment atomically parks the card in **Waiting on you** (saving its home lane). Any human comment (author not `pi-*`, kind not `question`) atomically returns the card to its home lane at the end. Agents never move parked cards. Gates require the card back in Plan — reply first to return it, then approve or reject.
+The HITL rule: HITL tickets never resolve without the human — the agent never answers its own questions. When an agent needs human direction or a plan decision, it asks with `kanban comment <id> "<problem + recommended default>" --kind question` (each question with a recommended default). Posting a `question` comment atomically parks the card in **Waiting on you** (saving its home lane). A plan-review **pass** parks the card the same way (home lane: Plan). Any human comment (author not `pi-*`, kind not `question`) atomically returns the card to its home lane at the end. Agents never move parked cards. The plan gate (`approve`/`reject`) works directly on a card parked from Plan — no reply needed first.
 
 For every non-trivial unit of work:
 
@@ -51,7 +51,7 @@ For every non-trivial unit of work:
 
 With `kanban serve --auto-review`, pi agents also watch the Plan lane: a **planner** writes a
 versioned plan for every card, a **plan reviewer** checks it against the shared checklist, and
-the card then waits at the gate. **The human owns the gate** — never run
+a passing card then parks in **Waiting on you** at the gate. **The human owns the gate** — never run
 `kanban approve`/`reject` as an agent.
 
 - **Planning**: don't hand-write plans for Plan-lane cards in auto mode — the planner does it,
@@ -63,10 +63,11 @@ the card then waits at the gate. **The human owns the gate** — never run
   as plan v2, v1 stays on the card.
 - **Plan review**: the planner's handoff comment arms `pi-plan-reviewer`, which checks the plan
   against the template checklist and records exactly one verdict — `kanban plan-review <id>
-  --pass --message …` (card waits at the human gate) or `--block --message … --finding …`
+  --pass --message …` (card parks in **Waiting on you** at the human gate) or `--block --message … --finding …`
   (planner re-plans with the findings). After 2 blocks without a human comment in between it
   caps out and leaves the card for you.
-- **Approving** (`kanban approve <id>`, or ✓ in the web card): approval comment + move to
+- **Approving** (`kanban approve <id>`, or ✓ in the web card — both work on a card parked in
+  **Waiting on you** from Plan): approval comment + move to
   Implement; a `pi-builder` session builds the attached plan, runs tests, and hands off to
   Review, where the reviewer loop takes over.
 - **Chat-approved plans** (fast path): when the human approves a plan you presented in the
@@ -114,8 +115,8 @@ kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|
 kanban comments <id>                                                  # read the thread, oldest first
 kanban handoff <id> <lane> --message <text> [--author <name>]         # atomic move + thread record (the baton pass)
 kanban review <id> (--approve | --block --message <text> [--finding <text>]…)  # approve → Done; block → Implement + findings
-kanban approve <id>                       # plan gate: approve the attached plan → Implement (arms plan-build)
-kanban reject <id> --message <feedback>   # plan gate: reject with feedback → planner re-plans
+kanban approve <id>                       # plan gate: approve the attached plan → Implement (arms plan-build; works on Waiting-on-you cards parked from Plan)
+kanban reject <id> --message <feedback>   # plan gate: reject with feedback → planner re-plans (a parked card returns to Plan first)
 kanban brief <id>                                                     # full pickup context: note, latest plan, thread
 kanban mv <id> <lane> [--pos <1-based>]                               # move / reorder
 kanban mv <id> --next | --prev                                        # advance / pull back one lane
