@@ -41,7 +41,7 @@ function setupLoop(): { dbFile: string; writer: KanbanDb } {
 
 function startLoop(spawnFn: SpawnFn, dbFile: string) {
   loopDb = new KanbanDb(dbFile);
-  const handle = startAutoReview({ db: loopDb, cwd: loopDir, spawnFn, watchIntervalMs: 50 });
+  const handle = startAutoReview({ db: loopDb, cwd: loopDir, spawnFn, watchIntervalMs: 50, gate: null });
   stop = () => handle.stop();
   return handle;
 }

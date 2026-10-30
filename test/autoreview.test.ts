@@ -19,6 +19,7 @@ import {
   builderPlanPrompt,
   builderPrompt,
   deathReason,
+  defaultGate,
   defaultSpawn,
   durationFor,
   formatPiEvent,
@@ -35,6 +36,8 @@ import {
   skillActivationPrompt,
   startAutoReview,
   type AgentJob,
+  type AutoReviewOptions,
+  type GateFn,
   type SpawnContext,
   type SpawnFn,
   type SpawnResult,
@@ -43,7 +46,7 @@ import {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Run with the agent env vars cleared, then set from `env`, restoring after. */
-const AGENT_ENV_KEYS = ["KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING"];
+const AGENT_ENV_KEYS = ["KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING", "KANBAN_AUTOREVIEW_GATE"];
 let savedAgentEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -127,9 +130,9 @@ function withFakePi<T>(scriptBody: string, run: () => Promise<T>): Promise<T> {
     });
 }
 
-function start(spawnFn: SpawnFn, dbFile: string) {
+function start(spawnFn: SpawnFn, dbFile: string, extra: Partial<AutoReviewOptions> = {}) {
   db = new KanbanDb(dbFile);
-  const handle = startAutoReview({ db, cwd: dir, spawnFn, watchIntervalMs: 50 });
+  const handle = startAutoReview({ db, cwd: dir, spawnFn, watchIntervalMs: 50, gate: null, ...extra });
   stop = () => handle.stop();
   return handle;
 }
@@ -1022,7 +1025,7 @@ describe("auto-review", () => {
       return Promise.resolve({ code: 1 });
     };
     db = new KanbanDb(dbFile);
-    const handle = startAutoReview({ db, cwd: dir, spawnFn, stallMs: 123_456, watchIntervalMs: 50 });
+    const handle = startAutoReview({ db, cwd: dir, spawnFn, stallMs: 123_456, watchIntervalMs: 50, gate: null });
     stop = () => handle.stop();
     await sleep(20);
     expect(seenCtx).not.toBeNull();
@@ -1439,6 +1442,7 @@ describe("auto-review", () => {
         cwd: dir,
         spawnFn,
         watchIntervalMs: 50,
+        gate: null,
         log: (msg) => logs.push(msg),
       });
       stop = () => handle.stop();
@@ -1483,8 +1487,8 @@ describe("auto-review", () => {
     const b = fakeSpawn();
     const dbA = new KanbanDb(dbFile);
     const dbB = new KanbanDb(dbFile);
-    const hA = startAutoReview({ db: dbA, cwd: dir, spawnFn: a.spawnFn, watchIntervalMs: 50 });
-    const hB = startAutoReview({ db: dbB, cwd: dir, spawnFn: b.spawnFn, watchIntervalMs: 50 });
+    const hA = startAutoReview({ db: dbA, cwd: dir, spawnFn: a.spawnFn, watchIntervalMs: 50, gate: null });
+    const hB = startAutoReview({ db: dbB, cwd: dir, spawnFn: b.spawnFn, watchIntervalMs: 50, gate: null });
     stop = () => {
       hA.stop();
       hB.stop();
@@ -2103,8 +2107,8 @@ test("two server loops on one db → exactly one planner spawns", async () => {
   const b = fakeSpawn();
   const dbA = new KanbanDb(dbFile);
   const dbB = new KanbanDb(dbFile);
-  const hA = startAutoReview({ db: dbA, cwd: dir, spawnFn: a.spawnFn, watchIntervalMs: 50 });
-  const hB = startAutoReview({ db: dbB, cwd: dir, spawnFn: b.spawnFn, watchIntervalMs: 50 });
+  const hA = startAutoReview({ db: dbA, cwd: dir, spawnFn: a.spawnFn, watchIntervalMs: 50, gate: null });
+  const hB = startAutoReview({ db: dbB, cwd: dir, spawnFn: b.spawnFn, watchIntervalMs: 50, gate: null });
   stop = () => {
     hA.stop();
     hB.stop();
@@ -2130,7 +2134,7 @@ test("stop kills in-flight children and releases the lease", async () => {
     });
   };
   const dbA = new KanbanDb(dbFile);
-  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn, watchIntervalMs: 50 });
+  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn, watchIntervalMs: 50, gate: null });
   stop = () => {
     h.stop();
     try {
@@ -2156,7 +2160,7 @@ test("lease released after a session finishes normally", async () => {
   const card = writer.createTask({ title: "quick one", lane: "plan" });
   const fake = fakeSpawn();
   const dbA = new KanbanDb(dbFile);
-  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn: fake.spawnFn, watchIntervalMs: 50 });
+  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn: fake.spawnFn, watchIntervalMs: 50, gate: null });
   stop = () => {
     h.stop();
     dbA.close();
@@ -2182,7 +2186,7 @@ test("session finish untracks kill handle so stop() does not invoke it", async (
     });
   };
   const dbA = new KanbanDb(dbFile);
-  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn, watchIntervalMs: 50 });
+  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn, watchIntervalMs: 50, gate: null });
   stop = () => {
     h.stop();
     dbA.close();
@@ -2212,7 +2216,7 @@ test("stale lease is reclaimed on scan and session spawns", async () => {
 
   const fake = fakeSpawn();
   const dbA = new KanbanDb(dbFile);
-  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn: fake.spawnFn, watchIntervalMs: 50 });
+  const h = startAutoReview({ db: dbA, cwd: dir, spawnFn: fake.spawnFn, watchIntervalMs: 50, gate: null });
   stop = () => {
     h.stop();
     dbA.close();
@@ -2226,4 +2230,176 @@ test("stale lease is reclaimed on scan and session spawns", async () => {
 test("plannerPrompt names a per-run plan file so concurrent runs never clobber", () => {
   const task = { id: "k7x9", title: "t", note: "", laneId: "plan", project: "", parentId: null, position: 1, createdAt: 1, updatedAt: 1 };
   expect(plannerPrompt(task as never, 1234)).toContain("/tmp/plan-k7x9-ya.md");
+});
+
+describe("pre-spawn gate", () => {
+  test("red gate: no reviewer session, one gate comment, card disarms", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const logs: string[] = [];
+    const { calls, spawnFn } = fakeSpawn();
+    const redGate: GateFn = async () => ({ ok: false, output: "1 fail\nexpected 1, got 2" });
+    start(spawnFn, dbFile, { gate: redGate, log: (msg) => logs.push(msg) });
+    await sleep(100);
+
+    expect(calls.length).toBe(0);
+    const comments = w.comments(card.id);
+    expect(comments.length).toBe(2);
+    const last = comments[comments.length - 1]!;
+    expect(last.author).toBe(REVIEWER_AUTHOR);
+    expect(last.kind).toBe("comment");
+    expect(last.body).toContain("pre-review gate");
+    expect(last.body).toContain("expected 1, got 2");
+    expect(logs.some((l) => l.includes("gate red — no session spawned"))).toBe(true);
+
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(0);
+    expect(w.comments(card.id).length).toBe(2);
+  });
+
+  test("human comment re-arms a red-gated card: exactly one more gate comment", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    const redGate: GateFn = async () => ({ ok: false, output: "1 fail\nexpected 1, got 2" });
+    start(spawnFn, dbFile, { gate: redGate });
+    await sleep(100);
+
+    expect(calls.length).toBe(0);
+    expect(w.comments(card.id).filter((c) => c.body.startsWith("pre-review gate:")).length).toBe(1);
+
+    w.createComment(card.id, { author: "user", kind: "comment", body: "re-arm" });
+    await sleep(100);
+
+    const gateComments = w.comments(card.id).filter((c) => c.body.startsWith("pre-review gate:"));
+    expect(gateComments.length).toBe(2);
+    for (const c of gateComments) {
+      expect(c.author).toBe(REVIEWER_AUTHOR);
+    }
+    expect(calls.length).toBe(0);
+
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(w.comments(card.id).filter((c) => c.body.startsWith("pre-review gate:")).length).toBe(2);
+  });
+
+  test("green gate: the reviewer session spawns exactly as before", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    const greenGate: GateFn = async () => ({ ok: true, output: "" });
+    start(spawnFn, dbFile, { gate: greenGate });
+    await sleep(100);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.job.role).toBe("reviewer");
+    calls[0]!.finish({ code: 0 });
+  });
+
+  test("gate: null skips the gate (start helper default)", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(100);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.job.role).toBe("reviewer");
+    calls[0]!.finish({ code: 0 });
+  });
+
+  test("gate error fails open: session spawns, no gate comment", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const logs: string[] = [];
+    const { calls, spawnFn } = fakeSpawn();
+    const throwingGate: GateFn = async () => {
+      throw new Error("gate exploded");
+    };
+    start(spawnFn, dbFile, { gate: throwingGate, log: (msg) => logs.push(msg) });
+    await sleep(100);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.job.role).toBe("reviewer");
+    expect(w.comments(card.id).length).toBe(1);
+    expect(logs.some((l) => l.includes("gate could not run"))).toBe(true);
+    calls[0]!.finish({ code: 0 });
+  });
+
+  test("KANBAN_AUTOREVIEW_GATE=0 disables the gate when no gate option is passed", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({ KANBAN_AUTOREVIEW_GATE: "0" }, () => {
+      start(spawnFn, dbFile, { gate: undefined });
+    });
+    await sleep(100);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.job.role).toBe("reviewer");
+    calls[0]!.finish({ code: 0 });
+  });
+
+  test("no gate option and no env: defaultGate gates reviewer jobs", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile, { gate: undefined });
+    await sleep(100);
+
+    expect(calls.length).toBe(0);
+    const comments = w.comments(card.id);
+    expect(comments.some((c) => c.body.startsWith("pre-review gate:"))).toBe(true);
+  });
+});
+
+describe("defaultGate", () => {
+  test("green suite: ok, output kept", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "kanban-gate-pass-"));
+    try {
+      writeFileSync(
+        join(tmpDir, "sample.test.ts"),
+        `import { test, expect } from "bun:test";\ntest("pass", () => expect(1).toBe(1));\n`,
+      );
+      const res = await defaultGate(tmpDir, 10_000);
+      rmSync(tmpDir, { recursive: true, force: true });
+      expect(res.ok).toBe(true);
+      expect(res.output).toContain("1 pass");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("red suite: not ok, failure text kept", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "kanban-gate-fail-"));
+    try {
+      writeFileSync(
+        join(tmpDir, "sample.test.ts"),
+        `import { test, expect } from "bun:test";\ntest("fail", () => expect(1).toBe(2));\n`,
+      );
+      const res = await defaultGate(tmpDir, 10_000);
+      rmSync(tmpDir, { recursive: true, force: true });
+      expect(res.ok).toBe(false);
+      expect(res.output).toContain("1 fail");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("timeout kills the run and reports it", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "kanban-gate-timeout-"));
+    try {
+      writeFileSync(
+        join(tmpDir, "sample.test.ts"),
+        `import { test } from "bun:test";\ntest("slow", async () => await new Promise((r) => setTimeout(r, 30_000)));\n`,
+      );
+      const res = await defaultGate(tmpDir, 1_000);
+      rmSync(tmpDir, { recursive: true, force: true });
+      expect(res.ok).toBe(false);
+      expect(res.output).toContain("bun test timed out after 1s");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

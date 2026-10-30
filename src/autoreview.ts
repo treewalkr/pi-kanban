@@ -84,6 +84,9 @@ export interface AutoReviewOptions {
   maxPlanBlocks?: number;
   watchIntervalMs?: number;
   log?: (message: string) => void;
+  /** Pre-spawn test gate for reviewer jobs; null disables. Default: defaultGate, unless KANBAN_AUTOREVIEW_GATE=0. */
+  gate?: GateFn | null;
+  gateTimeoutMs?: number;
 }
 
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 60_000;
@@ -91,6 +94,32 @@ export const DEFAULT_STALL_MS = 10 * 60_000;
 const DEFAULT_MAX_BLOCKS = 3;
 const DEFAULT_MAX_PLAN_BLOCKS = 2;
 const MAX_LOG_LINES = 150;
+
+export const DEFAULT_GATE_TIMEOUT_MS = 3 * 60_000;
+
+export interface GateResult {
+  ok: boolean;
+  output: string;
+}
+
+/** Fast checks run before a reviewer session is spent; ok=false means red tests. */
+export type GateFn = (cwd: string, timeoutMs: number) => Promise<GateResult>;
+
+export const defaultGate: GateFn = async (cwd, timeoutMs) => {
+  const proc = Bun.spawn({ cmd: ["bun", "test"], cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, timeoutMs);
+  timer.unref?.();
+  const [code, out, err] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+  clearTimeout(timer);
+  const output = `${out}\n${err}`.trim().slice(-1500);
+  return timedOut
+    ? { ok: false, output: `bun test timed out after ${durationFor(Math.round(timeoutMs / 1000))}\n${output}` }
+    : { ok: code === 0, output };
+};
 
 export interface AgentSessionInfo {
   taskId: string;
@@ -589,6 +618,8 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const stallMs = opts.stallMs ?? DEFAULT_STALL_MS;
   const maxBlocks = opts.maxBlocks ?? DEFAULT_MAX_BLOCKS;
   const maxPlanBlocks = opts.maxPlanBlocks ?? DEFAULT_MAX_PLAN_BLOCKS;
+  const gate = opts.gate !== undefined ? opts.gate : process.env.KANBAN_AUTOREVIEW_GATE === "0" ? null : defaultGate;
+  const gateTimeoutMs = opts.gateTimeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
 
   const queue: Array<AgentJob & { enqueuedAt: number }> = [];
   const inFlight = new Set<string>();
@@ -812,6 +843,28 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       } else {
         if (roleFor(fresh) !== job.role) return; // state moved on while queued
       }
+      if (job.role === "reviewer" && gate) {
+        inFlight.add(job.task.id); // hold the card so a scan mid-gate can't enqueue a duplicate
+        log(`reviewer ${job.task.id}: running pre-spawn test gate`);
+        let res: GateResult;
+        try {
+          res = await gate(opts.cwd, gateTimeoutMs);
+        } catch (err) {
+          log(`reviewer ${job.task.id}: gate could not run (${(err as Error).message}) — reviewing anyway`);
+          res = { ok: true, output: "" }; // fail-open: the gate is best-effort
+        }
+        inFlight.delete(job.task.id);
+        if (stopped) return;
+        if (!res.ok) {
+          db.createComment(job.task.id, {
+            author: REVIEWER_AUTHOR,
+            kind: "comment",
+            body: `pre-review gate: \`bun test\` failed — no reviewer session spawned.\n\n\`\`\`\n${res.output}\n\`\`\`\nFix the tests, then comment on this card to re-trigger review.`,
+          });
+          log(`reviewer ${job.task.id}: gate red — no session spawned`);
+          return; // the gate comment makes pi-reviewer the last author, disarming the card
+        }
+      }
       if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {
         log(`${job.role} ${job.task.id}: lease held by another server — skipping`);
         return;
@@ -1024,7 +1077,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   }
 
   const stopWatch = db.watch(() => scan(), opts.watchIntervalMs ?? 300);
-  log(`enabled — agents run in ${opts.cwd}, stall ${Math.round(stallMs / 60_000)} min / cap ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}`);
+  log(`enabled — agents run in ${opts.cwd}, stall ${Math.round(stallMs / 60_000)} min / cap ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}, test gate ${gate ? "on" : "off"}`);
   scan(); // cards already waiting get picked up right away
 
   return {

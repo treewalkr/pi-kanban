@@ -756,6 +756,7 @@ test("/activity carries the resolved model per session", async () => {
     cwd: dir,
     spawnFn: () => new Promise((resolve) => finishes.push(() => resolve({ code: 0 }))),
     watchIntervalMs: 50,
+    gate: null,
   });
 
   for (let i = 0; i < 20 && finishes.length < 2; i++) {
