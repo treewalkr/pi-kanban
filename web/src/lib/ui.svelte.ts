@@ -14,8 +14,10 @@ const SIDEBAR_MAX = 400;
 
 function loadSidebarWidth(): number {
   try {
-    const n = Number(localStorage.getItem("kanban-sidebar-width"));
-    if (Number.isFinite(n)) return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, n));
+    const raw = localStorage.getItem("kanban-sidebar-width");
+    // absent key is Number(null) === 0 — must not clamp into the minimum
+    const n = raw === null ? Number.NaN : Number(raw);
+    if (Number.isFinite(n)) return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(n)));
   } catch {
     /* storage unavailable */
   }
