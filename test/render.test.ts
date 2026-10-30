@@ -199,4 +199,48 @@ describe("commentThread CLI renderer", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("taskDetail lists session headers with model config; absent when no sessions", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kanban-render-test-"));
+    const db = new KanbanDb(join(dir, "t.db"));
+    try {
+      const cardWith = db.createTask({ title: "with sessions", lane: "implement" });
+      db.attach(
+        cardWith.id,
+        "session",
+        "pi-reviewer · anthropic · claude-x · thinking high · 10/30/2026, 10:46 AM · 42s\nmodel: anthropic · claude-x · thinking high",
+        "autoreview",
+      );
+      const detailWith = stripAnsi(taskDetail(db, db.resolveTask(cardWith.id)));
+      expect(detailWith).toContain("sessions:");
+      expect(detailWith).toContain("anthropic · claude-x · thinking high");
+
+      const cardWithout = db.createTask({ title: "without sessions", lane: "implement" });
+      const detailWithout = stripAnsi(taskDetail(db, db.resolveTask(cardWithout.id)));
+      expect(detailWithout).not.toContain("sessions:");
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("model config stays off lane listings", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kanban-render-test-"));
+    const db = new KanbanDb(join(dir, "t.db"));
+    try {
+      const card = db.createTask({ title: "with sessions", lane: "implement" });
+      db.attach(
+        card.id,
+        "session",
+        "pi-reviewer · anthropic · claude-x · thinking high · 10/30/2026, 10:46 AM · 42s\nmodel: anthropic · claude-x · thinking high",
+        "autoreview",
+      );
+      const lanesOut = stripAnsi(listLanes(db));
+      expect(lanesOut).not.toContain("claude-x");
+      expect(lanesOut).not.toContain("thinking high");
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

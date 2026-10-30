@@ -220,6 +220,14 @@ export function taskDetail(db: KanbanDb, task: Task): string {
     out.push(`${c.dim("plan:")} ${c.dim(meta)}`);
     for (const line of plan.content.split("\n")) out.push(`  ${line}`);
   }
+  const sessions = db.attachments(task.id, "session");
+  if (sessions.length > 0) {
+    out.push(c.dim("sessions:"));
+    for (const s of sessions) {
+      const firstLine = s.content.split("\n")[0];
+      out.push(`  ${c.dim(firstLine)}`);
+    }
+  }
   const comments = db.comments(task.id);
   if (comments.length > 0) {
     out.push(c.dim("thread:"));
