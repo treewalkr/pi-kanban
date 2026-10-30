@@ -1,8 +1,7 @@
 <script lang="ts">
   import { scrambleFrame, scrambleFrameCount, VERSION_SHOWN_MS } from "./scramble";
-  import Mark from "./Mark.svelte";
 
-  const BRAND = "kanban";
+  const BRAND = "Pi Kanban";
   // __APP_VERSION__ is vite's define of the root package.json version.
   const VERSION = `v${__APP_VERSION__}`;
 
@@ -63,9 +62,8 @@
   type="button"
   class="sidebar-brand"
   class:is-version={versionShown}
-  aria-label={`kanban, version ${__APP_VERSION__}`}
+  aria-label={`Pi Kanban, version ${__APP_VERSION__}`}
   onclick={click}
 >
-  <Mark />
-  <span class="brand-text">{text}</span>
+  {text}
 </button>

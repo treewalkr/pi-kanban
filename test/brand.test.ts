@@ -22,25 +22,25 @@ function sequence(...values: number[]): () => number {
 }
 
 test("the scramble keeps the length and the spaces and settles left to right", () => {
-  const target = "kanban";
+  const target = "Pi Kanban";
   const total = scrambleFrameCount(target);
   expect(total).toBe(target.length * SCRAMBLE_FRAMES_PER_CHAR);
   expect(VERSION_SHOWN_MS).toBe(3000);
 
-  // The first frame: nothing settled, every character from the set.
+  // The first frame: nothing settled but the space, every character from the set.
   const pick = (value: number) => SCRAMBLE_CHARS[Math.floor(value * SCRAMBLE_CHARS.length)];
   const first = scrambleFrame(target, 0, sequence(0, 0.5, 0.99));
   expect(first.length).toBe(target.length);
-  for (const char of first) expect(SCRAMBLE_CHARS.includes(char)).toBe(true);
-  expect(first).toBe(`${pick(0)}${pick(0.5)}${pick(0.99)}${pick(0)}${pick(0.5)}${pick(0.99)}`);
-
-  // Spaces survive untouched (a multi-part version keeps its gaps).
-  expect(scrambleFrame("a b", 0, () => 0)).toBe(`${pick(0)} ${pick(0)}`);
+  expect(first[2]).toBe(" ");
+  for (const [index, char] of [...first].entries()) {
+    if (index !== 2) expect(SCRAMBLE_CHARS.includes(char)).toBe(true);
+  }
+  expect(first).toBe(`${pick(0)}${pick(0.5)} ${pick(0.99)}${pick(0)}${pick(0.5)}${pick(0.99)}${pick(0)}${pick(0.5)}`);
 
   // Halfway, the first half is final.
   const half = scrambleFrame(target, total / 2, () => 0);
-  expect(half.slice(0, 3)).toBe("kan");
-  expect(half.slice(3)).toBe("AAA");
+  expect(half.slice(0, 4)).toBe("Pi K");
+  expect(half.slice(4)).toBe("AAAAA");
 
   // From the last frame on, the text itself; every frame before has its length.
   expect(scrambleFrame(target, total)).toBe(target);
@@ -48,12 +48,13 @@ test("the scramble keeps the length and the spaces and settles left to right", (
   for (let frame = 0; frame < total; frame++) expect(scrambleFrame(target, frame).length).toBe(target.length);
 });
 
-test("the brand is a button named for what its click shows, with the mark", () => {
+test("the brand is a text-only button named for what its click shows", () => {
   const brand = readFileSync(brandPath, "utf8");
   expect(brand).toContain('type="button"');
   expect(brand).toContain('class:is-version={versionShown}');
-  expect(brand).toContain('aria-label={`kanban, version ${__APP_VERSION__}`}');
-  expect(brand).toContain('<Mark />');
+  expect(brand).toContain('aria-label={`Pi Kanban, version ${__APP_VERSION__}`}');
+  expect(brand).not.toContain("Mark");
+  expect(brand).toContain('const BRAND = "Pi Kanban";');
   expect(brand).not.toContain("style=");
   // Reduced motion swaps the text at once instead of scrambling.
   expect(brand).toContain("prefers-reduced-motion");

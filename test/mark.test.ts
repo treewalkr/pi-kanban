@@ -8,7 +8,6 @@ const indexPath = join(root, "web", "index.html");
 const markPath = join(root, "web", "src", "lib", "Mark.svelte");
 const appCssPath = join(root, "web", "src", "app.css");
 const appPath = join(root, "web", "src", "lib", "Sidebar.svelte");
-const brandPath = join(root, "web", "src", "lib", "Brand.svelte");
 const galleryPath = join(root, "web", "src", "gallery", "Gallery.svelte");
 
 function srgbToLinear(c: number): number {
@@ -143,18 +142,13 @@ test("mark has no sub-pixel detail", () => {
   }
 });
 
-test("both headers render the shared mark component", () => {
+test("the gallery header renders the shared mark component", () => {
   const appContent = readFileSync(appPath, "utf-8");
   const galleryContent = readFileSync(galleryPath, "utf-8");
-  const brandContent = readFileSync(brandPath, "utf-8");
 
-  // The sidebar's mark lives in the brand button (web/src/lib/Brand.svelte).
+  // The sidebar's brand is text-only now (Brand.svelte); the gallery keeps the mark.
   expect(appContent).toContain('import Brand from "./Brand.svelte";');
-  expect(appContent).toContain("<Brand />");
-  expect(appContent).not.toContain('<span class="mark">');
-  expect(brandContent).toContain('import Mark from "./Mark.svelte";');
-  expect(brandContent).toContain("<Mark />");
-
+  expect(appContent).not.toContain("Mark.svelte");
   expect(galleryContent).toContain('import Mark from "../lib/Mark.svelte";');
   expect(galleryContent).toContain("<Mark />");
   expect(galleryContent).not.toContain('<span class="mark">');
