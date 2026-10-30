@@ -151,13 +151,13 @@ export const createApp = (
     )
     .get(
       "/files",
-      async ({ query, status }): Promise<{ path: string; entries: FileEntry[] } | unknown> => {
+      async ({ query, status }): Promise<{ path: string; entries: FileEntry[] }> => {
         try {
           const root = opts.filesRoot ?? process.cwd();
           const dirPath = query.path ?? "";
-          return status(200, { path: dirPath, entries: await listFiles(root, dirPath) });
+          return { path: dirPath, entries: await listFiles(root, dirPath) };
         } catch (e) {
-          return fail(e, status);
+          return fail<{ path: string; entries: FileEntry[] }>(e, status);
         }
       },
       {
@@ -168,13 +168,13 @@ export const createApp = (
     )
     .get(
       "/files/content",
-      async ({ query, status }): Promise<{ path: string; content: string; language: string } | unknown> => {
+      async ({ query, status }): Promise<{ path: string; content: string; language: string }> => {
         try {
           const root = opts.filesRoot ?? process.cwd();
           const file = await readFile(root, query.path);
-          return status(200, { path: query.path, content: file.content, language: file.language });
+          return { path: query.path, content: file.content, language: file.language };
         } catch (e) {
-          return fail(e, status);
+          return fail<{ path: string; content: string; language: string }>(e, status);
         }
       },
       {
