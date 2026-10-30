@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Bot, Layers, Settings2 } from "@lucide/svelte";
   import { agents, type SettingsSection } from "./agents.svelte";
   import { pools } from "./pools.svelte";
   import GeneralSettings from "./GeneralSettings.svelte";
@@ -53,11 +54,7 @@
           aria-current={section === "general" ? "page" : undefined}
           onclick={() => activate("general")}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M20 7h-9M14 17H5" />
-            <circle cx="7" cy="7" r="3" />
-            <circle cx="17" cy="17" r="3" />
-          </svg>
+          <Settings2 size={16} strokeWidth={1.8} />
           <span>General</span>
         </button>
         <button
@@ -66,10 +63,7 @@
           aria-current={section === "agents" ? "page" : undefined}
           onclick={() => activate("agents")}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="5" y="7" width="14" height="11" rx="2" />
-            <path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" />
-          </svg>
+          <Bot size={16} strokeWidth={1.8} />
           <span>Agents</span>
         </button>
         <button
@@ -78,9 +72,7 @@
           aria-current={section === "pools" ? "page" : undefined}
           onclick={() => activate("pools")}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-          </svg>
+          <Layers size={16} strokeWidth={1.8} />
           <span>Pools</span>
         </button>
       </nav>
