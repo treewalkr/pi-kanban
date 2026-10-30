@@ -16,7 +16,8 @@ a parent never finishes its children.
 
 Bun · Elysia (API, port `4600`) · Svelte 5 runes SPA (Vite, dev port `5174`) · Eden Treaty ·
 `bun:sqlite` (`data/kanban.db`, WAL). The CLI talks to SQLite directly, so the server never
-needs to be running for agent-side CRUD.
+needs to be running for agent-side CRUD. UI icons come from [Lucide](https://lucide.dev/icons)
+(`@lucide/svelte`) — pick icons there, don't hand-draw SVGs.
 
 ## Install
 
@@ -105,7 +106,7 @@ re-acquiring the lease, clearing the dead badge, and streaming into the live act
 earlier reasoning and tokens instead of starting from scratch. Commenting on the card remains a fresh
 re-run. If the session file in `~/.pi` is missing, resume safely falls back to a fresh session under the same ID.
 
-Configure agents in the web UI (≡ in the topbar) — settings apply to the next session
+Configure agents in the web UI (gear icon in the topbar) — settings apply to the next session
 without restarting serve:
 
 | field | becomes | notes |

@@ -11,6 +11,7 @@
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import Mark from "./lib/Mark.svelte";
   import { theme, setTheme } from "./lib/theme.svelte";
+  import { Settings } from "@lucide/svelte";
 
   // initial load, plus catch-up when a modal closes (change events are paused while editing)
   $effect(() => {
@@ -122,7 +123,7 @@
       aria-label="settings"
       title="settings"
     >
-      ≡
+      <Settings size={14} strokeWidth={1.75} />
     </button>
     <button
       class="theme-toggle"
