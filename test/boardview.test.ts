@@ -241,3 +241,82 @@ test("board.moveTask PATCHes the lane change and refreshes from /board", async (
   }
 });
 
+test("board.elaborate POSTs to /tasks/:id/elaborate then polls activity and refreshes", async () => {
+  const originalFetch = globalThis.fetch;
+  const task = makeTask({ id: "t-1", title: "card 1", laneId: "backlog" });
+  const capturedUrls: string[] = [];
+
+  try {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const pathname = new URL(url).pathname;
+      const method = init?.method ?? "GET";
+      capturedUrls.push(`${method} ${pathname}`);
+
+      if (method === "POST" && pathname === `/tasks/${task.id}/elaborate`) {
+        return new Response(JSON.stringify({ taskId: task.id }), {
+          status: 202,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (pathname === "/activity") {
+        return new Response(JSON.stringify({ sessions: [], queued: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (pathname === "/board") {
+        return new Response(
+          JSON.stringify({
+            lanes: [makeLane("backlog", "Backlog")],
+            tasks: [task],
+            plans: {},
+            waiting: {},
+            blockedBy: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    board.lanes = [makeLane("backlog", "Backlog")];
+    board.tasks = [];
+    board.error = "previous error";
+
+    await board.elaborate(task.id);
+
+    expect(capturedUrls).toContain(`POST /tasks/${task.id}/elaborate`);
+    expect(capturedUrls).toContain("GET /activity");
+    expect(capturedUrls).toContain("GET /board");
+    expect(board.error).toBe("");
+    expect(board.tasks).toEqual([task]);
+
+    // a 404 response sets board.error to the payload's error
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const pathname = new URL(url).pathname;
+      const method = init?.method ?? "GET";
+      if (method === "POST" && pathname === "/tasks/nonexistent/elaborate") {
+        return new Response(JSON.stringify({ error: "no task matching 'nonexistent'", code: "not-found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    await board.elaborate("nonexistent");
+    expect(board.error).toBe("no task matching 'nonexistent'");
+  } finally {
+    globalThis.fetch = originalFetch;
+    board.lanes = [];
+    board.tasks = [];
+    board.error = "";
+  }
+});
+
+
