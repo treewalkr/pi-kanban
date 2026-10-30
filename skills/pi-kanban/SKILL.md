@@ -110,6 +110,7 @@ kanban ls [lane] [--project <tag>] [--json]                           # board ov
 kanban next [--project <tag>] [--json]                           # what's next: lane priority, then card priority, then oldest; skips blocked (prints blocked & waiting counts)
 kanban search <query…> [--project <tag>] [--json]                     # ranked matches: titles, checklist lines, notes, plans
 kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers, from-lane
+kanban link <id> <other> · unlink <id> <other>                        # relate / unrelate two cards (undirected; visible from both)
 kanban attach <id> <plan-file>                                        # attach/version a plan; show prints the latest
 kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]  # append to the card's thread (question parks the card)
 kanban comments <id>                                                  # read the thread, oldest first
@@ -161,6 +162,11 @@ kanban help | version                                                 # CLI help
   dim in the web UI; `mv` into Plan/Implement warns but never refuses;
   `next` skips them and prints how many. Edges map dependencies — they don't
   gate moves or auto-finish anything.
+- **Links (`kanban link <id> <other>`)**: general undirected relations
+  between cards (`kanban unlink <id> <other>` removes). Links are undirected,
+  idempotent, visible from both cards in CLI and web detail, survive moves,
+  and die with either card. Unlike `--blocked-by`, links never gate moves,
+  never soft-block, and have no cycle restrictions.
 - **`--note`**: free text, rendered as GitHub-flavored markdown in the web UI —
   handy for acceptance-criteria checklists (`- [ ] …`), tables, code snippets,
   links. For multi-line notes from a shell, pass the text through a quoted

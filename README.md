@@ -40,6 +40,7 @@ kanban add <title> --project my-app [--note <text>] [--parent <id>] [--elaborate
 kanban elaborate <id>               # retrofit/retry elaboration on any card
 kanban ls · search <query> · show <id> · brief <id>
 kanban next                         # lane → priority → oldest; skips blocked, counts waiting
+kanban link <id> <other> · unlink <id> <other>
 kanban mv <id> <lane> · edit <id> … · done <id> · archive <id> · rm <id> --force
 kanban lane ls | add | rename | rm
 kanban attach <id> <plan-file>      # versioned plan attach — re-attaching versions it
