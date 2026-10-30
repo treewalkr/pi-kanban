@@ -263,7 +263,7 @@
       {#if live}
         <div class="detail-activity">
           <div class="children-head">
-            {roleAuthor(live.role)} · live · {timeAgo(live.startedAt)}
+            {roleAuthor(live.role)} · live · {timeAgo(live.startedAt)}{#if live.modelLabel} · {live.modelLabel}{/if}
           </div>
           <div class="activity-log" bind:this={logEl}>
             {#each live.log as line, i (i)}

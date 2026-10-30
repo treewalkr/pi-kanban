@@ -765,15 +765,20 @@ test("/activity carries the resolved model per session", async () => {
 
   const res = await app.handle(new Request("http://localhost/activity"));
   expect(res.status).toBe(200);
-  const data = (await res.json()) as { sessions: Array<{ taskId: string; model?: string; pool?: string }> };
+  const data = (await res.json()) as { sessions: Array<{ taskId: string; model?: string; modelLabel?: string; pool?: string }> };
   expect(data.sessions.length).toBe(2);
 
   const models = data.sessions.map((s) => s.model);
   expect(models).toContain("claude-3-5-sonnet");
   expect(models).toContain("gpt-4o");
 
+  const labels = data.sessions.map((s) => s.modelLabel);
+  expect(labels).toContain("anthropic · claude-3-5-sonnet · thinking max");
+  expect(labels).toContain("openai · gpt-4o · thinking max");
+
   for (const s of data.sessions) {
     expect(s.pool).toBe("heavy pool");
+    expect(s.modelLabel).toContain("thinking max");
   }
 
   handle.stop();
