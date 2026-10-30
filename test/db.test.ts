@@ -1365,3 +1365,83 @@ test("boardStats: wip, throughput weeks, lane dwell averages, projects, cycle av
   expect(payload.board.laneDwell.waiting).toBeUndefined(); // no task entered waiting
 });
 
+test("deleting a linked card leaves survivors with no dangling links", () => {
+  const a = db.createTask({ title: "Card A", lane: "backlog" });
+  const b = db.createTask({ title: "Card B", lane: "backlog" });
+  const c = db.createTask({ title: "Card C", lane: "backlog" });
+  db.linkCards(a.id, b.id);
+  db.linkCards(b.id, c.id);
+
+  const deleted = db.deleteTask(b.id);
+  expect(deleted.id).toBe(b.id);
+  expect(db.linksOf(a.id)).toEqual([]);
+  expect(db.linksOf(c.id)).toEqual([]);
+  expect(db.linksMap()).toEqual({});
+  expect(db.resolveTask(a.id).title).toBe("Card A");
+  expect(db.resolveTask(c.id).title).toBe("Card C");
+});
+
+test("lane rm --force leaves no dangling links for removed cards", () => {
+  db.createLane({ name: "doomed" });
+  const a = db.createTask({ title: "Card A", lane: "backlog" });
+  const b = db.createTask({ title: "Card B", lane: "doomed" });
+  const c = db.createTask({ title: "Card C", lane: "doomed" });
+  const d = db.createTask({ title: "Card D", lane: "doomed" });
+  db.linkCards(a.id, b.id);
+  db.linkCards(c.id, d.id);
+
+  db.deleteLane("doomed", true);
+  expect(db.linksOf(a.id)).toEqual([]);
+  expect(db.linksMap()).toEqual({});
+});
+
+test("moving a linked card to another lane keeps its links", () => {
+  const a = db.createTask({ title: "Card A", lane: "backlog" });
+  const b = db.createTask({ title: "Card B", lane: "backlog" });
+  db.linkCards(a.id, b.id);
+
+  db.moveTask(a.id, "implement");
+  const links = db.linksOf(a.id);
+  expect(links).toHaveLength(1);
+  expect(links[0].id).toBe(b.id);
+  expect(db.linksMap()).toEqual({
+    [a.id]: [b.id],
+    [b.id]: [a.id],
+  });
+  expect(db.resolveTask(a.id).laneId).toBe("implement");
+});
+
+test("linkCards: self-link invalid, duplicate idempotent, canonical order", () => {
+  const a = db.createTask({ title: "Card A", lane: "backlog" });
+  const b = db.createTask({ title: "Card B", lane: "backlog" });
+
+  // self-link throws with code invalid
+  try {
+    db.linkCards(a.id, a.id);
+    expect.unreachable();
+  } catch (err: any) {
+    expect(err).toBeInstanceOf(KanbanError);
+    expect(err.message).toMatch(/cannot link a card to itself/);
+    expect(err.code).toBe("invalid");
+  }
+
+  // linking twice leaves linksOf length 1
+  db.linkCards(a.id, b.id);
+  const links1 = db.linkCards(a.id, b.id);
+  expect(links1).toHaveLength(1);
+  expect(links1[0].id).toBe(b.id);
+  expect(db.linksOf(a.id)).toHaveLength(1);
+
+  // linkCards(b.id, a.id) after linkCards(a.id, b.id) is a no-op
+  const links2 = db.linkCards(b.id, a.id);
+  expect(links2).toHaveLength(1);
+  expect(links2[0].id).toBe(a.id);
+  expect(db.linksMap()[a.id]).toEqual([b.id]);
+  expect(db.linksMap()[b.id]).toEqual([a.id]);
+
+  // unlink removes edge
+  expect(db.unlinkCards(a.id, b.id)).toBe(true);
+  expect(db.linksOf(a.id)).toEqual([]);
+  expect(db.unlinkCards(a.id, b.id)).toBe(false);
+});
+

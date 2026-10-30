@@ -180,6 +180,8 @@ export interface Board {
   waiting: Record<string, WaitingState>;
   /** Sparse card-id → direct blocker ids. */
   blockedBy: Record<string, string[]>;
+  /** Sparse card-id → linked card ids, both directions. */
+  links: Record<string, string[]>;
 }
 
 export interface TaskPatch {
@@ -265,6 +267,15 @@ CREATE TABLE IF NOT EXISTS blocked_by (
   PRIMARY KEY (card_id, blocker_id)
 );
 CREATE INDEX IF NOT EXISTS blocked_by_blocker ON blocked_by (blocker_id);
+CREATE TABLE IF NOT EXISTS card_links (
+  card_a TEXT NOT NULL REFERENCES tasks (id),
+  card_b TEXT NOT NULL REFERENCES tasks (id),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (card_a, card_b),
+  CHECK (card_a < card_b)
+);
+CREATE INDEX IF NOT EXISTS card_links_a ON card_links (card_a);
+CREATE INDEX IF NOT EXISTS card_links_b ON card_links (card_b);
 CREATE TABLE IF NOT EXISTS agent_configs (
   role TEXT PRIMARY KEY,
   config TEXT NOT NULL,
@@ -892,6 +903,7 @@ export class KanbanDb {
       plans: this.latestPlans(),
       waiting: this.waitingStates(),
       blockedBy: this.blockedByMap(),
+      links: this.linksMap(),
     };
   }
 
@@ -1055,6 +1067,7 @@ export class KanbanDb {
     const delAttachments = this.q("DELETE FROM attachments WHERE card_id = ?");
     const delComments = this.q("DELETE FROM comments WHERE card_id = ?");
     const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
+    const delLinks = this.q("DELETE FROM card_links WHERE card_a = ? OR card_b = ?");
     const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
     const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
     const delElaborationRequests = this.q("DELETE FROM elaboration_requests WHERE task_id = ?");
@@ -1064,6 +1077,7 @@ export class KanbanDb {
       delAttachments.run(id);
       delComments.run(id);
       delBlockedBy.run(id, id);
+      delLinks.run(id, id);
       delCardSessions.run(id);
       delResumeRequests.run(id);
       delElaborationRequests.run(id);
@@ -1286,6 +1300,83 @@ export class KanbanDb {
     const map: Record<string, string[]> = {};
     for (const row of rows) {
       (map[row.card_id] ??= []).push(row.blocker_id);
+    }
+    return map;
+  }
+
+  /**
+   * Link two cards (undirected edge). Canonical form: card_a < card_b.
+   * Duplicate is a no-op; self-link throws code "invalid".
+   * Returns the calling card's linked cards.
+   */
+  linkCards(aRef: string, bRef: string): Task[] {
+    const a = this.resolveTask(aRef);
+    const b = this.resolveTask(bRef);
+    if (a.id === b.id) {
+      throw new KanbanError("cannot link a card to itself", "invalid");
+    }
+    const [cardA, cardB] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];
+    const now = Date.now();
+    const ins = this.q("INSERT OR IGNORE INTO card_links (card_a, card_b, created_at) VALUES (?, ?, ?)");
+    const bump = this.q("UPDATE tasks SET updated_at = ? WHERE id = ?");
+    this.db.transaction(() => {
+      const res = ins.run(cardA, cardB, now);
+      if (res.changes > 0) {
+        bump.run(now, cardA);
+        bump.run(now, cardB);
+      }
+    })();
+    return this.linksOf(a.id);
+  }
+
+  /**
+   * Unlink two cards. Returns true iff an edge was removed.
+   * Unknown/ambiguous refs throw resolveTask errors; non-existent link is a no-op returning false.
+   */
+  unlinkCards(aRef: string, bRef: string): boolean {
+    const a = this.resolveTask(aRef);
+    const b = this.resolveTask(bRef);
+    if (a.id === b.id) return false;
+    const [cardA, cardB] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];
+    const del = this.q("DELETE FROM card_links WHERE card_a = ? AND card_b = ?");
+    const bump = this.q("UPDATE tasks SET updated_at = ? WHERE id = ?");
+    let removed = false;
+    this.db.transaction(() => {
+      const res = del.run(cardA, cardB);
+      if (res.changes > 0) {
+        removed = true;
+        const now = Date.now();
+        bump.run(now, cardA);
+        bump.run(now, cardB);
+      }
+    })();
+    return removed;
+  }
+
+  /** Linked cards of a card as Task[], ordered by link creation time then id. */
+  linksOf(ref: string): Task[] {
+    const task = this.resolveTask(ref);
+    const rows = this.q(
+      `SELECT t.* FROM tasks t
+       JOIN (
+         SELECT card_b AS linked_id, created_at FROM card_links WHERE card_a = ?
+         UNION ALL
+         SELECT card_a AS linked_id, created_at FROM card_links WHERE card_b = ?
+       ) l ON l.linked_id = t.id
+       ORDER BY l.created_at, t.id`,
+    ).all(task.id, task.id) as TaskRow[];
+    return rows.map(rowToTask);
+  }
+
+  /** Sparse card-id → linked card ids, both directions, for the board payload and CLI --json. */
+  linksMap(): Record<string, string[]> {
+    const rows = this.q(
+      "SELECT card_a, card_b FROM card_links ORDER BY rowid",
+    ).all() as Array<{ card_a: string; card_b: string }>;
+    const map: Record<string, string[]> = {};
+    for (const row of rows) {
+      (map[row.card_a] ??= []).push(row.card_b);
+      (map[row.card_b] ??= []).push(row.card_a);
     }
     return map;
   }
@@ -2118,6 +2209,7 @@ export class KanbanDb {
       const delAttachments = this.q("DELETE FROM attachments WHERE card_id = ?");
       const delComments = this.q("DELETE FROM comments WHERE card_id = ?");
       const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
+      const delLinks = this.q("DELETE FROM card_links WHERE card_a = ? OR card_b = ?");
       const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
       const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
       const delElaborationRequests = this.q("DELETE FROM elaboration_requests WHERE task_id = ?");
@@ -2128,6 +2220,7 @@ export class KanbanDb {
           delAttachments.run(id);
           delComments.run(id);
           delBlockedBy.run(id, id);
+          delLinks.run(id, id);
           delCardSessions.run(id);
           delResumeRequests.run(id);
           delElaborationRequests.run(id);
