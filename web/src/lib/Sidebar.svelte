@@ -7,6 +7,8 @@
   import { Bot, Check, ChevronDown, FolderOpen, GitBranch, Layers, Loader2, Plus, Search, Settings2 } from "@lucide/svelte";
   import { formatRelativeTime, roleVerb } from "./util";
   import { agents, type SettingsSection } from "./agents.svelte";
+  import { files } from "./files.svelte";
+  import FilesPanel from "./FilesPanel.svelte";
   import type { AgentRole } from "../../../src/db";
 
   // ---------- header: new card + search ----------
@@ -122,6 +124,16 @@
     { id: "pools", label: "Pools" },
     { id: "general", label: "Settings" },
   ];
+
+  function onTabKeydown(e: KeyboardEvent): void {
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      const nextTab = files.tab === "queue" ? "files" : "queue";
+      files.setTab(nextTab);
+      const targetId = nextTab === "queue" ? "sidebar-tab-queue" : "sidebar-tab-files";
+      document.getElementById(targetId)?.focus();
+    }
+  }
 </script>
 
 <div class="sidebar-head">
@@ -259,59 +271,106 @@
   {/if}
 </div>
 
-<div class="sidebar-body">
-  {#if waitingQueue.length > 0}
-    <div class="queue-group">waiting on you</div>
-    {#each waitingQueue as { task, reason } (task.id)}
-      <button
-        class="queue-row"
-        class:selected={board.editing?.id === task.id}
-        title={task.title}
-        onclick={() => board.openCard(task)}
-      >
-        <span class="queue-glyph" aria-hidden="true">☉</span>
-        <span class="queue-main">
-          <span class="queue-title">{task.title}</span>
-          <span class="queue-meta">
-            <span>{formatRelativeTime(task.updatedAt, now)}</span>
-            <span>{WAITING_REASONS[reason] ?? reason}</span>
-          </span>
-        </span>
-      </button>
-    {/each}
-  {:else}
-    <div class="queue-empty">nothing waits on you</div>
-  {/if}
+<div class="sidebar-tabs" role="tablist" aria-label="sidebar panels">
+  <button
+    type="button"
+    id="sidebar-tab-queue"
+    role="tab"
+    aria-selected={files.tab === "queue"}
+    aria-controls="sidebar-panel-queue"
+    tabindex={files.tab === "queue" ? 0 : -1}
+    class:active={files.tab === "queue"}
+    onclick={() => files.setTab("queue")}
+    onkeydown={onTabKeydown}
+  >
+    Queue
+  </button>
+  <button
+    type="button"
+    id="sidebar-tab-files"
+    role="tab"
+    aria-selected={files.tab === "files"}
+    aria-controls="sidebar-panel-files"
+    tabindex={files.tab === "files" ? 0 : -1}
+    class:active={files.tab === "files"}
+    onclick={() => files.setTab("files")}
+    onkeydown={onTabKeydown}
+  >
+    Files{#if files.changesCount > 0}
+      <span class="tab-count" title="{files.changesCount} changed files">{files.changesCount}</span>
+    {/if}
+  </button>
+</div>
 
-  {#if runningQueue.length > 0}
-    <div class="queue-group">running</div>
-    {#each runningQueue as row (row.taskId)}
-      {@const task = board.taskById(row.taskId)}
-      <button
-        class="queue-row"
-        class:selected={board.editing?.id === row.taskId}
-        title={task?.title ?? row.taskId}
-        onclick={() => task && board.openCard(task)}
-      >
-        <span class="queue-glyph" aria-hidden="true">
-          {#if row.queued}
-            ⧗
-          {:else}
-            <Loader2 class="spin" size={13} strokeWidth={2} />
-          {/if}
-        </span>
-        <span class="queue-main">
-          <span class="queue-title">{task?.title ?? row.taskId}</span>
-          <span class="queue-meta">
-            <span>
-              {#if row.queued}queued · {roleVerb(row.role)}{:else}{roleVerb(row.role)}{/if}{row.label ? ` · ${row.label}` : ""}
+<div class="sidebar-body">
+  <div
+    role="tabpanel"
+    id="sidebar-panel-queue"
+    aria-labelledby="sidebar-tab-queue"
+    hidden={files.tab !== "queue"}
+  >
+    {#if waitingQueue.length > 0}
+      <div class="queue-group">waiting on you</div>
+      {#each waitingQueue as { task, reason } (task.id)}
+        <button
+          class="queue-row"
+          class:selected={board.editing?.id === task.id}
+          title={task.title}
+          onclick={() => board.openCard(task)}
+        >
+          <span class="queue-glyph" aria-hidden="true">☉</span>
+          <span class="queue-main">
+            <span class="queue-title">{task.title}</span>
+            <span class="queue-meta">
+              <span>{formatRelativeTime(task.updatedAt, now)}</span>
+              <span>{WAITING_REASONS[reason] ?? reason}</span>
             </span>
-            <span>{formatRelativeTime(row.startedAt, now)}</span>
           </span>
-        </span>
-      </button>
-    {/each}
-  {/if}
+        </button>
+      {/each}
+    {:else}
+      <div class="queue-empty">nothing waits on you</div>
+    {/if}
+
+    {#if runningQueue.length > 0}
+      <div class="queue-group">running</div>
+      {#each runningQueue as row (row.taskId)}
+        {@const task = board.taskById(row.taskId)}
+        <button
+          class="queue-row"
+          class:selected={board.editing?.id === row.taskId}
+          title={task?.title ?? row.taskId}
+          onclick={() => task && board.openCard(task)}
+        >
+          <span class="queue-glyph" aria-hidden="true">
+            {#if row.queued}
+              ⧗
+            {:else}
+              <Loader2 class="spin" size={13} strokeWidth={2} />
+            {/if}
+          </span>
+          <span class="queue-main">
+            <span class="queue-title">{task?.title ?? row.taskId}</span>
+            <span class="queue-meta">
+              <span>
+                {#if row.queued}queued · {roleVerb(row.role)}{:else}{roleVerb(row.role)}{/if}{row.label ? ` · ${row.label}` : ""}
+              </span>
+              <span>{formatRelativeTime(row.startedAt, now)}</span>
+            </span>
+          </span>
+        </button>
+      {/each}
+    {/if}
+  </div>
+
+  <div
+    role="tabpanel"
+    id="sidebar-panel-files"
+    aria-labelledby="sidebar-tab-files"
+    hidden={files.tab !== "files"}
+  >
+    <FilesPanel />
+  </div>
 </div>
 
 <div class="sidebar-foot">
