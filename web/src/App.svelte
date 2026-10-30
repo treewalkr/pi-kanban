@@ -85,7 +85,11 @@
   $effect(() => {
     void ui.loadGit();
     const timer = setInterval(() => {
-      if (!document.hidden) void ui.loadGit();
+      if (!document.hidden) {
+        void ui.loadGit();
+        // terminal worktree changes emit no DB event
+        if (!board.editing) board.refresh();
+      }
     }, 10_000);
     return () => clearInterval(timer);
   });

@@ -4,7 +4,7 @@
   import CardView from "./Card.svelte";
   import IdChip from "./IdChip.svelte";
   import { renderMarkdown } from "./markdown";
-  import { CircleSlash } from "@lucide/svelte";
+  import { CircleSlash, GitBranch } from "@lucide/svelte";
   import { cycleChip } from "./statsview";
   import { canPromoteToPlan, queuedChip, timeAgo } from "./util";
   import { waitingBadge } from "./waiting";
@@ -110,6 +110,12 @@
       <span class="chip blocked"><CircleSlash size={11} strokeWidth={1.75} /> blocked</span>
     {/if}
     {#if task.project}<span class="chip">{task.project}</span>{/if}
+    {#if board.workspaces[task.id]}
+      {@const ws = board.workspaces[task.id]}
+      <span class="chip ws" title={ws.path ?? "branch exists — no worktree checked out"}>
+        <GitBranch size={11} strokeWidth={1.75} /> {ws.branch}
+      </span>
+    {/if}
     {#if board.activity[task.id]}
       <span class="chip working" title="pi agent working — open the card for live output">
         ◌ {board.activity[task.id].role === "reviewer"

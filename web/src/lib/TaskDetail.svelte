@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Attachment, Comment, Task } from "../../../src/db";
   import { isAgentChatter, latestStateIndex } from "../../../src/thread";
-  import { Sparkles } from "@lucide/svelte";
+  import { GitBranch, Sparkles } from "@lucide/svelte";
   import { api } from "../api";
   import { board } from "./board.svelte";
   import IdChip from "./IdChip.svelte";
@@ -220,6 +220,12 @@
       <span class="lane-dot"></span>
       <span class="detail-lane">{laneName}</span>
       {#if me.project}<span class="chip">{me.project}</span>{/if}
+      {#if board.workspaces[me.id]}
+        {@const ws = board.workspaces[me.id]}
+        <span class="chip ws" title={ws.path ?? "branch exists — no worktree checked out"}>
+          <GitBranch size={11} strokeWidth={1.75} /> {ws.branch}
+        </span>
+      {/if}
     </div>
     {#if ancestors.length > 0}
       <nav class="breadcrumb" aria-label="parent cards">

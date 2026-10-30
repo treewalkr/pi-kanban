@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { Attachment, BoardStatsPayload, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
+import type { Attachment, BoardStatsPayload, CardWorkspace, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
 import type { AgentSessionInfo, QueuedJobInfo } from "../../../src/autoreview";
 import { searchBoard } from "../../../src/search";
 import { initialProject, parseProjectHash, projectHash } from "./viewhash";
@@ -80,6 +80,8 @@ class BoardStore {
   blockedBy = $state<Record<string, string[]>>({});
   /** Sparse card-id → linked card ids, both directions (board payload). */
   links = $state<Record<string, string[]>>({});
+  /** Live implementation location of a card, keyed by task id (sparse). */
+  workspaces = $state<Record<string, CardWorkspace>>({});
   stats = $state<BoardStatsPayload | null>(null);
   loading = $state(true);
   error = $state("");
@@ -362,6 +364,7 @@ class BoardStore {
     this.waiting = boardRes.data.waiting ?? {}; // guards the dev-restart window against a pre-change API payload
     this.blockedBy = boardRes.data.blockedBy ?? {};
     this.links = boardRes.data.links ?? {};
+    this.workspaces = boardRes.data.workspaces ?? {};
     this.loading = false;
     // a stored project whose tag no longer exists (renamed, or its last card dropped the tag)
     // resets to "all" — an active filter with no visible chip would be a silent empty board

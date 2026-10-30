@@ -2456,6 +2456,14 @@ button:focus-visible {
   border-color: color-mix(in srgb, #d29922 40%, var(--border));
 }
 
+.chip.ws {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #58a6ff;
+  border-color: color-mix(in srgb, #58a6ff 40%, var(--border));
+}
+
 .card.blocked {
   opacity: 0.65;
   filter: saturate(0.7);
