@@ -100,6 +100,27 @@ export interface Comment {
   createdAt: number;
 }
 
+export type LaneEventCause =
+  | "create"
+  | "mv"
+  | "edit"
+  | "handoff"
+  | "review"
+  | "approve"
+  | "done"
+  | "archive"
+  | "backfill";
+
+export interface LaneEvent {
+  id: string;
+  taskId: string;
+  fromLaneId: string | null;
+  toLaneId: string;
+  cause: LaneEventCause;
+  actor: string;
+  createdAt: number;
+}
+
 export interface Board {
   lanes: Lane[];
   tasks: Task[];
@@ -228,6 +249,17 @@ CREATE TABLE IF NOT EXISTS worker_pools (
   config TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS lane_events (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks (id),
+  from_lane_id TEXT,             -- NULL = card entering its first lane (creation)
+  to_lane_id TEXT NOT NULL,
+  cause TEXT NOT NULL,           -- LaneEventCause
+  actor TEXT NOT NULL DEFAULT 'user',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lane_events_task ON lane_events (task_id, created_at);
+CREATE INDEX IF NOT EXISTS lane_events_to_lane ON lane_events (to_lane_id, created_at);
 `;
 
 export const DEFAULT_LANES: Array<Omit<Lane, "position">> = [
@@ -303,6 +335,16 @@ interface CommentRow {
   created_at: number;
 }
 
+interface LaneEventRow {
+  id: string;
+  task_id: string;
+  from_lane_id: string | null;
+  to_lane_id: string;
+  cause: string;
+  actor: string;
+  created_at: number;
+}
+
 const rowToLane = (r: LaneRow): Lane => ({ ...r });
 const rowToTask = (r: TaskRow): Task => ({
   id: r.id,
@@ -334,6 +376,16 @@ const rowToComment = (r: CommentRow): Comment => ({
   author: r.author,
   kind: r.kind as CommentKind,
   body: r.body,
+  createdAt: r.created_at,
+});
+
+const rowToLaneEvent = (r: LaneEventRow): LaneEvent => ({
+  id: r.id,
+  taskId: r.task_id,
+  fromLaneId: r.from_lane_id ?? null,
+  toLaneId: r.to_lane_id,
+  cause: r.cause as LaneEventCause,
+  actor: r.actor,
   createdAt: r.created_at,
 });
 
@@ -373,6 +425,7 @@ export class KanbanDb {
     this.ensureWaitingLane();
     this.ensureArchiveLane();
     this.migratePlansTable();
+    this.backfillLaneEvents();
   }
 
   private watchers = new Set<() => void>();
@@ -497,6 +550,89 @@ export class KanbanDb {
        SELECT id, task_id, 'plan', version, content, source, created_at FROM plans`,
     ).run();
     this.db.exec("DROP TABLE plans");
+  }
+
+  private backfillLaneEvents(): void {
+    const flag = this.q("SELECT value FROM board_state WHERE key = 'lane_events_backfilled'").get() as
+      | { value: string }
+      | undefined;
+    if (flag) return;
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const inside = this.q("SELECT value FROM board_state WHERE key = 'lane_events_backfilled'").get() as
+        | { value: string }
+        | undefined;
+      if (inside) {
+        this.db.exec("COMMIT");
+        return;
+      }
+
+      const tasksWithoutEvents = this.q(
+        "SELECT * FROM tasks WHERE id NOT IN (SELECT DISTINCT task_id FROM lane_events) ORDER BY created_at, id",
+      ).all() as TaskRow[];
+
+      const insertEvent = this.q(
+        "INSERT INTO lane_events (id, task_id, from_lane_id, to_lane_id, cause, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      );
+
+      for (const tRow of tasksWithoutEvents) {
+        const task = rowToTask(tRow);
+        const taskComments = this.comments(task.id);
+
+        const timeline: Array<{ at: number; lane: string; actor: string }> = [
+          { at: task.createdAt, lane: "backlog", actor: "user" },
+        ];
+
+        let lastAnchorAt: number | null = null;
+        for (const c of taskComments) {
+          if (c.kind === "approval") {
+            timeline.push({ at: c.createdAt, lane: "implement", actor: c.author });
+            lastAnchorAt = c.createdAt;
+          } else if (c.kind === "rejection") {
+            timeline.push({ at: c.createdAt, lane: "plan", actor: c.author });
+            lastAnchorAt = c.createdAt;
+          } else if (
+            c.kind === "review" &&
+            c.author === PLAN_REVIEWER_AUTHOR &&
+            (c.body.startsWith(KanbanDb.PLAN_REVIEW_PASS) || c.body.startsWith(KanbanDb.PLAN_REVIEW_BLOCK))
+          ) {
+            timeline.push({ at: c.createdAt, lane: "plan", actor: c.author });
+            lastAnchorAt = c.createdAt;
+          }
+        }
+
+        timeline.push({ at: lastAnchorAt ?? task.createdAt, lane: task.laneId, actor: "user" });
+
+        let prevLane: string | null = null;
+        for (const entry of timeline) {
+          if (prevLane !== null && entry.lane === prevLane) {
+            continue;
+          }
+          insertEvent.run(newId(), task.id, prevLane, entry.lane, "backfill", entry.actor, entry.at);
+          prevLane = entry.lane;
+        }
+      }
+
+      this.q("INSERT OR REPLACE INTO board_state (key, value) VALUES ('lane_events_backfilled', '1')").run();
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  private recordLaneEvent(
+    taskId: string,
+    fromLaneId: string | null,
+    toLaneId: string,
+    cause: LaneEventCause,
+    actor = "user",
+    createdAt = Date.now(),
+  ): void {
+    this.q(
+      "INSERT INTO lane_events (id, task_id, from_lane_id, to_lane_id, cause, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(newId(), taskId, fromLaneId, toLaneId, cause, actor, createdAt);
   }
 
   // ---------- reads ----------
@@ -684,6 +820,7 @@ export class KanbanDb {
           this.q(
             "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, previous_lane, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           ).run(id, title, input.note ?? "", lane.id, input.project ?? "", parent?.id ?? null, null, priority, position, now, now);
+          this.recordLaneEvent(id, null, lane.id, "create", "user", now);
           if (input.blockedBy !== undefined) {
             this.setBlockedBy(id, input.blockedBy);
           }
@@ -698,7 +835,7 @@ export class KanbanDb {
     throw new KanbanError("could not generate a unique id", "conflict");
   }
 
-  updateTask(prefix: string, patch: TaskPatch): Task {
+  updateTask(prefix: string, patch: TaskPatch, meta?: { cause?: LaneEventCause; actor?: string }): Task {
     const task = this.resolveTask(prefix);
     const laneId = patch.lane ? this.resolveLane(patch.lane).id : task.laneId;
     const hasIndex = patch.index !== undefined;
@@ -716,6 +853,7 @@ export class KanbanDb {
 
     const previousLane = laneId === WAITING_LANE_ID ? task.previousLane : null;
 
+    const now = Date.now();
     this.q(
       `UPDATE tasks SET
         title = ?, note = ?, lane_id = ?, project = ?, parent_id = ?, previous_lane = ?, priority = ?, position = ?, updated_at = ?
@@ -729,9 +867,12 @@ export class KanbanDb {
       previousLane,
       priority,
       position,
-      Date.now(),
+      now,
       task.id,
     );
+    if (laneId !== task.laneId) {
+      this.recordLaneEvent(task.id, task.laneId, laneId, meta?.cause ?? "edit", meta?.actor ?? "user", now);
+    }
     this.renormalizeIfTight(laneId);
     if (patch.blockedBy !== undefined) {
       this.setBlockedBy(task.id, patch.blockedBy);
@@ -739,8 +880,8 @@ export class KanbanDb {
     return this.resolveTask(task.id);
   }
 
-  moveTask(prefix: string, laneRef: string, index?: number): Task {
-    return this.updateTask(prefix, { lane: laneRef, index });
+  moveTask(prefix: string, laneRef: string, index?: number, meta?: { cause?: LaneEventCause; actor?: string }): Task {
+    return this.updateTask(prefix, { lane: laneRef, index }, { cause: "mv", ...meta });
   }
 
   deleteTask(prefix: string, force = false): Task {
@@ -756,6 +897,7 @@ export class KanbanDb {
     const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
     const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
     const delElaborationRequests = this.q("DELETE FROM elaboration_requests WHERE task_id = ?");
+    const delLaneEvents = this.q("DELETE FROM lane_events WHERE task_id = ?");
     for (const id of [task.id, ...ids]) {
       del.run(id);
       delAttachments.run(id);
@@ -764,6 +906,7 @@ export class KanbanDb {
       delCardSessions.run(id);
       delResumeRequests.run(id);
       delElaborationRequests.run(id);
+      delLaneEvents.run(id);
     }
     return task;
   }
@@ -1169,6 +1312,19 @@ export class KanbanDb {
     ).map(rowToComment);
   }
 
+  /** Recorded lane-transition and creation events, ordered by (created_at, rowid). */
+  laneEvents(taskRef?: string): LaneEvent[] {
+    if (taskRef !== undefined) {
+      const task = this.resolveTask(taskRef);
+      return (
+        this.q("SELECT * FROM lane_events WHERE task_id = ? ORDER BY created_at, rowid").all(task.id) as LaneEventRow[]
+      ).map(rowToLaneEvent);
+    }
+    return (
+      this.q("SELECT * FROM lane_events ORDER BY created_at, rowid").all() as LaneEventRow[]
+    ).map(rowToLaneEvent);
+  }
+
   /**
    * Atomic baton pass: lane move (plus optional review findings appended to the
    * note as checklist lines) and the thread record commit together or not at all.
@@ -1183,7 +1339,11 @@ export class KanbanDb {
     const findings = (input.findings ?? []).map((f) => f.trim()).filter(Boolean);
     return this.db.transaction((): { task: Task; comment: Comment } => {
       const note = findings.length > 0 ? `${task.note}\n${findings.map((f) => `- [ ] ${f}`).join("\n")}` : undefined;
-      const moved = this.updateTask(task.id, { ...(note !== undefined ? { note } : {}), lane: laneRef });
+      const moved = this.updateTask(
+        task.id,
+        { ...(note !== undefined ? { note } : {}), lane: laneRef },
+        { cause: input.kind === "review" ? "review" : "handoff", actor: input.author?.trim() || "user" },
+      );
       const comment = this.createComment(task.id, { author: input.author, kind, body: input.message });
       return { task: moved, comment };
     })();
@@ -1203,7 +1363,11 @@ export class KanbanDb {
     const plan = this.attachment(task.id, "plan");
     if (!plan) throw new KanbanError(`card '${task.id}' has no attached plan to approve`, "conflict");
     return this.db.transaction((): { task: Task; comment: Comment } => {
-      const task2 = this.updateTask(task.id, { lane: "implement" });
+      const task2 = this.updateTask(
+        task.id,
+        { lane: "implement" },
+        { cause: "approve", actor: input.author?.trim() || "user" },
+      );
       const comment = this.createComment(task.id, {
         author: input.author,
         kind: "approval",
@@ -1646,6 +1810,7 @@ export class KanbanDb {
       const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
       const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
       const delElaborationRequests = this.q("DELETE FROM elaboration_requests WHERE task_id = ?");
+      const delLaneEvents = this.q("DELETE FROM lane_events WHERE task_id = ?");
       for (const t of this.laneTasks(lane.id)) {
         for (const id of [t.id, ...this.descendantIds(t.id)]) {
           del.run(id);
@@ -1655,6 +1820,7 @@ export class KanbanDb {
           delCardSessions.run(id);
           delResumeRequests.run(id);
           delElaborationRequests.run(id);
+          delLaneEvents.run(id);
         }
       }
     }

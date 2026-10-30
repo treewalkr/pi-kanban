@@ -1001,3 +1001,181 @@ test("nextTask: project filter; done, archive and custom lanes never proposed", 
   expect(db.nextTask().task?.id).toBe(imp.id);
 });
 
+test("lane_events: creation event + capture on every writer path; none for same-lane moves", () => {
+  const t = db.createTask({ title: "card 1", lane: "backlog" });
+  let events = db.laneEvents(t.id);
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({
+    taskId: t.id,
+    fromLaneId: null,
+    toLaneId: "backlog",
+    cause: "create",
+    actor: "user",
+  });
+
+  // moveTask (mv cause)
+  db.moveTask(t.id, "plan");
+  events = db.laneEvents(t.id);
+  expect(events).toHaveLength(2);
+  expect(events[1]).toMatchObject({
+    taskId: t.id,
+    fromLaneId: "backlog",
+    toLaneId: "plan",
+    cause: "mv",
+    actor: "user",
+  });
+
+  // approveTask (cause "approve", actor)
+  db.attach(t.id, "plan", "plan body");
+  db.approveTask(t.id, { author: "alice" });
+  events = db.laneEvents(t.id);
+  expect(events).toHaveLength(3);
+  expect(events[2]).toMatchObject({
+    taskId: t.id,
+    fromLaneId: "plan",
+    toLaneId: "implement",
+    cause: "approve",
+    actor: "alice",
+  });
+
+  // handoff (cause "handoff")
+  db.handoff(t.id, "review", { author: "bob", message: "ready for review" });
+  events = db.laneEvents(t.id);
+  expect(events).toHaveLength(4);
+  expect(events[3]).toMatchObject({
+    taskId: t.id,
+    fromLaneId: "implement",
+    toLaneId: "review",
+    cause: "handoff",
+    actor: "bob",
+  });
+
+  // review-block handoff (cause "review")
+  db.handoff(t.id, "implement", { kind: "review", author: "pi-reviewer", message: "blocked" });
+  events = db.laneEvents(t.id);
+  expect(events).toHaveLength(5);
+  expect(events[4]).toMatchObject({
+    taskId: t.id,
+    fromLaneId: "review",
+    toLaneId: "implement",
+    cause: "review",
+    actor: "pi-reviewer",
+  });
+
+  // moveTask (done cause)
+  db.moveTask(t.id, "done", undefined, { cause: "done" });
+  events = db.laneEvents(t.id);
+  expect(events).toHaveLength(6);
+  expect(events[5]).toMatchObject({
+    taskId: t.id,
+    fromLaneId: "implement",
+    toLaneId: "done",
+    cause: "done",
+    actor: "user",
+  });
+
+  // moveTask (archive cause)
+  db.moveTask(t.id, "archive", undefined, { cause: "archive" });
+  events = db.laneEvents(t.id);
+  expect(events).toHaveLength(7);
+  expect(events[6]).toMatchObject({
+    taskId: t.id,
+    fromLaneId: "done",
+    toLaneId: "archive",
+    cause: "archive",
+    actor: "user",
+  });
+
+  // API-style updateTask lane patch (cause "edit")
+  db.updateTask(t.id, { lane: "backlog" });
+  events = db.laneEvents(t.id);
+  expect(events).toHaveLength(8);
+  expect(events[7]).toMatchObject({
+    taskId: t.id,
+    fromLaneId: "archive",
+    toLaneId: "backlog",
+    cause: "edit",
+    actor: "user",
+  });
+
+  // same-lane updateTask with index-only patch appends nothing
+  db.updateTask(t.id, { index: 0 });
+  events = db.laneEvents(t.id);
+  expect(events).toHaveLength(8);
+
+  // events ordered (created_at, rowid)
+  const all = db.laneEvents();
+  expect(all.map((e) => e.id)).toEqual(events.map((e) => e.id));
+});
+
+test("lane_events: backfill approximates from thread anchors and is idempotent", () => {
+  const path = join(dir, "backfill.db");
+  new KanbanDb(path).close();
+
+  // Clear lane_events and board_state flag
+  const raw2 = new Database(path);
+  raw2.exec("DELETE FROM lane_events; DELETE FROM board_state WHERE key = 'lane_events_backfilled';");
+
+  // Task 1: created in backlog, approved at 1000, current lane is implement
+  raw2.run(
+    "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, previous_lane, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ["t1", "Task 1", "", "implement", "", null, null, "normal", 100, 500, 1000],
+  );
+  raw2.run(
+    "INSERT INTO comments (id, card_id, author, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ["c1", "t1", "user", "approval", "approved", 1000],
+  );
+
+  // Task 2: created in backlog at 200, plan-review block at 300, plain comment at 350, rejection at 400, approval at 500, current lane is done
+  raw2.run(
+    "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, previous_lane, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ["t2", "Task 2", "", "done", "", null, null, "normal", 200, 200, 500],
+  );
+  raw2.run(
+    "INSERT INTO comments (id, card_id, author, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ["c2_1", "t2", PLAN_REVIEWER_AUTHOR, "review", `${KanbanDb.PLAN_REVIEW_BLOCK} - needs work`, 300],
+  );
+  raw2.run(
+    "INSERT INTO comments (id, card_id, author, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ["c2_2", "t2", "human", "comment", "working on it", 350],
+  );
+  raw2.run(
+    "INSERT INTO comments (id, card_id, author, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ["c2_3", "t2", "human", "rejection", "rejected", 400],
+  );
+  raw2.run(
+    "INSERT INTO comments (id, card_id, author, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ["c2_4", "t2", "human", "approval", "approved", 500],
+  );
+  raw2.close();
+
+  // Reopen: triggers backfill
+  const reopened = new KanbanDb(path);
+  const ev1 = reopened.laneEvents("t1");
+  // t1 timeline: creation (500, backlog) -> approval (1000, implement) -> current lane (1000, implement -> skipped)
+  expect(ev1).toHaveLength(2);
+  expect(ev1[0]).toMatchObject({ taskId: "t1", fromLaneId: null, toLaneId: "backlog", cause: "backfill", createdAt: 500 });
+  expect(ev1[1]).toMatchObject({ taskId: "t1", fromLaneId: "backlog", toLaneId: "implement", cause: "backfill", createdAt: 1000 });
+
+  const ev2 = reopened.laneEvents("t2");
+  // t2 timeline:
+  // creation (200, backlog)
+  // c2_1: plan-review block (300, plan)
+  // c2_2: plain comment (ignored)
+  // c2_3: rejection (400, plan) -> same as previous anchor (plan) so skipped!
+  // c2_4: approval (500, implement)
+  // final synthetic: current lane is done (500, done)
+  expect(ev2).toHaveLength(4);
+  expect(ev2[0]).toMatchObject({ taskId: "t2", fromLaneId: null, toLaneId: "backlog", cause: "backfill", createdAt: 200 });
+  expect(ev2[1]).toMatchObject({ taskId: "t2", fromLaneId: "backlog", toLaneId: "plan", cause: "backfill", createdAt: 300 });
+  expect(ev2[2]).toMatchObject({ taskId: "t2", fromLaneId: "plan", toLaneId: "implement", cause: "backfill", createdAt: 500 });
+  expect(ev2[3]).toMatchObject({ taskId: "t2", fromLaneId: "implement", toLaneId: "done", cause: "backfill", createdAt: 500 });
+
+  // Idempotency: second reopen adds nothing
+  reopened.close();
+  const reopened2 = new KanbanDb(path);
+  expect(reopened2.laneEvents("t1")).toHaveLength(2);
+  expect(reopened2.laneEvents("t2")).toHaveLength(4);
+  reopened2.close();
+});
+

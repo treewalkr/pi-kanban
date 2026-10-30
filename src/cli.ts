@@ -514,7 +514,7 @@ async function main(): Promise<number> {
 
       case "done": {
         const task = db.resolveTask(positional[0] ?? "");
-        const moved = db.moveTask(task.id, laneById(db, "done"));
+        const moved = db.moveTask(task.id, laneById(db, "done"), undefined, { cause: "done" });
         if (json) jsonOut(moved);
         else {
           console.log(taskLine(db, moved));
@@ -525,7 +525,7 @@ async function main(): Promise<number> {
 
       case "archive": {
         const task = db.resolveTask(positional[0] ?? "");
-        const moved = db.moveTask(task.id, laneById(db, "archive"));
+        const moved = db.moveTask(task.id, laneById(db, "archive"), undefined, { cause: "archive" });
         if (json) jsonOut(moved);
         else console.log(taskLine(db, moved));
         return 0;
