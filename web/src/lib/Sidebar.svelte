@@ -4,7 +4,7 @@
   import Mark from "./Mark.svelte";
   import PathLabel from "./PathLabel.svelte";
   import Dropdown from "./Dropdown.svelte";
-  import { Check, FolderOpen, Loader2, Plus, Search } from "@lucide/svelte";
+  import { Check, ChevronDown, FolderOpen, GitBranch, Loader2, Plus, Search } from "@lucide/svelte";
 
   // ---------- header: new card + search ----------
 
@@ -61,6 +61,20 @@
     filter = "";
     pickerOpen = false;
   }
+
+  // ---------- branch switcher (the repo the board serves) ----------
+
+  let branchOpen = $state(false);
+
+  const gitRepo = $derived(ui.git?.repo ? ui.git : null);
+  const branchLabel = $derived(gitRepo ? (gitRepo.branch === "HEAD" ? `@ ${gitRepo.head}` : gitRepo.branch) : "");
+
+  async function checkout(branch: string): Promise<void> {
+    branchOpen = false;
+    if (gitRepo && branch === gitRepo.branch) return;
+    const error = await ui.checkoutGit(branch);
+    if (error) board.error = error; // git's own refusal (e.g. dirty tree) lands in the error bar
+  }
 </script>
 
 <div class="sidebar-head">
@@ -91,7 +105,10 @@
       title="switch project"
       aria-haspopup="menu"
       aria-expanded={pickerOpen}
-      onclick={() => (pickerOpen = !pickerOpen)}
+      onclick={() => {
+        pickerOpen = !pickerOpen;
+        branchOpen = false;
+      }}
     >
       <span class="picker-value">
         <PathLabel text={board.projectFilter ? `~/${board.projectFilter}` : "all projects"} />
@@ -152,6 +169,47 @@
       </button>
     </Dropdown>
   </div>
+
+  {#if gitRepo}
+    <div class="picker-wrap branch-wrap">
+      <button
+        class="branch-row"
+        title="switch branch — checked out in the repo the board serves"
+        aria-haspopup="menu"
+        aria-expanded={branchOpen}
+        onclick={() => {
+          branchOpen = !branchOpen;
+          pickerOpen = false;
+        }}
+      >
+        <GitBranch size={11} strokeWidth={2} class="branch-icon" />
+        <span class="branch-value"><PathLabel text={branchLabel} /></span>
+        {#if gitRepo.worktrees > 1}
+          <span class="branch-note" title="{gitRepo.worktrees} worktrees">{gitRepo.worktrees}</span>
+        {/if}
+        <ChevronDown size={9} strokeWidth={1.8} class="branch-chevron" />
+      </button>
+      <Dropdown open={branchOpen} onclose={() => (branchOpen = false)}>
+        <div class="picker-list">
+          {#each gitRepo.branches as b (b)}
+            <button class="picker-row" class:current={b === gitRepo.branch} onclick={() => void checkout(b)}>
+              {#if b === gitRepo.branch}
+                <span class="check"><Check size={10} strokeWidth={2.4} /></span>
+              {:else}
+                <span class="check-spacer"></span>
+              {/if}
+              <PathLabel text={b} />
+              {#if b === gitRepo.branch && gitRepo.dirty > 0}
+                <span class="badge" title="{gitRepo.dirty} uncommitted change{gitRepo.dirty === 1 ? '' : 's'}">
+                  ● {gitRepo.dirty}
+                </span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      </Dropdown>
+    </div>
+  {/if}
 </div>
 
 <div class="sidebar-body"></div>

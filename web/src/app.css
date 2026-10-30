@@ -309,6 +309,53 @@ button {
   background: var(--accent);
 }
 
+/* branch switcher row — pi-web's worktree button anatomy (29px, icon + label + count + chevron) */
+.branch-row {
+  width: 100%;
+  height: 29px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted);
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.branch-row:hover {
+  border-color: color-mix(in srgb, var(--text-dim) 45%, var(--border));
+}
+
+.branch-icon {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.branch-value {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.branch-note {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.branch-chevron {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
 .dropdown {
   position: absolute;
   top: calc(100% + 4px);
