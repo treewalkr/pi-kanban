@@ -49,7 +49,7 @@ describe("elaborate button: rendered in the footer, hidden while queued or live,
   test("rendered in footer, hidden while queued or live, wired only to board.elaborate", () => {
     expect(taskDetailSource).toContain("{#if !queuedJob && !live}");
     expect(taskDetailSource).toContain('title="queue a pi-elaborator session to expand the note (intent + acceptance criteria) and fix an obviously broken title"');
-    expect(taskDetailSource).toContain(">✨ elaborate</button>");
+    expect(taskDetailSource).toContain("<Sparkles");
 
     const editorActionsIdx = taskDetailSource.indexOf('<div class="editor-actions">');
     expect(editorActionsIdx).toBeGreaterThan(-1);
@@ -63,7 +63,7 @@ describe("elaborate button: rendered in the footer, hidden while queued or live,
     const spacerIdx = taskDetailSource.indexOf('<span class="spacer"></span>', btnIdx);
     expect(spacerIdx).toBeGreaterThan(btnIdx);
 
-    const match = taskDetailSource.match(/onclick=\{([^}]+)\}>✨ elaborate<\/button>/);
+    const match = taskDetailSource.match(/onclick=\{([^}]+)\}>\s*<Sparkles/);
     expect(match).not.toBeNull();
     const onclickContent = match![1];
     expect(onclickContent.trim()).toBe("() => board.elaborate(me.id)");
