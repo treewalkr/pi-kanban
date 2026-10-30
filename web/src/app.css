@@ -321,6 +321,18 @@ button {
   overflow-y: auto;
 }
 
+/* ---------- catppuccin file icons ---------- */
+
+.catppuccin-file-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  background: var(--icon-dark) center/contain no-repeat;
+}
+
+[data-theme="light"] .catppuccin-file-icon {
+  background-image: var(--icon-light);
+}
+
 /* ---------- files explorer panel & tree ---------- */
 
 .files-panel {
