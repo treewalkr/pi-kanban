@@ -1018,7 +1018,8 @@ button {
 }
 
 .search {
-  width: 200px;
+  width: 100%;
+  max-width: 200px;
   height: 27px;
   padding: 0 9px;
   border: 1px solid var(--border);
@@ -1044,6 +1045,8 @@ button {
 
 .search-box {
   position: relative;
+  flex: 0 1 200px;
+  min-width: 120px;
 }
 
 .search-results {
@@ -1450,7 +1453,7 @@ button:focus-visible {
   color: var(--text-dim);
 }
 
-button.id-copy {
+.id-copy {
   padding: 1px 4px;
   border: 0;
   background: none;
