@@ -76,6 +76,7 @@
 <div class="search-box">
   <input
     class="search"
+    id="board-search"
     type="search"
     placeholder="search…"
     aria-label="search cards"

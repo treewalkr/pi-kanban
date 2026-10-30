@@ -223,6 +223,11 @@ class BoardStore {
     this.editMode = false;
   }
 
+  openEditor(task: Task): void {
+    this.editing = task;
+    this.editMode = true;
+  }
+
   closeCard(): void {
     this.editing = null;
     this.editMode = false;
@@ -373,14 +378,14 @@ class BoardStore {
     this.queued = nextQ;
   }
 
-  async addTask(laneId: string, title: string, project = this.projectFilter, parentId?: string, elaborate = false): Promise<boolean> {
-    const { error } = await api.tasks.post({ title, lane: laneId, project: project || undefined, parent: parentId, elaborate: elaborate || undefined });
+  async addTask(laneId: string, title: string, project = this.projectFilter, parentId?: string, elaborate = false): Promise<Task | null> {
+    const { data, error } = await api.tasks.post({ title, lane: laneId, project: project || undefined, parent: parentId, elaborate: elaborate || undefined });
     if (error) {
       this.fail(error);
-      return false;
+      return null;
     }
     await this.refresh();
-    return true;
+    return data;
   }
 
   async updateTask(id: string, patch: TaskPatch): Promise<void> {

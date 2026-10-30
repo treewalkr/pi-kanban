@@ -120,9 +120,408 @@ button {
 
 .app {
   display: flex;
-  flex-direction: column;
   height: 100vh;
   height: 100dvh; /* mobile browsers: visible area, not the URL-bar-inflated one */
+}
+
+/* sidebar on the left, everything else fills the rest */
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+/* ---------- sidebar (ported from pi-web's session sidebar) ---------- */
+
+.sidebar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: var(--sidebar-width, 260px);
+  min-width: var(--sidebar-width, 260px);
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  transition: width 0.2s ease, min-width 0.2s ease;
+  z-index: 40;
+}
+
+.sidebar.closed {
+  width: 0;
+  min-width: 0;
+  border-right: none;
+}
+
+/* keep inner content at the panel width so it doesn't reflow during collapse/resize */
+.sidebar > * {
+  width: var(--sidebar-width, 260px);
+  min-width: var(--sidebar-width, 260px);
+}
+
+.app.resizing,
+.app.resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.app.resizing .sidebar {
+  transition: none;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
+.sidebar-head {
+  padding: 12px 10px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sidebar-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  min-width: 6ch;
+  user-select: none;
+}
+
+.sidebar-brand .mark {
+  width: 12px;
+  height: 12px;
+  color: var(--accent);
+}
+
+.sidebar-tools {
+  display: flex;
+  gap: 6px;
+}
+
+.side-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px 0 10px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.side-btn:hover {
+  background: var(--bg-selected);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.side-btn.icon {
+  width: 32px;
+  padding: 0;
+}
+
+.sidebar-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------- pickers (project / branch) ---------- */
+
+.picker-wrap {
+  position: relative;
+}
+
+.picker-wrap + .picker-wrap {
+  margin-top: 6px;
+}
+
+.picker {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.picker:hover {
+  border-color: color-mix(in srgb, var(--text-dim) 45%, var(--border));
+}
+
+.picker-value {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.path-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  min-width: 0;
+  line-height: 1.35;
+  direction: rtl;
+  text-align: left;
+}
+
+.path-label > span {
+  unicode-bidi: plaintext;
+}
+
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: 6px;
+  background: var(--accent);
+}
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-8px) scale(0.96);
+  transform-origin: top center;
+  transition-property: opacity, transform;
+  transition-timing-function: ease;
+  pointer-events: none;
+}
+
+.dropdown.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.picker-filter {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-filter input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.picker-list {
+  max-height: min(50vh, 380px);
+  overflow-y: auto;
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  overflow: hidden;
+}
+
+.picker-row:last-child {
+  border-bottom: none;
+}
+
+.picker-row:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.picker-row.current {
+  color: var(--text);
+}
+
+.picker-row .check {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.check-spacer {
+  width: 10px;
+  flex-shrink: 0;
+}
+
+.picker-row .path-label {
+  flex: 1;
+}
+
+.picker-footer-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.picker-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.badge .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+/* ---------- sidebar toggle + resize handle ---------- */
+
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-left: -14px; /* bleed to the header's padding edge like pi-web's top bar */
+  margin-right: 10px;
+  transition: color 0.12s;
+}
+
+.sidebar-toggle:hover {
+  color: var(--text);
+}
+
+.sidebar-resize {
+  position: relative;
+  z-index: 45;
+  width: 12px;
+  margin: 0 -6px;
+  flex: 0 0 12px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.sidebar-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+  pointer-events: none;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.sidebar-resize:hover::after,
+.sidebar-resize:focus-visible::after,
+.app.resizing .sidebar-resize::after {
+  background: color-mix(in srgb, var(--text-muted) 70%, var(--border));
+}
+
+/* narrow viewports: the sidebar becomes an overlay drawer over the board */
+@media (max-width: 640px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.25);
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(0, 0, 0, 0.35);
+  }
+
+  .sidebar-resize {
+    display: none;
+  }
 }
 
 .top {

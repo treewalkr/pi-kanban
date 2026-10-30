@@ -18,6 +18,18 @@ export function timeAgo(ts: number): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
+const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: "always" });
+
+/** Long-form relative time ("15 minutes ago"), pi-web's sidebar row format. */
+export function formatRelativeTime(ts: number, now = Date.now()): string {
+  const s = (ts - now) / 1000;
+  const abs = Math.abs(s);
+  if (abs < 60) return relativeTime.format(Math.round(s), "second");
+  if (abs < 3600) return relativeTime.format(Math.round(s / 60), "minute");
+  if (abs < 86400) return relativeTime.format(Math.round(s / 3600), "hour");
+  return relativeTime.format(Math.round(s / 86400), "day");
+}
+
 export function roleVerb(role: AgentRole): "reviewing" | "checking plan" | "planning" | "building" | "elaborating" {
   if (role === "reviewer") return "reviewing";
   if (role === "plan-reviewer") return "checking plan";
