@@ -35,6 +35,9 @@ For every non-trivial unit of work:
   revised plan versions it (latest wins). Write plans with
   [plan-template.md](plan-template.md): every section filled or `N/A — reason`,
   every acceptance criterion mapped to concrete tests.
+  Record the workspace on its card right after creating it: `kanban ws <id> <slug>` — the
+  board shows it while the branch/worktree exists; nothing to clear after `done`
+  (it disappears once git no longer has it).
 - **Put-down**: `kanban handoff <id> <lane> --message <what you did · what's
   next> --author pi` when stopping or passing the card on — never a bare `mv`
   between actors; the message is the durable record.
@@ -112,6 +115,7 @@ kanban search <query…> [--project <tag>] [--json]                     # ranked
 kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers, from-lane
 kanban link <id> <other> · unlink <id> <other>                        # relate / unrelate two cards (undirected; visible from both)
 kanban attach <id> <plan-file>                                        # attach/version a plan; show prints the latest
+kanban ws <id> <branch>                                               # record/clear where the card's implementation lives (--clear to unset)
 kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]  # append to the card's thread (question parks the card)
 kanban comments <id>                                                  # read the thread, oldest first
 kanban handoff <id> <lane> --message <text> [--author <name>]         # atomic move + thread record (the baton pass)

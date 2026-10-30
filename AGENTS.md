@@ -31,6 +31,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 
 - **When**: Any card-sized, multi-commit task is developed in its own workspace; the main checkout stays on `main` and clean.
 - **Create**: Run `scripts/workspace.sh new <slug>` from the repo, then `bun install` inside the new worktree.
+- **Record**: Record the workspace on its card right after creating it: `kanban ws <id> <slug>` — the board shows it while the branch/worktree exists; nothing to clear after `done` (it disappears once git no longer has it).
 - **Return**: Commit inside the workspace per the Commits rules, then run `scripts/workspace.sh done <slug>` from the main checkout — it merges (`--no-ff`, message `merge: <slug>`), removes the worktree, deletes the branch, and verifies main is clean.
 - **Cleanup/staleness**: After `done`, `git worktree list` must show only expected worktrees; to discard an unwanted workspace use `git worktree remove` + `git branch -D`.
 
