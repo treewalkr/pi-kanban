@@ -341,39 +341,174 @@ button {
   min-height: 0;
 }
 
-.files-header {
+.files-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px 4px;
+  padding: 6px 10px 4px;
+  user-select: none;
+}
+
+.files-title {
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
-  user-select: none;
 }
 
-.files-refresh-btn {
+.files-toolbar-actions {
   display: flex;
   align-items: center;
+  gap: 4px;
+}
+
+.files-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
-  width: 20px;
+  gap: 4px;
   height: 20px;
-  padding: 0;
+  padding: 0 4px;
   border: none;
   background: transparent;
   color: var(--text-muted);
   border-radius: 3px;
   cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10px;
   transition: color 0.1s, background 0.1s;
 }
 
-.files-refresh-btn:hover {
+.files-toolbar-btn:hover:not(:disabled) {
   color: var(--text);
   background: var(--bg-hover);
 }
 
+.files-toolbar-btn[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--bg-selected);
+}
+
+.files-toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.files-changes-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+/* Search Box */
+.files-search-container {
+  padding: 2px 8px 6px;
+}
+
+.files-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.files-search-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.files-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 24px 5px 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.files-search-input:focus {
+  border-color: var(--accent);
+}
+
+.files-search-clear {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.files-search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.files-search-status {
+  padding: 6px 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.files-search-status.error {
+  color: #f87171;
+}
+
+/* Changes View */
+.files-changes-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.files-changes-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11px;
+  user-select: none;
+}
+
+.files-changes-count {
+  color: var(--text-dim);
+}
+
+.files-changes-additions {
+  color: #4ade80;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.files-changes-deletions {
+  color: #f87171;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tree-dir-prefix {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tree & Rows */
 .files-loading,
 .files-empty,
 .files-error {
@@ -402,6 +537,7 @@ button {
 .tree-row {
   height: 24px;
   width: 100%;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -415,6 +551,7 @@ button {
   font-family: var(--font-sans);
   transition: background 0.1s;
   user-select: none;
+  position: relative;
 }
 
 .tree-row:hover {
@@ -439,21 +576,23 @@ button {
   width: 10px;
 }
 
-.tree-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  color: var(--text-muted);
-}
-
 .tree-label {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Badges & Dots */
 .git-badge {
   flex: none;
   font-family: var(--font-mono);
@@ -464,20 +603,20 @@ button {
   border-radius: 2px;
 }
 
-.git-badge-M {
+.git-badge.M {
   color: #d6a84b;
 }
 
-.git-badge-A,
-.git-badge-U {
+.git-badge.A,
+.git-badge.U {
   color: #4ade80;
 }
 
-.git-badge-D {
+.git-badge.D {
   color: #f87171;
 }
 
-.git-badge-R {
+.git-badge.R {
   color: #60a5fa;
 }
 
@@ -486,8 +625,13 @@ button {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: #d6a84b;
+  background-color: #f59e0b;
   margin-right: 3px;
+}
+
+.tree-row:hover .git-badge,
+.tree-row:hover .git-dot {
+  display: none;
 }
 
 .tree-children {

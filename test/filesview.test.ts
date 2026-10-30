@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { JSDOM } from "jsdom";
 import { FilesStore, joinPath } from "../web/src/lib/files.svelte";
 
 describe("FilesStore (web/src/lib/files.svelte.ts)", () => {
@@ -289,6 +290,71 @@ describe("FilesStore (web/src/lib/files.svelte.ts)", () => {
     expect(store.searchMatches).toBeNull();
     expect(store.searching).toBe(false);
     expect(store.searchError).toBe(false);
+  });
+
+  test("files panel markup and css contract (pi-web design)", () => {
+    const appCss = readFileSync(join(import.meta.dir, "..", "web", "src", "app.css"), "utf-8");
+    expect(appCss).toContain(".catppuccin-file-icon");
+    expect(appCss).toContain('[data-theme="light"] .catppuccin-file-icon');
+    expect(appCss).toContain(".tree-row");
+    expect(appCss).toContain("height: 24px");
+    expect(appCss).toContain(".viewer-line-num");
+    expect(appCss).toContain("width: 48px");
+
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor preview"></div></body></html>`
+    );
+    const rules = Array.from(dom.window.document.styleSheets[0].cssRules);
+    const previewRule = rules.find(
+      (r) => "selectorText" in r && (r as CSSStyleRule).selectorText === ".editor.preview"
+    ) as CSSStyleRule | undefined;
+    expect(previewRule).toBeDefined();
+    expect(previewRule!.style.width).toBe("min(960px, 94vw)");
+
+    const filesPanelSource = readFileSync(
+      join(import.meta.dir, "..", "web", "src", "lib", "FilesPanel.svelte"),
+      "utf-8"
+    );
+    expect(filesPanelSource).toContain('aria-label="search files"');
+    expect(filesPanelSource).toContain('aria-label="changed files"');
+    expect(filesPanelSource).toContain("aria-pressed");
+
+    const previewSource = readFileSync(
+      join(import.meta.dir, "..", "web", "src", "lib", "FilePreview.svelte"),
+      "utf-8"
+    );
+    expect(previewSource).toContain(">Source<");
+    expect(previewSource).toContain(">Preview<");
+    expect(previewSource).toContain(">Diff<");
+    expect(previewSource).toContain('aria-label="toggle line wrap"');
+    expect(previewSource).toContain('aria-label="download file"');
+  });
+
+  test("rejected design is gone", () => {
+    const appCss = readFileSync(join(import.meta.dir, "..", "web", "src", "app.css"), "utf-8");
+    expect(appCss).not.toContain(".files-refresh-btn");
+    expect(appCss).not.toContain(".preview-head");
+
+    const filesPanelSource = readFileSync(
+      join(import.meta.dir, "..", "web", "src", "lib", "FilesPanel.svelte"),
+      "utf-8"
+    );
+    expect(filesPanelSource).toContain("FileIcon");
+    expect(filesPanelSource).not.toMatch(/@lucide\/svelte["'].*\b(Folder|FolderOpen|FileText)\b/);
+
+    const treeNodeSource = readFileSync(
+      join(import.meta.dir, "..", "web", "src", "lib", "TreeNode.svelte"),
+      "utf-8"
+    );
+    expect(treeNodeSource).toContain("FileIcon");
+    expect(treeNodeSource).not.toMatch(/@lucide\/svelte["'].*\b(Folder|FolderOpen|FileText)\b/);
+
+    const previewSource = readFileSync(
+      join(import.meta.dir, "..", "web", "src", "lib", "FilePreview.svelte"),
+      "utf-8"
+    );
+    expect(previewSource).toContain('class="viewer-toolbar"');
+    expect(previewSource).not.toContain("preview-head");
   });
 
   test("FilePreview markup and app.css width contract", () => {
