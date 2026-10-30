@@ -48,7 +48,7 @@ const taskDetailSource = readFileSync(taskDetailPath, "utf-8");
 describe("elaborate button: rendered in the footer, hidden while queued or live, wired only to board.elaborate", () => {
   test("rendered in footer, hidden while queued or live, wired only to board.elaborate", () => {
     expect(taskDetailSource).toContain("{#if !queuedJob && !live}");
-    expect(taskDetailSource).toContain('title="queue a pi-elaborator session to expand the note (intent + acceptance criteria)"');
+    expect(taskDetailSource).toContain('title="queue a pi-elaborator session to expand the note (intent + acceptance criteria) and fix an obviously broken title"');
     expect(taskDetailSource).toContain(">✨ elaborate</button>");
 
     const editorActionsIdx = taskDetailSource.indexOf('<div class="editor-actions">');
