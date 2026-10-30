@@ -14,9 +14,13 @@ const emptyConfigs = (): Record<AgentRole, AgentConfig> => ({
   elaborator: {},
 });
 
+export type SettingsSection = "general" | "agents" | "pools";
+
 /** Per-role agent settings for the auto-agent loop; failures surface via the board toast. */
 class AgentsStore {
   open = $state(false);
+  /** Section the dialog should open on — the sidebar's bottom bar sets it, the ⚙ keeps the last one. */
+  section = $state<SettingsSection>("general");
   loaded = $state(false);
   /** One config per role, keyed by AgentRole ("plan-reviewer" needs a key, not a class field — $state rejects computed names). */
   configs = $state<Record<AgentRole, AgentConfig>>(emptyConfigs());
@@ -30,6 +34,12 @@ class AgentsStore {
   private fail(error: EdenError): void {
     const value = error.value as { error?: string } | undefined;
     board.error = value?.error ?? "request failed";
+  }
+
+  /** Open the settings dialog on a specific section (sidebar bottom bar). */
+  openWith(section: SettingsSection): void {
+    this.section = section;
+    this.open = true;
   }
 
   async load(): Promise<void> {

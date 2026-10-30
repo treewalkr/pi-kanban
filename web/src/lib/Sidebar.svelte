@@ -6,6 +6,7 @@
   import Dropdown from "./Dropdown.svelte";
   import { Check, ChevronDown, FolderOpen, GitBranch, Loader2, Plus, Search } from "@lucide/svelte";
   import { formatRelativeTime, roleVerb } from "./util";
+  import { agents, type SettingsSection } from "./agents.svelte";
   import type { AgentRole } from "../../../src/db";
 
   // ---------- header: new card + search ----------
@@ -112,6 +113,14 @@
       if (!live.has(q.taskId)) rows.push({ taskId: q.taskId, role: q.role, startedAt: q.enqueuedAt, label: "", queued: true });
     return rows.sort((a, b) => a.startedAt - b.startedAt);
   });
+
+  // ---------- bottom bar: settings sections (pi-web's Models/Skills/Settings row) ----------
+
+  const SECTIONS: { id: SettingsSection; label: string }[] = [
+    { id: "agents", label: "Agents" },
+    { id: "pools", label: "Pools" },
+    { id: "general", label: "Settings" },
+  ];
 </script>
 
 <div class="sidebar-head">
@@ -302,4 +311,52 @@
       </button>
     {/each}
   {/if}
+</div>
+
+<div class="sidebar-foot">
+  {#each SECTIONS as s (s.id)}
+    <button type="button" class="foot-btn" title={s.label} aria-label={s.label} onclick={() => agents.openWith(s.id)}>
+      {#if s.id === "agents"}
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="5" y="7" width="14" height="11" rx="2" />
+          <path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" />
+        </svg>
+      {:else if s.id === "pools"}
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+        </svg>
+      {:else}
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M20 7h-9M14 17H5" />
+          <circle cx="7" cy="7" r="3" />
+          <circle cx="17" cy="17" r="3" />
+        </svg>
+      {/if}
+      <span>{s.label}</span>
+    </button>
+  {/each}
 </div>

@@ -343,6 +343,45 @@ button {
   font-size: 12px;
 }
 
+/* ---------- sidebar bottom bar (settings sections) ---------- */
+
+.sidebar-foot {
+  padding: 8px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.foot-btn {
+  flex: 1 1 0%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 9px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.12s, color 0.12s;
+}
+
+.foot-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.foot-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
 /* ---------- pickers (project / branch) ---------- */
 
 .picker-wrap {

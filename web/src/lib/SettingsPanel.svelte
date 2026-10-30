@@ -1,23 +1,29 @@
 <script lang="ts">
-  import { agents } from "./agents.svelte";
+  import { agents, type SettingsSection } from "./agents.svelte";
   import { pools } from "./pools.svelte";
   import GeneralSettings from "./GeneralSettings.svelte";
   import AgentsSettings from "./AgentsSettings.svelte";
   import PoolsSettings from "./PoolsSettings.svelte";
 
-  type Section = "general" | "agents" | "pools";
+  type Section = SettingsSection;
 
-  let section = $state<Section>("general");
+  // the dialog remounts on every open, so this picks up the section the opener chose
+  let section = $state<Section>(agents.section);
   // visited sections stay mounted so their form state survives tab switches
-  let visited = $state(new Set<Section>(["general"]));
+  let visited = $state(new Set<Section>([agents.section]));
 
   function activate(next: Section): void {
     if (next === section) return;
     visited = new Set(visited).add(next);
     section = next;
-    if (next === "agents" && !agents.loaded) void agents.load();
-    if (next === "pools" && !pools.loaded) void pools.load();
+    agents.section = next; // reopening lands on the last-viewed section
   }
+
+  // sections lazy-load their store on first view, including the section it opens on
+  $effect(() => {
+    if (section === "agents" && !agents.loaded) void agents.load();
+    if (section === "pools" && !pools.loaded) void pools.load();
+  });
 
   function close(): void {
     agents.open = false;
