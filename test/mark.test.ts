@@ -7,7 +7,7 @@ const faviconPath = join(root, "web", "public", "favicon.svg");
 const indexPath = join(root, "web", "index.html");
 const markPath = join(root, "web", "src", "lib", "Mark.svelte");
 const appCssPath = join(root, "web", "src", "app.css");
-const appPath = join(root, "web", "src", "App.svelte");
+const appPath = join(root, "web", "src", "lib", "Sidebar.svelte");
 const galleryPath = join(root, "web", "src", "gallery", "Gallery.svelte");
 
 function srgbToLinear(c: number): number {
@@ -146,7 +146,7 @@ test("both headers render the shared mark component", () => {
   const appContent = readFileSync(appPath, "utf-8");
   const galleryContent = readFileSync(galleryPath, "utf-8");
 
-  expect(appContent).toContain('import Mark from "./lib/Mark.svelte";');
+  expect(appContent).toContain('import Mark from "./Mark.svelte";');
   expect(appContent).toContain("<Mark />");
   expect(appContent).not.toContain('<span class="mark">');
 

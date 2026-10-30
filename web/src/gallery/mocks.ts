@@ -323,21 +323,19 @@ function reposition(t: Task, index: number): void {
 }
 
 function stubMutations(): void {
-  board.addTask = async (laneId: string, title: string, project = board.projectFilter, parentId?: string): Promise<boolean> => {
-    if (!board.lanes.some((l) => l.id === laneId)) return false;
+  board.addTask = async (laneId: string, title: string, project = board.projectFilter, parentId?: string): Promise<Task | null> => {
+    if (!board.lanes.some((l) => l.id === laneId)) return null;
     const siblings = board.tasks.filter((t) => t.laneId === laneId);
-    board.tasks = [
-      ...board.tasks,
-      task({
-        id: newId(),
-        title,
-        laneId,
-        project: project || "",
-        parentId: parentId ? (taskRef(parentId) ?? null) : null,
-        position: (siblings.length + 1) * 100,
-      }),
-    ];
-    return true;
+    const created = task({
+      id: newId(),
+      title,
+      laneId,
+      project: project || "",
+      parentId: parentId ? (taskRef(parentId) ?? null) : null,
+      position: (siblings.length + 1) * 100,
+    });
+    board.tasks = [...board.tasks, created];
+    return created;
   };
 
   board.updateTask = async (id: string, patch: TaskPatch): Promise<void> => {

@@ -99,7 +99,8 @@ describe("App.svelte wiring", () => {
 
   test("consumed events are preventDefaulted so nothing chains or page-scrolls", () => {
     const wheelPanIdx = appSrc.indexOf("const left = wheelPan(");
-    const preventDefaultIdx = appSrc.indexOf("e.preventDefault();");
+    // search after wheelPan so unrelated earlier preventDefaults (e.g. resize drags) don't match
+    const preventDefaultIdx = appSrc.indexOf("e.preventDefault();", wheelPanIdx);
     const scrollLeftIdx = appSrc.indexOf("el.scrollLeft = left;");
     expect(wheelPanIdx).toBeGreaterThan(-1);
     expect(preventDefaultIdx).toBeGreaterThan(wheelPanIdx);

@@ -385,7 +385,7 @@ class BoardStore {
       return null;
     }
     await this.refresh();
-    return data;
+    return (data as Task) ?? null;
   }
 
   async updateTask(id: string, patch: TaskPatch): Promise<void> {
