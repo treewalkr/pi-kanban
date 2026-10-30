@@ -6,3 +6,14 @@ export const api = treaty<App>(import.meta.env.DEV ? "http://localhost:4600" : w
 
 // SSE change stream; EventSource is a browser streaming client, not a REST call
 export const eventsUrl = import.meta.env.DEV ? "http://localhost:4600/events" : "/events";
+
+// Raw file stream/download URL for resource tags (img src, anchor href)
+export const rawFilesUrl = import.meta.env.DEV ? "http://localhost:4600/files/raw" : "/files/raw";
+
+export function rawFileUrl(path: string, download = false): string {
+  const query = download
+    ? `path=${encodeURIComponent(path)}&download=1`
+    : `path=${encodeURIComponent(path)}`;
+  return `${rawFilesUrl}?${query}`;
+}
+
