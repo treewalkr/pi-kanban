@@ -1720,6 +1720,11 @@ button.id-copy {
 
 /* ---------- card detail dialog ---------- */
 
+/* wider than the 500px edit form: use the space on wide screens, clamp to the overlay on small ones */
+.editor.detail {
+  width: min(720px, 90vw);
+}
+
 .detail-head {
   display: flex;
   align-items: center;
