@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitCheckout, gitInfo } from "../src/git";
+import { gitCheckout, gitInfo, gitStatusMap } from "../src/git";
 import { KanbanError } from "../src/db";
 
 let dir = "";
@@ -76,4 +76,70 @@ test("gitCheckout surfaces git's own refusal when a dirty tree conflicts", async
     run("git", "checkout", "--", "a.txt");
   }
   expect(await gitInfo(dir)).toMatchObject({ repo: true, branch: "main", dirty: 0 });
+});
+
+test("gitStatusMap on a non-repo directory reports {}", async () => {
+  const plain = mkdtempSync(join(tmpdir(), "kanban-nogit-status-"));
+  try {
+    expect(await gitStatusMap(plain)).toEqual({});
+  } finally {
+    rmSync(plain, { recursive: true, force: true });
+  }
+});
+
+test("gitStatusMap classifies M/A/D/R/U in a temp repo; renames keyed by new path", async () => {
+  const testRepo = mkdtempSync(join(tmpdir(), "kanban-git-status-"));
+  const sub = join(testRepo, "sub");
+  const exec = (...cmd: string[]) => Bun.spawnSync({ cmd, cwd: testRepo, stdout: "ignore", stderr: "ignore" });
+
+  try {
+    exec("git", "init", "-b", "main");
+    exec("git", "config", "user.email", "test@local");
+    exec("git", "config", "user.name", "test");
+
+    // Base files
+    writeFileSync(join(testRepo, "f_mod.txt"), "mod v1\n");
+    writeFileSync(join(testRepo, "f_del.txt"), "del v1\n");
+    writeFileSync(join(testRepo, "f_ren_old.txt"), "ren v1\n");
+    mkdirSync(sub);
+    writeFileSync(join(sub, "sub_mod.txt"), "sub v1\n");
+
+    exec("git", "add", ".");
+    exec("git", "commit", "-m", "init");
+
+    // M: modify
+    writeFileSync(join(testRepo, "f_mod.txt"), "mod v2\n");
+    writeFileSync(join(sub, "sub_mod.txt"), "sub v2\n");
+
+    // D: delete
+    exec("git", "rm", "f_del.txt");
+
+    // R: rename
+    exec("git", "mv", "f_ren_old.txt", "f_ren_new.txt");
+
+    // A: stage add
+    writeFileSync(join(testRepo, "f_add.txt"), "add\n");
+    exec("git", "add", "f_add.txt");
+
+    // U: untracked
+    writeFileSync(join(testRepo, "f_untracked.txt"), "untracked\n");
+
+    const rootMap = await gitStatusMap(testRepo);
+    expect(rootMap).toEqual({
+      "f_mod.txt": "M",
+      "sub/sub_mod.txt": "M",
+      "f_del.txt": "D",
+      "f_ren_new.txt": "R",
+      "f_add.txt": "A",
+      "f_untracked.txt": "U",
+    });
+
+    // Subdirectory call drops entries outside cwd and rebases
+    const subMap = await gitStatusMap(sub);
+    expect(subMap).toEqual({
+      "sub_mod.txt": "M",
+    });
+  } finally {
+    rmSync(testRepo, { recursive: true, force: true });
+  }
 });
