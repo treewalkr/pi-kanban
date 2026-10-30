@@ -1903,6 +1903,23 @@ button.id-copy {
   border-color: var(--accent);
 }
 
+/* narrow viewports: lanes reflow into a wrapping grid — vertical scroll only,
+   never horizontal panning (hra26 AC1) */
+@media (max-width: 1024px) {
+  .board {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(292px, 100%), 1fr));
+    align-items: start;
+  }
+
+  .lane, .add-lane {
+    width: auto;
+    flex: none;
+    max-height: none;
+  }
+}
+
+
 /* ---------- buttons ---------- */
 
 .ghost,
