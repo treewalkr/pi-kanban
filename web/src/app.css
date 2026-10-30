@@ -1040,6 +1040,7 @@ button.id-copy {
 .ghost.icon-only[aria-pressed="true"] {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .danger:hover {

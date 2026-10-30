@@ -48,7 +48,7 @@
       aria-label="toggle elaboration — queue a pi-elaborator session to expand the note"
       title="queue a pi-elaborator session to expand the note (intent + acceptance criteria)"
       onclick={() => (elaborate = !elaborate)}>
-      <Sparkles size={13} strokeWidth={1.75} />
+      <Sparkles size={13} strokeWidth={1.75} fill={elaborate ? "currentColor" : "none"} />
     </button>
     <button class="ghost" onclick={onclose}>close</button>
   </div>
