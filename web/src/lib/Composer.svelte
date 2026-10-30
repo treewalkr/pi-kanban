@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Lane } from "../../../src/db";
   import { board } from "./board.svelte";
+  import { Sparkles } from "@lucide/svelte";
 
   let { lane, onclose }: { lane: Lane; onclose: () => void } = $props();
 
@@ -42,10 +43,13 @@
     {#if board.projectFilter}<span class="hint">project: {board.projectFilter}</span>{/if}
     <span class="spacer"></span>
     <button
-      class="ghost"
+      class="ghost icon-only"
       aria-pressed={elaborate}
+      aria-label="toggle elaboration — queue a pi-elaborator session to expand the note"
       title="queue a pi-elaborator session to expand the note (intent + acceptance criteria)"
-      onclick={() => (elaborate = !elaborate)}>✨ elaborate</button>
+      onclick={() => (elaborate = !elaborate)}>
+      <Sparkles size={13} strokeWidth={1.75} />
+    </button>
     <button class="ghost" onclick={onclose}>close</button>
   </div>
 </div>
