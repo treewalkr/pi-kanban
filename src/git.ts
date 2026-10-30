@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import * as path from "node:path";
-import { KanbanError } from "./db";
+import { KanbanError, type CardWorkspace } from "./db";
 
 export type GitFileCode = "M" | "A" | "D" | "R" | "U";
 
@@ -71,6 +71,92 @@ export async function gitCheckout(cwd: string, branch: string): Promise<string> 
   if (branch === info.branch) return branch;
   await git(cwd, ["checkout", branch], "conflict");
   return branch;
+}
+
+/** List worktrees via `git worktree list --porcelain`; [] on non-repo or git failure. */
+export async function listWorktrees(
+  cwd: string,
+): Promise<Array<{ path: string; branch: string | null }>> {
+  try {
+    const inside = Bun.spawnSync({ cmd: ["git", "rev-parse", "--is-inside-work-tree"], cwd, stdout: "pipe", stderr: "pipe" });
+    if (inside.exitCode !== 0) return [];
+    const out = await git(cwd, ["worktree", "list", "--porcelain"]);
+    if (!out) return [];
+
+    const entries: Array<{ path: string; branch: string | null }> = [];
+    let currentPath: string | null = null;
+    let currentBranch: string | null = null;
+
+    for (const line of out.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        if (currentPath) {
+          entries.push({ path: currentPath, branch: currentBranch });
+          currentPath = null;
+          currentBranch = null;
+        }
+        continue;
+      }
+      if (trimmed.startsWith("worktree ")) {
+        if (currentPath) {
+          entries.push({ path: currentPath, branch: currentBranch });
+          currentBranch = null;
+        }
+        currentPath = trimmed.slice("worktree ".length).trim();
+      } else if (trimmed.startsWith("branch ")) {
+        const ref = trimmed.slice("branch ".length).trim();
+        currentBranch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+      }
+    }
+    if (currentPath) {
+      entries.push({ path: currentPath, branch: currentBranch });
+    }
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+/** Resolve given branch names against live git worktrees and branches. Keyed by branch name. */
+export async function resolveWorkspaces(
+  cwd: string,
+  branches: string[],
+): Promise<Record<string, CardWorkspace>> {
+  const uniqueBranches = Array.from(new Set(branches.filter(Boolean)));
+  if (uniqueBranches.length === 0) return {};
+
+  try {
+    const inside = Bun.spawnSync({ cmd: ["git", "rev-parse", "--is-inside-work-tree"], cwd, stdout: "pipe", stderr: "pipe" });
+    if (inside.exitCode !== 0) return {};
+
+    const [worktrees, branchOut] = await Promise.all([
+      listWorktrees(cwd),
+      git(cwd, ["branch", "--format=%(refname:short)"]),
+    ]);
+
+    const localBranches = new Set(
+      branchOut ? branchOut.split("\n").map((b) => b.trim()).filter(Boolean) : [],
+    );
+
+    const wtByBranch = new Map<string, string>();
+    for (const wt of worktrees) {
+      if (wt.branch) {
+        wtByBranch.set(wt.branch, wt.path);
+      }
+    }
+
+    const result: Record<string, CardWorkspace> = {};
+    for (const b of uniqueBranches) {
+      if (wtByBranch.has(b)) {
+        result[b] = { branch: b, path: wtByBranch.get(b)! };
+      } else if (localBranches.has(b)) {
+        result[b] = { branch: b, path: null };
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
 }
 
 /** Per-file git status map (M/A/D/R/U) relative to cwd; non-repo or failure returns {}. */

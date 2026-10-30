@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitCheckout, gitInfo, gitStatusMap } from "../src/git";
+import { gitCheckout, gitInfo, gitStatusMap, listWorktrees, resolveWorkspaces } from "../src/git";
 import { KanbanError } from "../src/db";
 
 let dir = "";
@@ -141,5 +141,57 @@ test("gitStatusMap classifies M/A/D/R/U in a temp repo; renames keyed by new pat
     });
   } finally {
     rmSync(testRepo, { recursive: true, force: true });
+  }
+});
+
+test("listWorktrees and resolveWorkspaces join branches against worktrees", async () => {
+  const testRepo = mkdtempSync(join(tmpdir(), "kanban-git-wt-"));
+  const wtDir = join(tmpdir(), `kanban-wt-${Date.now()}`);
+  const exec = (...cmd: string[]) => Bun.spawnSync({ cmd, cwd: testRepo, stdout: "ignore", stderr: "ignore" });
+
+  try {
+    // Non-repo returns [] and {}
+    expect(await listWorktrees(testRepo)).toEqual([]);
+    expect(await resolveWorkspaces(testRepo, ["main"])).toEqual({});
+
+    exec("git", "init", "-b", "main");
+    exec("git", "config", "user.email", "test@local");
+    exec("git", "config", "user.name", "test");
+    writeFileSync(join(testRepo, "f.txt"), "hello\n");
+    exec("git", "add", ".");
+    exec("git", "commit", "-m", "init");
+
+    // Add branch solo (no worktree)
+    exec("git", "branch", "solo");
+
+    // Add linked worktree with branch wt-branch
+    exec("git", "worktree", "add", "-b", "wt-branch", wtDir);
+
+    const wts = await listWorktrees(testRepo);
+    expect(wts.length).toBe(2);
+    expect(wts.some((w) => w.branch === "main")).toBe(true);
+    const realWtDir = realpathSync(wtDir);
+    expect(wts.some((w) => w.branch === "wt-branch" && (w.path === wtDir || w.path === realWtDir))).toBe(true);
+
+    // Empty branches -> {}
+    expect(await resolveWorkspaces(testRepo, [])).toEqual({});
+
+    // resolveWorkspaces with various branches (including duplicates and unknown)
+    const resolved = await resolveWorkspaces(testRepo, [
+      "wt-branch",
+      "solo",
+      "wt-branch",
+      "nonexistent",
+      "",
+    ]);
+
+    expect(resolved).toEqual({
+      "wt-branch": { branch: "wt-branch", path: realWtDir },
+      solo: { branch: "solo", path: null },
+    });
+  } finally {
+    exec("git", "worktree", "remove", "--force", wtDir);
+    rmSync(testRepo, { recursive: true, force: true });
+    rmSync(wtDir, { recursive: true, force: true });
   }
 });
