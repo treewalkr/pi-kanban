@@ -5,13 +5,22 @@ import { board } from "./board.svelte";
 
 type EdenError = { value?: unknown };
 
+/** The UI binds "inherit role" to ""; the API drops empty fields, so restore them on the way in. */
+function normalizeSlots(slots: WorkerPool["slots"]): WorkerPool["slots"] {
+  return slots.map((s) => ({
+    provider: s.provider ?? "",
+    model: s.model ?? "",
+    thinking: s.thinking ?? "",
+  }));
+}
+
 export function newPoolDraft(): WorkerPool {
   return {
     id: Math.random().toString(36).slice(2, 7),
     name: "",
     enabled: false,
     roles: [],
-    slots: [{}],
+    slots: [{ provider: "", model: "", thinking: "" }],
     updatedAt: Date.now(),
   };
 }
@@ -45,7 +54,7 @@ class PoolsStore {
     ]);
     if (poolsRes.error) this.fail(poolsRes.error);
     else {
-      this.pools = poolsRes.data.pools ?? [];
+      this.pools = (poolsRes.data.pools ?? []).map((p) => ({ ...p, slots: normalizeSlots(p.slots) }));
       this.settings = poolsRes.data.settings ?? { maxWorkers: 12 };
       this.drafts.clear();
       this.loaded = true;
@@ -65,11 +74,12 @@ class PoolsStore {
       this.fail(error);
       return false;
     }
+    const saved = data as WorkerPool;
     const idx = this.pools.findIndex((p) => p.id === pool.id);
     if (idx !== -1) {
-      this.pools[idx] = data as WorkerPool;
+      this.pools[idx] = { ...saved, slots: normalizeSlots(saved.slots) };
     } else {
-      this.pools.push(data as WorkerPool);
+      this.pools.push({ ...saved, slots: normalizeSlots(saved.slots) });
     }
     this.drafts.delete(pool.id);
     return true;
