@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { wheelPan, type WheelPanElement, type WheelPanEvent } from "../web/src/lib/wheel";
+
+const appPath = join(import.meta.dir, "..", "web", "src", "App.svelte");
 
 describe("wheelPan", () => {
   const baseEl: WheelPanElement = {
@@ -73,5 +77,32 @@ describe("wheelPan", () => {
     expect(
       wheelPan({ deltaX: 0, deltaY: 0.5, deltaMode: 2, ctrlKey: false }, baseEl)
     ).toBe(700);
+  });
+});
+
+describe("App.svelte wiring", () => {
+  const appSrc = readFileSync(appPath, "utf-8");
+
+  test("App.svelte wires a non-passive wheel listener that applies wheelPan to the board", () => {
+    expect(appSrc).toContain('import { wheelPan } from "./lib/wheel"');
+    expect(appSrc).toContain('<main class="board" bind:this={boardEl}>');
+    expect(appSrc).toContain('addEventListener("wheel", onWheel, { passive: false })');
+    expect(appSrc).toContain("el.scrollLeft = left");
+  });
+
+  test("wheel over a lane never reaches wheelPan", () => {
+    const targetGuardIdx = appSrc.indexOf("if (e.target !== el) return;");
+    const wheelPanCallIdx = appSrc.indexOf("wheelPan(");
+    expect(targetGuardIdx).toBeGreaterThan(-1);
+    expect(wheelPanCallIdx).toBeGreaterThan(targetGuardIdx);
+  });
+
+  test("consumed events are preventDefaulted so nothing chains or page-scrolls", () => {
+    const wheelPanIdx = appSrc.indexOf("const left = wheelPan(");
+    const preventDefaultIdx = appSrc.indexOf("e.preventDefault();");
+    const scrollLeftIdx = appSrc.indexOf("el.scrollLeft = left;");
+    expect(wheelPanIdx).toBeGreaterThan(-1);
+    expect(preventDefaultIdx).toBeGreaterThan(wheelPanIdx);
+    expect(scrollLeftIdx).toBeGreaterThan(preventDefaultIdx);
   });
 });

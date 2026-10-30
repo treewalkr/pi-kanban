@@ -12,6 +12,9 @@
   import Mark from "./lib/Mark.svelte";
   import { theme, setTheme } from "./lib/theme.svelte";
   import { Settings, Sun, Moon, CircleSlash } from "@lucide/svelte";
+  import { wheelPan } from "./lib/wheel";
+
+  let boardEl = $state<HTMLElement | null>(null);
 
   // initial load, plus catch-up when a modal closes (change events are paused while editing)
   $effect(() => {
@@ -59,6 +62,21 @@
     el.scrollIntoView({ block: "center", inline: "center", behavior: reduced ? "auto" : "smooth" });
     el.classList.add("flash");
     setTimeout(() => el.classList.remove("flash"), 1500);
+  });
+
+  // wheel over the board background (not over a lane) pans the lanes horizontally
+  $effect(() => {
+    const el = boardEl;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.target !== el) return; // over a lane: leave its scrolling alone
+      const left = wheelPan(e, el);
+      if (left === null) return;
+      e.preventDefault();
+      el.scrollLeft = left;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
   });
 </script>
 
@@ -144,7 +162,7 @@
   {:else if board.view === "list"}
     <ListView />
   {:else}
-    <main class="board">
+    <main class="board" bind:this={boardEl}>
       {#each board.lanes as lane, i (lane.id)}
         <LaneView {lane} index={i} />
       {/each}
