@@ -235,7 +235,7 @@ const edgeDependent = task({
   position: 260,
   createdAt: now() - 18 * HOUR,
   updatedAt: now() - 3 * HOUR,
-  note: "Depends on the migration — amber ⊘ chip, card dimmed while it blocks.",
+  note: "Depends on the migration — amber blocked chip (Lucide circle-slash), card dimmed while it blocks.",
 });
 const edgeDoneDep = task({
   id: "g6u1i",

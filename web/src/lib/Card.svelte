@@ -4,6 +4,7 @@
   import CardView from "./Card.svelte";
   import IdChip from "./IdChip.svelte";
   import { renderMarkdown } from "./markdown";
+  import { CircleSlash } from "@lucide/svelte";
   import { queuedChip, timeAgo } from "./util";
   import { waitingBadge } from "./waiting";
 
@@ -91,7 +92,7 @@
       <span class="chip prio-low">▼ low</span>
     {/if}
     {#if board.isBlocked(task.id)}
-      <span class="chip blocked">⊘ blocked</span>
+      <span class="chip blocked"><CircleSlash size={11} strokeWidth={1.75} /> blocked</span>
     {/if}
     {#if task.project}<span class="chip">{task.project}</span>{/if}
     {#if board.activity[task.id]}

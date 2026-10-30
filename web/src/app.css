@@ -631,6 +631,11 @@ button.id-copy {
   white-space: nowrap;
 }
 
+.chip svg,
+.chips button svg {
+  vertical-align: -2px;
+}
+
 .age {
   margin-left: auto;
 }

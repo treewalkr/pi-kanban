@@ -11,7 +11,7 @@
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import Mark from "./lib/Mark.svelte";
   import { theme, setTheme } from "./lib/theme.svelte";
-  import { Settings, Sun, Moon } from "@lucide/svelte";
+  import { Settings, Sun, Moon, CircleSlash } from "@lucide/svelte";
 
   // initial load, plus catch-up when a modal closes (change events are paused while editing)
   $effect(() => {
@@ -106,7 +106,7 @@
         onclick={() => (board.blockedOnly = !board.blockedOnly)}
         title="filter blocked only"
       >
-        ⊘ blocked
+        <CircleSlash size={12} strokeWidth={1.75} /> blocked
       </button>
       <button
         class:active={board.waitingOnly}

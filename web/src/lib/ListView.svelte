@@ -3,6 +3,7 @@
   import { listRows } from "./listview";
   import IdChip from "./IdChip.svelte";
   import { laneColor, timeAgo } from "./util";
+  import { CircleSlash } from "@lucide/svelte";
 
   // hierarchy-first lens: subtasks nest under parents regardless of lane,
   // so the board's lane-first scattering doesn't hide the structure
@@ -76,7 +77,7 @@
           {:else if task.priority === "low"}
             <span class="chip prio-low" title="low priority">▼</span>
           {/if}
-          {#if board.isBlocked(task.id)}<span class="chip blocked" title="blocked by unfinished work">⊘</span>{/if}
+          {#if board.isBlocked(task.id)}<span class="chip blocked" title="blocked by unfinished work"><CircleSlash size={11} strokeWidth={1.75} /></span>{/if}
           {#if row.total > 0}
             <span class="progress" class:complete={row.done === row.total}>
               {row.done}/{row.total} ✓
