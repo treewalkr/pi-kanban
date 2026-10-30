@@ -101,7 +101,29 @@ const arr = (flags: Parsed["flags"], key: string): string[] => {
 };
 
 function jsonOut(value: unknown): void {
-  console.log(JSON.stringify(value, null, 2));
+  out(JSON.stringify(value, null, 2));
+}
+
+/** All CLI stdout funnels through here: importing render.ts touches process.stdout
+ * (isTTY/columns), which in Bun 1.4.2 flips console.log onto a buffered stream that
+ * is not flushed at process exit — piped output past 64 KiB is dropped (oven-sh/bun#36419).
+ * Buffering and flushing once via an awaited process.stdout.write delivers the full
+ * payload; the write callback fires only after the flush. */
+const outBuf: string[] = [];
+function out(s: string): void {
+  outBuf.push(s);
+}
+
+async function flushOut(): Promise<void> {
+  if (outBuf.length === 0) return;
+  const payload = outBuf.join("\n") + "\n";
+  outBuf.length = 0;
+  process.stdout.on("error", (e) => {
+    if ((e as NodeJS.ErrnoException).code !== "EPIPE") throw e; // reader closed early: exit code already decided
+  });
+  await new Promise<void>((resolve) => {
+    process.stdout.write(payload, () => resolve());
+  });
 }
 
 /** Relative lane for --next / --prev. */
@@ -126,7 +148,7 @@ function laneById(db: KanbanDb, id: string): string {
 function warnActiveChildren(db: KanbanDb, task: Task): void {
   const active = db.activeChildren(task.id);
   if (active.length > 0) {
-    console.log(
+    out(
       c.hex(
         "#d29922",
         `warning: ${active.length} children still active (${active.map((t) => t.id).join(", ")}) — advance or archive them if the work is done`,
@@ -152,11 +174,11 @@ async function main(): Promise<number> {
   const [cmd, ...rest] = argv;
 
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
-    console.log(HELP);
+    out(HELP);
     return 0;
   }
   if (cmd === "version" || cmd === "--version" || cmd === "-v") {
-    console.log(VERSION);
+    out(VERSION);
     return 0;
   }
 
@@ -181,7 +203,7 @@ async function main(): Promise<number> {
     const port = Number(str(flags, "port") ?? process.env.PORT ?? 4600);
     const pids = listenerPids(port);
     if (pids.length === 0) {
-      console.log(`no server listening on port ${port}`);
+      out(`no server listening on port ${port}`);
       return 0;
     }
     // never signal something we cannot vouch for (same spirit as the boot guard)
@@ -204,7 +226,7 @@ async function main(): Promise<number> {
     }
     for (let i = 0; i < 50 && listenerPids(port).length > 0; i++) await new Promise((r) => setTimeout(r, 100));
     const stopped = listenerPids(port).length === 0;
-    console.log(
+    out(
       stopped
         ? `stopped the kanban server on port ${port}`
         : `signaled port ${port}; still listening — it may be draining, retry in a moment`,
@@ -235,9 +257,9 @@ async function main(): Promise<number> {
         if (flags["elaborate"]) db.queueElaboration(task.id);
         if (json) jsonOut(task);
         else {
-          console.log(taskLine(db, task));
+          out(taskLine(db, task));
           if (flags["elaborate"]) {
-            console.log(c.dim("✨ elaboration queued — the auto-agent loop (kanban serve --auto-review) will expand the note"));
+            out(c.dim("✨ elaboration queued — the auto-agent loop (kanban serve --auto-review) will expand the note"));
           }
         }
         return 0;
@@ -254,7 +276,7 @@ async function main(): Promise<number> {
           const map = db.blockedByMap();
           jsonOut(tasks.map((t) => ({ ...t, blockedBy: map[t.id] ?? [] })));
         } else {
-          console.log(listLanes(db, laneRef, project));
+          out(listLanes(db, laneRef, project));
         }
         return 0;
       }
@@ -274,9 +296,9 @@ async function main(): Promise<number> {
           const warn = blocked > 0 ? `  ${c.hex("#d29922", `⚠ ${blocked} blocked card(s) skipped`)}` : "";
           const waitLine = waiting > 0 ? `  ${c.hex("#bc8cff", `☉ ${waiting} waiting on you`)}` : "";
           if (task) {
-            console.log(`${taskLine(db, task)}${warn}${waitLine}`);
+            out(`${taskLine(db, task)}${warn}${waitLine}`);
           } else {
-            console.log(`${c.dim("nothing to pull forward")}${warn}${waitLine}`);
+            out(`${c.dim("nothing to pull forward")}${warn}${waitLine}`);
           }
         }
         return 0;
@@ -291,7 +313,7 @@ async function main(): Promise<number> {
           db.latestPlans(),
         );
         if (json) jsonOut(results);
-        else console.log(searchResults(db, query, results));
+        else out(searchResults(db, query, results));
         return 0;
       }
 
@@ -305,7 +327,7 @@ async function main(): Promise<number> {
             blocking: db.blocking(task.id).map((t) => t.id),
           });
         } else {
-          console.log(taskDetail(db, task));
+          out(taskDetail(db, task));
         }
         return 0;
       }
@@ -315,7 +337,7 @@ async function main(): Promise<number> {
         if (!idRef) throw new KanbanError("usage: kanban brief <id>", "invalid");
         const task = db.resolveTask(idRef);
         if (json) jsonOut({ task, plan: db.attachment(task.id, "plan"), comments: db.comments(task.id) });
-        else console.log(taskDetail(db, task)); // thread-aware: note, plan, and comments in one read
+        else out(taskDetail(db, task)); // thread-aware: note, plan, and comments in one read
         return 0;
       }
 
@@ -326,7 +348,7 @@ async function main(): Promise<number> {
         db.queueElaboration(task.id);
         if (json) jsonOut(task);
         else {
-          console.log(`${c.green("✓")} elaboration queued for ${c.dim(task.id)} — runs on the auto-agent loop (kanban serve --auto-review)`);
+          out(`${c.green("✓")} elaboration queued for ${c.dim(task.id)} — runs on the auto-agent loop (kanban serve --auto-review)`);
         }
         return 0;
       }
@@ -342,7 +364,7 @@ async function main(): Promise<number> {
         }
         const plan = db.attach(idRef, "plan", content, resolve(file));
         if (json) jsonOut(plan);
-        else console.log(`${c.green("✓")} attached plan ${c.dim(`v${plan.version}`)} to ${c.dim(plan.taskId)}`);
+        else out(`${c.green("✓")} attached plan ${c.dim(`v${plan.version}`)} to ${c.dim(plan.taskId)}`);
         return 0;
       }
 
@@ -355,12 +377,12 @@ async function main(): Promise<number> {
         const { comment, task, moved } = db.comment(idRef, { body, author: str(flags, "author"), kind: str(flags, "kind") });
         if (json) jsonOut(comment);
         else {
-          console.log(commentLine(comment));
+          out(commentLine(comment));
           if (moved === "parked") {
-            console.log(c.hex("#bc8cff", "☉ parked in Waiting on you — reply to return it"));
+            out(c.hex("#bc8cff", "☉ parked in Waiting on you — reply to return it"));
           } else if (moved === "returned") {
             const lane = db.resolveLane(task.laneId);
-            console.log(c.hex("#bc8cff", `↩ returned to ${lane.name}`));
+            out(c.hex("#bc8cff", `↩ returned to ${lane.name}`));
           }
         }
         return 0;
@@ -371,7 +393,7 @@ async function main(): Promise<number> {
         if (!idRef) throw new KanbanError("usage: kanban comments <id>", "invalid");
         const comments = db.comments(idRef);
         if (json) jsonOut(comments);
-        else console.log(commentThread(comments));
+        else out(commentThread(comments));
         return 0;
       }
 
@@ -384,7 +406,7 @@ async function main(): Promise<number> {
         const result = db.handoff(idRef, laneRef, { message, author: str(flags, "author") });
         if (json) jsonOut(result);
         else {
-          console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+          out(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
           if (result.task.laneId === "done") warnActiveChildren(db, result.task);
         }
         return 0;
@@ -409,7 +431,7 @@ async function main(): Promise<number> {
           : db.handoff(idRef, laneById(db, "implement"), { message: message!, author: str(flags, "author"), kind: "review", findings });
         if (json) jsonOut(result);
         else {
-          console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+          out(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
           if (result.task.laneId === "done") warnActiveChildren(db, result.task);
         }
         return 0;
@@ -436,8 +458,8 @@ async function main(): Promise<number> {
         });
         if (json) jsonOut({ comment, task });
         else {
-          console.log(commentLine(comment));
-          if (task.laneId === "waiting") console.log(c.hex("#bc8cff", "☉ parked in Waiting on you — approve or reject it"));
+          out(commentLine(comment));
+          if (task.laneId === "waiting") out(c.hex("#bc8cff", "☉ parked in Waiting on you — approve or reject it"));
         }
         return 0;
       }
@@ -447,7 +469,7 @@ async function main(): Promise<number> {
         if (!idRef) throw new KanbanError("usage: kanban approve <id> [--message <text>]", "invalid");
         const result = db.approveTask(idRef, { author: str(flags, "author"), message: str(flags, "message") });
         if (json) jsonOut(result);
-        else console.log(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
+        else out(`${taskLine(db, result.task)}\n${commentLine(result.comment)}`);
         return 0;
       }
 
@@ -460,8 +482,8 @@ async function main(): Promise<number> {
         const { task, comment, returned } = db.rejectTask(idRef, message, { author: str(flags, "author") });
         if (json) jsonOut({ task, comment, returned });
         else {
-          console.log(commentLine(comment));
-          if (returned) console.log(c.hex("#bc8cff", "↩ returned to Plan — the planner re-arms with this feedback"));
+          out(commentLine(comment));
+          if (returned) out(c.hex("#bc8cff", "↩ returned to Plan — the planner re-arms with this feedback"));
         }
         return 0;
       }
@@ -476,12 +498,12 @@ async function main(): Promise<number> {
         const moved = db.moveTask(task.id, laneRef, pos ? Number(pos) - 1 : undefined);
         if (json) jsonOut(moved);
         else {
-          console.log(taskLine(db, moved));
+          out(taskLine(db, moved));
           if (moved.laneId === "done") warnActiveChildren(db, moved);
           if (moved.laneId === "plan" || moved.laneId === "implement") {
             const blockers = db.blockers(moved.id).filter((b) => !UNBLOCKED_LANES.includes(b.laneId as any));
             if (blockers.length > 0) {
-              console.log(c.hex("#d29922", `⚠ blocked by: ${blockers.map((b) => b.id).join(", ")}`));
+              out(c.hex("#d29922", `⚠ blocked by: ${blockers.map((b) => b.id).join(", ")}`));
             }
           }
         }
@@ -509,7 +531,7 @@ async function main(): Promise<number> {
         }
         const updated = db.updateTask(id, patch);
         if (json) jsonOut(updated);
-        else console.log(taskLine(db, updated));
+        else out(taskLine(db, updated));
         return 0;
       }
 
@@ -518,7 +540,7 @@ async function main(): Promise<number> {
         const moved = db.moveTask(task.id, laneById(db, "done"), undefined, { cause: "done" });
         if (json) jsonOut(moved);
         else {
-          console.log(taskLine(db, moved));
+          out(taskLine(db, moved));
           warnActiveChildren(db, moved);
         }
         return 0;
@@ -528,7 +550,7 @@ async function main(): Promise<number> {
         const task = db.resolveTask(positional[0] ?? "");
         const moved = db.moveTask(task.id, laneById(db, "archive"), undefined, { cause: "archive" });
         if (json) jsonOut(moved);
-        else console.log(taskLine(db, moved));
+        else out(taskLine(db, moved));
         return 0;
       }
 
@@ -547,7 +569,7 @@ async function main(): Promise<number> {
           } else if (v.kind === "missing-plan") {
             line = `⚠ ${v.cardId} in ${v.laneId} with no attached plan`;
           }
-          console.log(c.hex("#d29922", line));
+          out(c.hex("#d29922", line));
         }
         return 0;
       }
@@ -560,19 +582,19 @@ async function main(): Promise<number> {
           const task = db.resolveTask(positional[0]);
           const stats = db.cardStats(task.id);
           if (json) jsonOut(stats);
-          else console.log(statsCard(db, task, stats));
+          else out(statsCard(db, task, stats));
           return 0;
         }
         const payload = db.boardStats();
         if (json) jsonOut(payload);
-        else console.log(statsBoard(db, payload));
+        else out(statsBoard(db, payload));
         return 0;
       }
 
       case "rm": {
         const task = db.deleteTask(positional[0] ?? "", !!flags.force);
         if (json) jsonOut({ ok: true, removed: task });
-        else console.log(`removed  ${task.id}  ${task.title}`);
+        else out(`removed  ${task.id}  ${task.title}`);
         return 0;
       }
 
@@ -582,7 +604,7 @@ async function main(): Promise<number> {
           case undefined:
           case "ls": {
             if (json) jsonOut(db.lanes());
-            else console.log(laneList(db));
+            else out(laneList(db));
             return 0;
           }
           case "add": {
@@ -590,7 +612,7 @@ async function main(): Promise<number> {
             if (!name) throw new KanbanError("usage: kanban lane add <name>", "invalid");
             const lane = db.createLane({ name });
             if (json) jsonOut(lane);
-            else console.log(`${lane.id}  ${lane.name}  added`);
+            else out(`${lane.id}  ${lane.name}  added`);
             return 0;
           }
           case "rename": {
@@ -599,13 +621,13 @@ async function main(): Promise<number> {
             if (!ref || !name) throw new KanbanError("usage: kanban lane rename <ref> <name>", "invalid");
             const lane = db.updateLane(ref, { name });
             if (json) jsonOut(lane);
-            else console.log(`${lane.id}  ${lane.name}  renamed`);
+            else out(`${lane.id}  ${lane.name}  renamed`);
             return 0;
           }
           case "rm": {
             const lane = db.deleteLane(subRest[0] ?? "", !!flags.force);
             if (json) jsonOut({ ok: true, removed: lane });
-            else console.log(`${lane.id}  removed`);
+            else out(`${lane.id}  removed`);
             return 0;
           }
           default:
@@ -623,8 +645,10 @@ async function main(): Promise<number> {
 
 try {
   process.exitCode = await main();
+  await flushOut();
 } catch (err) {
   const msg = err instanceof KanbanError ? err.message : (err as Error)?.message ?? String(err);
   console.error(`kanban: ${msg}`);
+  await flushOut().catch(() => {});
   process.exitCode = 1;
 }
