@@ -331,15 +331,21 @@ test("plan-review records pass/block verdicts on a plan-lane card", async () => 
 
   const passed = await cli("plan-review", task.id, "--pass", "--message", "meets the checklist", "--author", "pi-plan-reviewer", "--json");
   expect(passed.code).toBe(0);
-  const verdict = JSON.parse(passed.stdout) as { kind: string; author: string; body: string };
-  expect(verdict).toMatchObject({ kind: "review", author: "pi-plan-reviewer", body: "plan review: pass — meets the checklist" });
-  expect((JSON.parse((await cli("show", task.id, "--json")).stdout) as Task).laneId).toBe("plan");
+  const verdict = JSON.parse(passed.stdout) as { comment: { kind: string; author: string; body: string }; task: Task };
+  expect(verdict.comment).toMatchObject({ kind: "review", author: "pi-plan-reviewer", body: "plan review: pass — meets the checklist" });
+  expect(verdict.task.laneId).toBe("waiting"); // the pass parked it at the human gate
+  expect((JSON.parse((await cli("show", task.id, "--json")).stdout) as Task).previousLane).toBe("plan");
+  await cli("mv", task.id, "plan"); // return it for the block verdict below
 
   const blocked = await cli(
     "plan-review", task.id, "--block", "--message", "vague", "--finding", "AC2 untested", "--author", "pi-plan-reviewer", "--json",
   );
   expect(blocked.code).toBe(0);
-  expect((JSON.parse(blocked.stdout) as { body: string }).body).toContain("- AC2 untested");
+  expect((JSON.parse(blocked.stdout) as { comment: { body: string } }).comment.body).toContain("- AC2 untested");
+
+  const parkedLine = await cli("plan-review", task.id, "--pass", "--message", "fine now", "--author", "pi-plan-reviewer");
+  expect(parkedLine.code).toBe(0);
+  expect(parkedLine.stdout).toContain("☉ parked in Waiting on you — approve or reject it");
 
   const usage = await cli("plan-review", task.id);
   expect(usage.code).toBe(1);

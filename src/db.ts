@@ -1091,7 +1091,8 @@ export class KanbanDb {
    *    (previous_lane ← home lane, lane → waiting), any author;
    *  - a human (non-pi-*) non-question comment on a parked card returns it to
    *    previous_lane and clears it (deleted lane → backlog; no previous_lane → stays);
-   *  - done/archive cards are never parked. */
+   *  - done/archive cards are never parked. planReview() shares the park half
+   *    of this contract for its pass verdict. */
   comment(taskRef: string, input: { author?: string; kind?: string; body: string }): {
     comment: Comment;
     task: Task;
@@ -1107,9 +1108,7 @@ export class KanbanDb {
       const isHuman = !createdComment.author.startsWith("pi-");
 
       if (isQuestion && task.laneId !== WAITING_LANE_ID && !UNBLOCKED_LANES.includes(task.laneId as any)) {
-        const homeLane = task.laneId;
-        this.updateTask(task.id, { lane: WAITING_LANE_ID });
-        this.q("UPDATE tasks SET previous_lane = ? WHERE id = ?").run(homeLane, task.id);
+        this.parkInWaiting(task.id, task.laneId);
         moved = "parked";
       } else if (task.laneId === WAITING_LANE_ID && task.previousLane && isHuman && !isQuestion) {
         let target = "backlog";
@@ -1125,6 +1124,12 @@ export class KanbanDb {
     })();
 
     return { comment: createdComment, task, moved };
+  }
+
+  /** Park a card in Waiting on you, remembering its home lane in previous_lane. */
+  private parkInWaiting(taskId: string, homeLane: string): void {
+    this.updateTask(taskId, { lane: WAITING_LANE_ID });
+    this.q("UPDATE tasks SET previous_lane = ? WHERE id = ?").run(homeLane, taskId);
   }
 
   /** Append to a card's thread; kind and author are normalized here so every writer agrees. */
@@ -1184,10 +1189,15 @@ export class KanbanDb {
     })();
   }
 
+  /** True when the card sits at the plan gate: in Plan, or parked in Waiting on you from Plan. */
+  private atPlanGate(task: Task): boolean {
+    return task.laneId === "plan" || (task.laneId === WAITING_LANE_ID && task.previousLane === "plan");
+  }
+
   /** The plan gate: approve the card's attached plan — comment + move to Implement, atomically. */
   approveTask(taskRef: string, input: { author?: string; message?: string } = {}): { task: Task; comment: Comment } {
     const task = this.resolveTask(taskRef);
-    if (task.laneId !== "plan") {
+    if (!this.atPlanGate(task)) {
       throw new KanbanError(`card '${task.id}' is not in the plan lane (it is in '${task.laneId}')`, "conflict");
     }
     const plan = this.attachment(task.id, "plan");
@@ -1203,15 +1213,20 @@ export class KanbanDb {
     })();
   }
 
-  /** The other gate arm: reject with feedback — comment stays, card stays in Plan; the feedback steers the next plan. */
-  rejectTask(taskRef: string, message: string, input: { author?: string } = {}): Comment {
+  /** The other gate arm: reject with feedback — comment stays, card ends in Plan (a parked card returns first); the feedback steers the next plan. */
+  rejectTask(taskRef: string, message: string, input: { author?: string } = {}): { task: Task; comment: Comment; returned: boolean } {
     const task = this.resolveTask(taskRef);
-    if (task.laneId !== "plan") {
+    if (!this.atPlanGate(task)) {
       throw new KanbanError(`card '${task.id}' is not in the plan lane (it is in '${task.laneId}')`, "conflict");
     }
     const body = message.trim();
     if (!body) throw new KanbanError("rejection feedback must not be empty — it steers the next plan", "invalid");
-    return this.createComment(task.id, { author: input.author, kind: "rejection", body: `plan rejected: ${body}` });
+    return this.db.transaction((): { task: Task; comment: Comment; returned: boolean } => {
+      const returned = task.laneId === WAITING_LANE_ID;
+      const task2 = returned ? this.updateTask(task.id, { lane: "plan" }) : task;
+      const comment = this.createComment(task.id, { author: input.author, kind: "rejection", body: `plan rejected: ${body}` });
+      return { task: task2, comment, returned };
+    })();
   }
 
   /** Plan-review verdict prefixes — the autoreview loop arms on these exact strings. */
@@ -1224,11 +1239,12 @@ export class KanbanDb {
   /** Prefix of agent session-resumed start comments — board waiting state clears on this. */
   static readonly SESSION_RESUMED_PREFIX = "session resumed: ";
 
-  /** The plan reviewer's verdict: pass leaves the card at the human gate, block sends it back to the planner. Never moves the card. */
+  /** The plan reviewer's verdict: pass parks the card in Waiting on you at the human
+   *  gate (previous_lane ← plan); block leaves it in Plan for the re-armed planner. */
   planReview(
     taskRef: string,
     input: { verdict: "pass" | "block"; message?: string; findings?: string[]; author?: string },
-  ): Comment {
+  ): { comment: Comment; task: Task } {
     const task = this.resolveTask(taskRef);
     if (task.laneId !== "plan") {
       throw new KanbanError(`card '${task.id}' is not in the plan lane (it is in '${task.laneId}')`, "conflict");
@@ -1241,7 +1257,11 @@ export class KanbanDb {
     }
     const prefix = input.verdict === "pass" ? KanbanDb.PLAN_REVIEW_PASS : KanbanDb.PLAN_REVIEW_BLOCK;
     const body = `${prefix}${message ? ` — ${message}` : ""}${findings.map((f) => `\n- ${f}`).join("")}`;
-    return this.createComment(task.id, { author: input.author, kind: "review", body });
+    return this.db.transaction((): { comment: Comment; task: Task } => {
+      const comment = this.createComment(task.id, { author: input.author, kind: "review", body });
+      if (input.verdict === "pass") this.parkInWaiting(task.id, "plan");
+      return { comment, task: this.resolveTask(task.id) };
+    })();
   }
 
   // ---------- card sessions & resume requests ----------

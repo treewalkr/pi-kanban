@@ -214,7 +214,7 @@ test("setCardSession/cardSession roundtrip; deleteTask clears pointer and reques
   expect(db.resumeRequests()).toEqual([]);
 });
 
-test("approveTask: approval comment + move to implement; guards lane and plan", () => {
+test("approveTask: approval comment + move to implement; guards lane and plan; works on a card parked from plan", () => {
   const task = db.createTask({ title: "feature" });
   db.moveTask(task.id, "plan");
   expect(() => db.approveTask(task.id)).toThrow(/no attached plan/);
@@ -228,45 +228,72 @@ test("approveTask: approval comment + move to implement; guards lane and plan", 
 
   // card no longer in plan → guard fires
   expect(() => db.approveTask(task.id)).toThrow(/not in the plan lane/);
+
+  // a passing review parked the card in waiting — the gate still works from there
+  const parked = db.createTask({ title: "parked gate" });
+  db.moveTask(parked.id, "plan");
+  db.attach(parked.id, "plan", "# plan v1");
+  db.planReview(parked.id, { verdict: "pass", message: "checks out", author: "pi-plan-reviewer" });
+  expect(db.resolveTask(parked.id).laneId).toBe("waiting");
+  const { task: unparked } = db.approveTask(parked.id);
+  expect(unparked.laneId).toBe("implement");
+  expect(db.resolveTask(parked.id).previousLane).toBeNull(); // the gate clears the park
 });
 
-test("rejectTask: feedback comment, card stays in plan; empty feedback rejected", () => {
+test("rejectTask: feedback comment, card ends in plan (a parked card returns first); empty feedback rejected", () => {
   const task = db.createTask({ title: "feature" });
   db.moveTask(task.id, "plan");
   db.attach(task.id, "plan", "# plan v1");
-  const comment = db.rejectTask(task.id, "  use SSE, not polling  ");
+  const { comment } = db.rejectTask(task.id, "  use SSE, not polling  ");
   expect(comment.kind).toBe("rejection");
   expect(comment.body).toBe("plan rejected: use SSE, not polling");
   expect(db.resolveTask(task.id).laneId).toBe("plan"); // stays put — re-plan expected
   expect(() => db.rejectTask(task.id, "   ")).toThrow(/must not be empty/);
   expect(() => db.rejectTask(db.createTask({ title: "x" }).id, "why")).toThrow(/not in the plan lane/);
+
+  // rejecting a card parked by a passing review returns it to plan for the re-armed planner
+  db.planReview(task.id, { verdict: "pass", message: "checks out", author: "pi-plan-reviewer" });
+  expect(db.resolveTask(task.id).laneId).toBe("waiting");
+  const { task: returned, returned: moved } = db.rejectTask(task.id, "use SSE, not polling");
+  expect(moved).toBe(true);
+  expect(returned.laneId).toBe("plan");
+  expect(db.resolveTask(task.id).previousLane).toBeNull();
 });
 
-test("planReview: verdict comments with prefixes; lane, plan and message guards", () => {
+test("planReview: pass parks the card in waiting, block leaves it in plan; lane, plan and message guards", () => {
   const task = db.createTask({ title: "feature" });
   db.moveTask(task.id, "plan");
   db.attach(task.id, "plan", "# plan v1");
-  const pass = db.planReview(task.id, { verdict: "pass", message: "checks out", author: "pi-plan-reviewer" });
+  const { comment: pass, task: parked } = db.planReview(task.id, { verdict: "pass", message: "checks out", author: "pi-plan-reviewer" });
   expect(pass.kind).toBe("review");
   expect(pass.author).toBe("pi-plan-reviewer");
   expect(pass.body).toBe("plan review: pass — checks out");
-  expect(db.resolveTask(task.id).laneId).toBe("plan"); // verdicts never move the card
+  expect(parked.laneId).toBe("waiting"); // pass parks it at the human gate
+  expect(parked.previousLane).toBe("plan");
+  expect(db.waiting(task.id)).toBe("gate");
 
-  const block = db.planReview(task.id, { verdict: "block", message: "vague tests", findings: ["AC2 has no test", "step 3 has no target file"] });
+  // a human reply returns the parked card to the plan-lane gate
+  const { task: returned, moved } = db.comment(task.id, { author: "user", body: "looks good" });
+  expect(moved).toBe("returned");
+  expect(returned.laneId).toBe("plan");
+  expect(returned.previousLane).toBeNull();
+
+  const { comment: block } = db.planReview(task.id, { verdict: "block", message: "vague tests", findings: ["AC2 has no test", "step 3 has no target file"] });
   expect(block.body).toBe("plan review: block — vague tests\n- AC2 has no test\n- step 3 has no target file");
   expect(block.author).toBe("user"); // author defaults like any comment
+  expect(db.resolveTask(task.id).laneId).toBe("plan"); // block stays for the planner
 
-  const findingsOnly = db.planReview(task.id, { verdict: "block", findings: ["only finding"] });
+  const { comment: findingsOnly } = db.planReview(task.id, { verdict: "block", findings: ["only finding"] });
   expect(findingsOnly.body).toBe("plan review: block\n- only finding");
 
   const bare = db.createTask({ title: "no plan" });
   db.moveTask(bare.id, "plan");
   expect(() => db.planReview(bare.id, { verdict: "pass" })).toThrow(/no attached plan/);
-  const moved = db.createTask({ title: "moved on" });
-  db.moveTask(moved.id, "plan");
-  db.attach(moved.id, "plan", "# p");
-  db.approveTask(moved.id);
-  expect(() => db.planReview(moved.id, { verdict: "pass" })).toThrow(/not in the plan lane/);
+  const movedOn = db.createTask({ title: "moved on" });
+  db.moveTask(movedOn.id, "plan");
+  db.attach(movedOn.id, "plan", "# p");
+  db.approveTask(movedOn.id);
+  expect(() => db.planReview(movedOn.id, { verdict: "pass" })).toThrow(/not in the plan lane/);
   expect(() => db.planReview(task.id, { verdict: "pass", message: "  " })).toThrow(/needs a message/);
   expect(() => db.planReview(task.id, { verdict: "block", message: "", findings: [] })).toThrow(/needs a message/);
 });
@@ -615,9 +642,10 @@ test("waiting maps the plan-lane thread's last comment to all five states", () =
   const task = db.createTask({ title: "w", lane: "plan" });
   db.attach(task.id, "plan", "# p");
 
-  // gate: reviewer pass verdict
+  // gate: reviewer pass verdict (which parks the card in waiting)
   db.planReview(task.id, { verdict: "pass", message: "checks out", author: PLAN_REVIEWER_AUTHOR });
   expect(db.waiting(task.id)).toBe("gate");
+  db.moveTask(task.id, "plan"); // return it for the rest of the state sequence
 
   // question: planner asking (kind question)
   db.createComment(task.id, { author: "pi-planner", kind: "question", body: "sse or polling?" });

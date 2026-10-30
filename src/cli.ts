@@ -24,7 +24,7 @@ usage:
   kanban review <id> (--approve | --block --message <text> [--finding <text>]…)
   kanban approve <id>                       (plan gate: approve the attached plan → Implement)
   kanban reject <id> --message <feedback>   (plan gate: reject with feedback; planner re-plans)
-  kanban plan-review <id> (--pass | --block --message <text> [--finding <text>]…)  (plan reviewer's verdict on the attached plan)
+  kanban plan-review <id> (--pass | --block --message <text> [--finding <text>]…)  (plan reviewer's verdict; --pass parks the card in "Waiting on you")
   kanban brief <id>                         (pickup context: note, plan, thread)
   kanban mv <id> <lane> [--pos <1-based>]     kanban mv <id> --next | --prev
   kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>]
@@ -44,13 +44,15 @@ task ids: any unique prefix works. add --json for machine-readable output.
 search: ranks titles, checklist lines, note text, then plans — same results as the web dropdown.
 hierarchy: --parent nests a card (epic → story → subtask, max depth 3).
 threads: comment/handoff/review append to the card thread; brief prints full pickup context.
-waiting: kind-question comments park the card in the fixed first lane "Waiting on you"; any human reply returns it.
+waiting: kind-question comments and plan-review passes park the card in the fixed first lane
+"Waiting on you"; any human reply returns it, and the plan gate (approve/reject) works on cards parked from Plan.
 auto-review: serve --auto-review spawns a pi reviewer for cards in Review (thinking max; block → pi-builder works the findings, max 3 cycles; agents configurable in the web ui → ≡).
 auto-plan: the same flag runs a pi planner for cards in Plan — it writes the plan from the shared
 template, asks open questions (kind question) when an answer would change the plan, then hands off
 to a pi plan-reviewer that checks the plan against the template checklist (max 2 block rounds per
-human comment); the human gate is kanban approve (arms a plan-build pi-builder) or kanban reject
---message (re-plans with the feedback); the same loop elaborates newly added cards on request (add --elaborate / the ✨ composer toggle).`;
+human comment); a passing review parks the card in "Waiting on you", where the human gate is
+kanban approve (arms a plan-build pi-builder) or kanban reject --message (re-plans with the feedback);
+the same loop elaborates newly added cards on request (add --elaborate / the ✨ composer toggle).`;
 
 interface Parsed {
   flags: Record<string, string | true | string[]>;
@@ -425,14 +427,17 @@ async function main(): Promise<number> {
         }
         const findings = arr(flags, "finding");
         if (!block && findings.length > 0) throw new KanbanError("--finding is only valid with 'plan-review --block'", "invalid");
-        const comment = db.planReview(idRef, {
+        const { comment, task } = db.planReview(idRef, {
           verdict: pass ? "pass" : "block",
           message: message ?? (pass ? "plan meets the checklist" : undefined),
           findings,
           author: str(flags, "author"),
         });
-        if (json) jsonOut(comment);
-        else console.log(commentLine(comment));
+        if (json) jsonOut({ comment, task });
+        else {
+          console.log(commentLine(comment));
+          if (task.laneId === "waiting") console.log(c.hex("#bc8cff", "☉ parked in Waiting on you — approve or reject it"));
+        }
         return 0;
       }
 
@@ -451,9 +456,12 @@ async function main(): Promise<number> {
         if (!idRef || !message) {
           throw new KanbanError("usage: kanban reject <id> --message <feedback>", "invalid");
         }
-        const comment = db.rejectTask(idRef, message, { author: str(flags, "author") });
-        if (json) jsonOut(comment);
-        else console.log(commentLine(comment));
+        const { task, comment, returned } = db.rejectTask(idRef, message, { author: str(flags, "author") });
+        if (json) jsonOut({ task, comment, returned });
+        else {
+          console.log(commentLine(comment));
+          if (returned) console.log(c.hex("#bc8cff", "↩ returned to Plan — the planner re-arms with this feedback"));
+        }
         return 0;
       }
 

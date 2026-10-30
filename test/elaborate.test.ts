@@ -268,7 +268,9 @@ test("elaboration on a gated plan card runs once and leaves the gate intact", as
   await sleep(100);
 
   expect(calls.length).toBe(1); // no planner spawn
-  expect(w.resolveTask(card.id).laneId).toBe("plan");
+  const gated = w.resolveTask(card.id);
+  expect(gated.laneId).toBe("waiting"); // still parked at the gate — the elaborator never moves it
+  expect(gated.previousLane).toBe("plan");
 
   const comments = w.comments(card.id);
   const lastComment = comments.at(-1);

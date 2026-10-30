@@ -288,11 +288,11 @@ export function planReviewerPrompt(task: Task): string {
 2. Check the plan against the review checklist below, and verify its claims: every cited path exists, every named function/API matches the code (read AGENTS.md and the named files), every acceptance criterion maps to a concrete test.
 
 Then record exactly one verdict (never move the card with mv/handoff, never run kanban approve/reject — the human owns the gate):
-- Pass: kanban plan-review ${task.id} --pass --message "<1-3 sentences on why it is executable>" --author pi-plan-reviewer
+- Pass: kanban plan-review ${task.id} --pass --message "<1-3 sentences on why it is executable>" --author pi-plan-reviewer — parks the card in Waiting on you for the human gate
 - Block: kanban plan-review ${task.id} --block --message "<summary>" --finding "<checklist hit>" [--finding "<…>" …] --author pi-plan-reviewer
 
 Block only for checklist hits, never taste; up to 2 rounds happen automatically, then a human steps in. If you cannot evaluate the plan at all (files missing, repo unreadable), post kanban comment ${task.id} "cannot evaluate the plan — <why>" --author pi-plan-reviewer and stop.
-Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate.
+Never move the card (no mv/handoff — the --pass verdict parks it in Waiting on you automatically) and never run kanban approve/reject — the human owns the gate.
 Your last line: a one-sentence verdict.
 
 --- plan template and review checklist ---
@@ -958,7 +958,14 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         });
       }
     } else if (job.role === "plan-reviewer") {
-      if (last?.author === PLAN_REVIEWER_AUTHOR) log(`plan-reviewer ${task.id}: verdict recorded — waiting on the gate`);
+      if (last?.author === PLAN_REVIEWER_AUTHOR)
+        log(
+          `plan-reviewer ${task.id}: ${
+            last.kind === "review" && last.body.startsWith(KanbanDb.PLAN_REVIEW_PASS)
+              ? "pass — parked in Waiting on you at the human gate"
+              : "verdict recorded"
+          }`,
+        );
       else {
         db.createComment(task.id, {
           author: PLAN_REVIEWER_AUTHOR,

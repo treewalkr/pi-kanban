@@ -256,7 +256,7 @@ test("POST /tasks/:id/approve and /reject: the plan gate over HTTP", async () =>
     }),
   );
   expect(rejected.status).toBe(201);
-  expect(await rejected.json()).toMatchObject({ kind: "rejection", author: "user" });
+  expect(await rejected.json()).toMatchObject({ comment: { kind: "rejection", author: "user" }, returned: false });
   expect(db.resolveTask(task.id).laneId).toBe("plan"); // rejection stays in plan
 
   const approved = await app.handle(

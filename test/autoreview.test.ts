@@ -1619,6 +1619,29 @@ describe("auto-plan", () => {
     expect(calls.length).toBe(1); // pass leaves the card at the human gate
   });
 
+  test("a passing verdict parks the card in waiting; approve from there arms the plan-build builder", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await w.planReview(card.id, { verdict: "pass", message: "executable end to end", author: PLAN_REVIEWER_AUTHOR });
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+    const parked = db!.resolveTask(card.id);
+    expect(parked.laneId).toBe("waiting");
+    expect(parked.previousLane).toBe("plan");
+    w.createTask({ title: "noise" });
+    await sleep(150);
+    expect(calls.length).toBe(1); // a parked card never spawns a role
+
+    await w.approveTask(card.id); // the human gate works on a card parked from plan
+    await sleep(200);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("builder");
+    expect(calls[1].job.mode).toBe("plan");
+    expect(db!.resolveTask(card.id).laneId).toBe("implement");
+  });
+
   test("plan-review block re-arms the planner with the findings", async () => {
     const { dbFile, writer: w } = setup();
     const card = planReady(w);
