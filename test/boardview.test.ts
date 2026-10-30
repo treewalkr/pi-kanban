@@ -69,7 +69,7 @@ describe("boardview store focus mode", () => {
     board.expanded = new Set();
 
     if (typeof window !== "undefined" && window.location) {
-      delete (window.location as any).hash;
+      (window.location as any).hash = "";
     }
     if (originalHistory !== undefined) {
       (globalThis as any).history = originalHistory;
