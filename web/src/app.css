@@ -1748,6 +1748,33 @@ button.id-copy {
   .row-meta .id {
     display: none;
   }
+
+  /* 16px form text stops iOS Safari from zooming the page on focus */
+  .app input, .app textarea, .app select {
+    font-size: 16px;
+  }
+
+  .overlay {
+    padding: 12px;
+  }
+
+  .editor {
+    max-height: calc(100dvh - 24px);
+  }
+
+  .editor-actions, .composer-actions {
+    flex-wrap: wrap;
+  }
+
+  .settings-tabs {
+    flex-wrap: wrap;
+    height: auto;
+  }
+
+  /* meta text keeps its hierarchy but never drops below 11px on phones */
+  .id, .age, .chip, .cycle-chip, .count, .lane-dwell, .badge, .detail-meta {
+    font-size: 11px;
+  }
 }
 
 /* collapsed archive strip */

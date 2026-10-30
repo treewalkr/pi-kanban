@@ -121,3 +121,50 @@ describe("touch affordances (app.css)", () => {
     expect(disclosure!.style.padding).toBe("7px 4px");
   });
 });
+
+describe("small-screen dialogs and inputs (app.css)", () => {
+  test("form controls render 16px below 640px", () => {
+    const dom = getDom();
+    const mediaRules = findMediaRules(dom, "(max-width: 640px)");
+    const allInnerRules = mediaRules.flatMap((m) =>
+      Array.from(m.cssRules),
+    ) as CSSStyleRule[];
+
+    const formRule = allInnerRules.find(
+      (r) => r.selectorText === ".app input, .app textarea, .app select",
+    );
+    expect(formRule).toBeDefined();
+    expect(formRule!.style.fontSize).toBe("16px");
+
+    const overlayRule = allInnerRules.find(
+      (r) => r.selectorText === ".overlay",
+    );
+    expect(overlayRule).toBeDefined();
+    expect(overlayRule!.style.padding).toBe("12px");
+
+    const editorRule = allInnerRules.find((r) => r.selectorText === ".editor");
+    expect(editorRule).toBeDefined();
+    expect(editorRule!.style.maxHeight).toBe("calc(100dvh - 24px)");
+
+    const actionsRule = allInnerRules.find(
+      (r) => r.selectorText === ".editor-actions, .composer-actions",
+    );
+    expect(actionsRule).toBeDefined();
+    expect(actionsRule!.style.flexWrap).toBe("wrap");
+
+    const tabsRule = allInnerRules.find(
+      (r) => r.selectorText === ".settings-tabs",
+    );
+    expect(tabsRule).toBeDefined();
+    expect(tabsRule!.style.flexWrap).toBe("wrap");
+    expect(tabsRule!.style.height).toBe("auto");
+
+    const metaRule = allInnerRules.find(
+      (r) =>
+        r.selectorText ===
+        ".id, .age, .chip, .cycle-chip, .count, .lane-dwell, .badge, .detail-meta",
+    );
+    expect(metaRule).toBeDefined();
+    expect(metaRule!.style.fontSize).toBe("11px");
+  });
+});
