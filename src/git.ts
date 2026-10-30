@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { KanbanError, type CardWorkspace } from "./db";
 
@@ -225,5 +225,65 @@ export async function gitStatusMap(cwd: string): Promise<Record<string, GitFileC
     return map;
   } catch {
     return {};
+  }
+}
+
+export async function gitLineStats(cwd: string): Promise<{ additions: number; deletions: number }> {
+  try {
+    const inside = Bun.spawnSync({
+      cmd: ["git", "rev-parse", "--is-inside-work-tree"],
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (inside.exitCode !== 0) return { additions: 0, deletions: 0 };
+
+    let additions = 0;
+    let deletions = 0;
+
+    // 1. Tracked changes line stats
+    try {
+      const proc = Bun.spawnSync({
+        cmd: ["git", "diff", "--no-color", "--no-ext-diff", "--numstat", "HEAD"],
+        cwd,
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      if (proc.exitCode === 0) {
+        const output = proc.stdout.toString();
+        for (const line of output.split(/\r?\n/)) {
+          if (!line) continue;
+          const [added, deleted] = line.split("\t", 2);
+          const addedCount = Number(added);
+          const deletedCount = Number(deleted);
+          if (Number.isInteger(addedCount)) additions += addedCount;
+          if (Number.isInteger(deletedCount)) deletions += deletedCount;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 2. Untracked text files
+    const statusMap = await gitStatusMap(cwd);
+    for (const [relPath, code] of Object.entries(statusMap)) {
+      if (code !== "U") continue;
+      const fullPath = path.resolve(cwd, relPath);
+      try {
+        const s = statSync(fullPath);
+        if (!s.isFile() || s.size > 512 * 1024 || s.size === 0) continue;
+        const buf = readFileSync(fullPath);
+        if (buf.includes(0)) continue;
+        const text = buf.toString("utf8");
+        const count = text.endsWith("\n") ? text.split("\n").length - 1 : text.split("\n").length;
+        additions += count;
+      } catch {
+        // ignore
+      }
+    }
+
+    return { additions, deletions };
+  } catch {
+    return { additions: 0, deletions: 0 };
   }
 }

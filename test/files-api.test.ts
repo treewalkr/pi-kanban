@@ -55,8 +55,20 @@ describe("Files & Git Status API routes", () => {
     const app = createApp(db, { filesRoot: repoDir });
     const res = await app.handle(new Request("http://localhost/git/status"));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { files: Record<string, string> };
+    const body = (await res.json()) as { files: Record<string, string>; additions: number; deletions: number };
     expect(body.files["m.txt"]).toBe("M");
+  });
+
+  test("GET /git/status reports additions and deletions", async () => {
+    const app = createApp(db, { filesRoot: repoDir });
+    const res = await app.handle(new Request("http://localhost/git/status"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { files: Record<string, string>; additions: number; deletions: number };
+    expect(body.files["m.txt"]).toBe("M");
+    expect(typeof body.additions).toBe("number");
+    expect(typeof body.deletions).toBe("number");
+    expect(body.additions).toBeGreaterThanOrEqual(1);
+    expect(body.deletions).toBeGreaterThanOrEqual(1);
   });
 
   test("GET /files lists the fixture root; ?path= lists a subdirectory", async () => {
