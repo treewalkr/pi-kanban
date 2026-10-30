@@ -5,6 +5,7 @@
   import IdChip from "./IdChip.svelte";
   import { renderMarkdown } from "./markdown";
   import { CircleSlash } from "@lucide/svelte";
+  import { cycleChip } from "./statsview";
   import { queuedChip, timeAgo } from "./util";
   import { waitingBadge } from "./waiting";
 
@@ -119,6 +120,10 @@
     {#if task.laneId === "waiting" && task.previousLane}
       {@const originName = board.lanes.find((l) => l.id === task.previousLane)?.name ?? task.previousLane}
       <span class="chip origin" title="returns to {originName} when you reply">↩ from {originName}</span>
+    {/if}
+    {#if cycleChip(board.stats, task)}
+      {@const chip = cycleChip(board.stats, task)!}
+      <span class="cycle-chip" title={chip.title}>⏱ {chip.label}</span>
     {/if}
     <span class="age" title={new Date(task.updatedAt).toLocaleString()}>{timeAgo(task.updatedAt)}</span>
   </div>

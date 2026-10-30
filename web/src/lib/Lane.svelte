@@ -3,6 +3,7 @@
   import { board } from "./board.svelte";
   import CardView from "./Card.svelte";
   import Composer from "./Composer.svelte";
+  import { laneDwellLabel } from "./statsview";
   import { laneColor } from "./util";
 
   let { lane, index }: { lane: Lane; index: number } = $props();
@@ -112,6 +113,9 @@
         </h2>
       {/if}
       <span class="count">{count}</span>
+      {#if laneDwellLabel(board.stats, lane.id)}
+        <span class="lane-dwell" title="average time per card in this lane">{laneDwellLabel(board.stats, lane.id)}</span>
+      {/if}
       <span class="lane-tools">
         {#if isArchive}
           <button title="collapse lane" onclick={() => (board.archiveOpen = false)}>»</button>

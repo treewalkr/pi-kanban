@@ -440,6 +440,18 @@ button:focus-visible {
   line-height: 17px;
 }
 
+.lane-dwell {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
 .lane-tools {
   margin-left: auto;
   display: flex;
@@ -634,6 +646,18 @@ button.id-copy {
 .chip svg,
 .chips button svg {
   vertical-align: -2px;
+}
+
+.cycle-chip {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
 }
 
 .age {

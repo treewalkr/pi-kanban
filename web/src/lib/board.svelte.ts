@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { Attachment, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
+import type { Attachment, BoardStatsPayload, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
 import type { AgentSessionInfo, QueuedJobInfo } from "../../../src/autoreview";
 import { searchBoard } from "../../../src/search";
 import { initialProject, parseProjectHash, projectHash } from "./viewhash";
@@ -78,6 +78,7 @@ class BoardStore {
   waiting = $state<Record<string, WaitingState>>({});
   /** Sparse card-id → direct blocker ids (board payload). */
   blockedBy = $state<Record<string, string[]>>({});
+  stats = $state<BoardStatsPayload | null>(null);
   loading = $state(true);
   error = $state("");
   search = $state("");
@@ -339,17 +340,20 @@ class BoardStore {
   }
 
   async refresh(): Promise<void> {
-    const { data, error } = await api.board.get();
-    if (error) {
-      this.fail(error);
+    const [boardRes, statsRes] = await Promise.all([api.board.get(), api.stats.get()]);
+    if (boardRes.error) {
+      this.fail(boardRes.error);
       return;
     }
+    if (!statsRes.error && statsRes.data) {
+      this.stats = statsRes.data as BoardStatsPayload;
+    }
     this.error = "";
-    this.lanes = data.lanes;
-    this.tasks = data.tasks;
-    this.plans = data.plans;
-    this.waiting = data.waiting ?? {}; // guards the dev-restart window against a pre-change API payload
-    this.blockedBy = data.blockedBy ?? {};
+    this.lanes = boardRes.data.lanes;
+    this.tasks = boardRes.data.tasks;
+    this.plans = boardRes.data.plans;
+    this.waiting = boardRes.data.waiting ?? {}; // guards the dev-restart window against a pre-change API payload
+    this.blockedBy = boardRes.data.blockedBy ?? {};
     this.loading = false;
     // a stored project whose tag no longer exists (renamed, or its last card dropped the tag)
     // resets to "all" — an active filter with no visible chip would be a silent empty board
