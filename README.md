@@ -1,133 +1,97 @@
 # kanban
 
-A local-first Kanban board for the [pi](https://github.com/badlogic/pi-mono) coding agent to
-track task state — one SQLite file, a web UI for humans, and a CLI for agents.
+A local-first kanban board for the [pi](https://github.com/badlogic/pi-mono) coding agent —
+one SQLite file, a web UI for humans, a CLI for agents.
 
-Lanes default to the working workflow — **Backlog → Plan → Test + Implement → Review → Done →
-Archive** — and are customizable, behind a fixed **Waiting on you** lane that always comes
-first: an agent's `question` comment parks the card there (a `↩ from <lane>` chip remembers its
-home lane) and any human reply returns it. Archive keeps finished cards out of the way: a
-collapsed strip
-on the board (click to expand, drag onto it to archive), `kanban archive <id>` from the CLI.
-
-Cards nest into an **epic → story → subtask** hierarchy (max depth 3). Same-lane children render
-collapsed under their parent with a `2/3 ✓` progress badge; a child in another lane renders as a
-normal card linked to its parent. Every card still moves through lanes independently — finishing
-a parent never finishes its children.
+Cards flow **Backlog → Plan → Test + Implement → Review → Done → Archive** (lanes are
+customizable), behind a fixed **Waiting on you** lane: an agent's `question` comment parks
+the card there — a `↩ from <lane>` chip remembers its home lane, and any human reply
+returns it. Cards nest into an **epic → story → subtask** hierarchy; every card moves
+independently. The CLI writes the DB directly (no server needed for agent-side CRUD); the
+server pushes live updates to the web UI over SSE.
 
 ## Stack
 
-Bun · Elysia (API, port `4600`) · Svelte 5 runes SPA (Vite, dev port `5174`) · Eden Treaty ·
-`bun:sqlite` (`data/kanban.db`, WAL). The CLI talks to SQLite directly, so the server never
-needs to be running for agent-side CRUD. UI icons come from [Lucide](https://lucide.dev/icons)
+Bun · Elysia (API, `4600`, localhost-only) · Svelte 5 runes SPA (Vite, dev port `5174`) ·
+Eden Treaty · `bun:sqlite` (WAL). UI icons from [Lucide](https://lucide.dev/icons)
 (`@lucide/svelte`) — pick icons there, don't hand-draw SVGs.
 
 ## Install
 
 ```bash
 bun install
-bun run build          # builds web/dist once (skip while only using the CLI)
-./scripts/install.sh   # symlinks `kanban` into ~/.bun/bin + installs the pi skill
+bun run build          # web/dist once (skip while CLI-only)
+./scripts/install.sh   # `kanban` into ~/.bun/bin + installs the pi skill
 ```
 
 ## Use
 
 ```bash
-kanban serve --open            # web UI at http://127.0.0.1:4600
-bun run dev                    # hacking: api watch + vite dev server
+kanban serve --auto-review --open   # web UI at http://127.0.0.1:4600
+bun run dev                         # hacking: api watch + vite dev server
 ```
 
-One server at a time: `serve` refuses to start when the port is already taken
-(and agent work is leased per card in the DB, so stray processes can't double-
-plan a card). A restart drains first — in-flight agent sessions are terminated
-cleanly, never orphaned.
-
-Settings → General → **Service** carries a **restart service** button (web UI and API alike):
-one click rebuilds `web/dist` (`bun run build`) and restarts the server — under `bun run dev`
-it reloads the watched API via a marker rewrite, under `kanban serve` the process drains
-its agent sessions and respawns itself. While agent sessions run, the restart is refused
-with a confirm (force overrides). The board reconnects automatically once the server is
-back. Local pages only: cross-origin requests are refused.
+One server per port — `serve` refuses a taken port; `kanban stop` and the Settings →
+Service **restart** button drain in-flight agent sessions cleanly, never orphan them.
 
 ```bash
-kanban add Fix login redirect --note "bounces to / after oauth" --project my-app
-kanban add "Fix login redirect" --elaborate # queues pi-elaborator to expand note with intent + AC
-kanban mv <id> plan            # or --next / --prev
-kanban ls [--project my-app] [--json]
-kanban next [--project my-app]      # what's next: lane priority, then card priority, then oldest; skips blocked, prints blocked + waiting counts
-kanban search <query> [--project my-app]   # ranked: titles, checklist lines, notes
-kanban add Write e2e tests --parent <id>   # subtask — inherits the parent's lane
-kanban edit <id> --parent <id> · --clear-parent
-kanban show <id> · done <id> · archive <id> · edit <id> …
-kanban rm <id> --force         # deleting a parent cascades its subtree
+kanban add <title> --project my-app [--note <text>] [--parent <id>] [--elaborate]
+kanban elaborate <id>               # retrofit/retry elaboration on any card
+kanban ls · search <query> · show <id> · brief <id>
+kanban next                         # lane → priority → oldest; skips blocked, counts waiting
+kanban mv <id> <lane> · edit <id> … · done <id> · archive <id> · rm <id> --force
 kanban lane ls | add | rename | rm
-kanban attach <id> <plan-file> # versioned plan attach — re-attaching versions it
-kanban comment <id> <text…> · comments <id>   # card thread (--kind comment|review|handoff|question; question parks in Waiting on you, any human reply returns it)
-kanban handoff <id> <lane> --message <text>    # atomic move + thread record
-kanban brief <id>              # pickup context: note, plan, thread
-kanban review <id> (--approve | --block --message <text>) · plan-review <id> (--pass | --block …)
-kanban check [--json]          # board-health lint: done parents w/ active children, children behind
-                               # parent, planless build cards (advisory — exit 0)
-kanban stop [--port <n>]       # graceful server stop (drains in-flight agent sessions)
+kanban attach <id> <plan-file>      # versioned plan attach — re-attaching versions it
+kanban comment <id> <text…> [--kind comment|review|handoff|question] · comments <id>
+kanban handoff <id> <lane> --message <text>   # atomic move + thread record
+kanban review <id> (--approve | --block --message <text> [--finding <text>]…)
+kanban approve <id> · reject <id> --message <text>   # the human plan gate
+kanban check [--json] · stop · help
 ```
 
-Task ids accept any unique prefix; lanes accept slug, prefix, name, or ordinal.
-`--json` everywhere for agent consumption; errors exit 1 with `kanban: <message>` on stderr.
-`ls` indents same-lane children under their parent; `show` prints the full tree with each
-child's lane. Notes render GitHub-flavored markdown in the web UI (lists, checkboxes, code,
-links).
-
-### pi agent
-
-The skill in `skills/pi-kanban/SKILL.md` (installed to `~/.pi/agent/skills/pi-kanban/` by
-`scripts/install.sh`) teaches pi the workflow contract: card per unit of work, advance it
-through lanes, never leave stale cards. The CLI writes the DB directly; the server watches the
-database and pushes changes to the web UI over SSE, so the board updates live.
+Ids accept any unique prefix; lanes accept slug, prefix, name, or ordinal. `--json`
+everywhere; notes render GitHub-flavored markdown in the web UI.
 
 ### Auto agents (plan + review)
 
-`kanban serve --auto-review` runs headless `pi` agents over the board. Newly added cards queued with `--elaborate` (or the ✨ composer toggle) spawn a `pi-elaborator` to expand terse notes into intent + acceptance criteria; `kanban elaborate <id>` retrofits or retries elaboration on any existing card. **Auto-plan**: a
-`pi-planner` picks up every card in the Plan lane, explores the repo, and attaches a versioned
-implementation plan written from the shared template ([plan-template.md](skills/pi-kanban/plan-template.md));
-when an answer would genuinely change the plan it asks first (`question` comments, each with a
-recommended default) and waits for your reply — the card parks in **Waiting on you** until you
-answer. A `pi-plan-reviewer` then checks every plan
-against the template's review checklist before the human gate — block bounces back to the
-planner with findings (max 2 rounds per human comment, then the card waits for you), pass leaves
-it at the gate. The human owns the gate — `kanban approve <id>` (or ✓ in the web card) arms
-a `pi-builder` session that builds the plan, `kanban reject <id> --message <feedback>` (or ✗)
-sends the feedback back to the planner for plan v2. **Auto-review**: a `pi-reviewer` reviews
-every card that lands in Review — approve → Done, block → findings land as a `- [ ]` checklist
-and a `pi-builder` session works them and hands the card back (stops after 3 block cycles and
-leaves a comment for you). Every step is a thread comment, and each spawn is logged in the serve
-terminal under `[autoreview]`. Each agent spawn gets its own fresh pi session — the card thread
-(`kanban brief`) is the only shared context. If a session dies (model error, quota limit, stall, timeout, or
-silent exit), the reason and duration are posted to the card thread, an `✗ session died` badge marks
-the card on the board, and any diagnostic stderr tail is saved in the session attachment. When a
-session dies, a **↻ resume session** button appears on the card's detail/activity panel: clicking it
-re-spawns pi continuing the same session (`--session-id` keyed to the card's recorded session),
-re-acquiring the lease, clearing the dead badge, and streaming into the live activity log — preserving
-earlier reasoning and tokens instead of starting from scratch. Commenting on the card remains a fresh
-re-run. If the session file in `~/.pi` is missing, resume safely falls back to a fresh session under the same ID.
+`--auto-review` runs headless `pi` sessions over the board. Every step lands as a thread
+comment (`kanban brief <id>` is the pickup context); each spawn logs to the serve terminal
+under `[autoreview]`.
 
-Configure agents in the web UI (gear icon in the topbar) — settings apply to the next session
-without restarting serve:
+| role | does |
+| --- | --- |
+| `pi-elaborator` | expands terse notes into intent + acceptance criteria (`--elaborate`, or ✨ in the composer) |
+| `pi-planner` | plans every Plan-lane card from the [shared template](skills/pi-kanban/plan-template.md); asks `question` comments (with recommended defaults) when an answer would change the plan — the card parks in **Waiting on you** until you reply |
+| `pi-plan-reviewer` | checks each plan against the template checklist — block bounces to the planner (max 2 rounds), pass leaves it at the gate |
+| **you** | `kanban approve` arms the builder; `reject --message` re-plans. The gate is human-only. |
+| `pi-builder` | builds the approved plan, tests, hands off to review |
+| `pi-reviewer` | reviews every card in Review — approve → Done; block → findings land as a `- [ ]` checklist the builder works (max 3 cycles, then it waits for you) |
+
+Dead sessions (model error, quota, stall) post the reason to the thread, mark the card
+`✗ session died`, and offer a **↻ resume session** button that re-spawns pi continuing the
+same session — preserving earlier reasoning and tokens instead of starting over.
+
+Configure per-role agent settings in the web UI (gear icon in the topbar) — applied on the
+next spawn, no restart:
 
 | field | becomes | notes |
 | --- | --- | --- |
-| provider / model | `--provider` / `--model` | selects fed by pi's catalog (`pi --list-models`); empty = pi's default |
-| thinking | `--thinking` | reviewer, planner and plan reviewer default to `max`, builder to pi's default |
-| skills | `--skill` per line | e.g. `~/.pi/agent/skills/scrutinize` |
+| provider / model | `--provider` / `--model` | fed by pi's catalog (`pi --list-models`); empty = pi's default |
+| thinking | `--thinking` | reviewer, planner + plan reviewer default to `max` |
+| skills | `--skill` per line | auto-activates at spawn |
 | context | `--append-system-prompt` | standing instructions, your review lens |
 | tools | `--tools` | pi allow/deny syntax |
 | extra flags | passed through raw | escape hatch |
-| timeout | total run cap — silent sessions are killed earlier by the stall watchdog | 1 min–24 h, default 2 h |
+| timeout | total run cap | 1 min–24 h, default 2 h; the stall watchdog kills silent sessions earlier |
 
-Env overrides win over the stored config: `KANBAN_AUTOREVIEW_MODEL`, `KANBAN_AUTOREVIEW_THINKING`
-(set to `""` to disable thinking entirely), `KANBAN_AUTOREVIEW_TIMEOUT_MS` (total run cap),
-`KANBAN_AUTOREVIEW_STALL_MS` (silent-session kill). Session parallelism lives in the Pools settings tab:
-a global max-workers cap plus an optional per-pool cap. Reviewer/builder sessions run in the serve process's
-directory and use the card's plan path and thread to locate the work.
+Env overrides win: `KANBAN_AUTOREVIEW_MODEL`, `KANBAN_AUTOREVIEW_THINKING` (`""` disables),
+`KANBAN_AUTOREVIEW_TIMEOUT_MS`, `KANBAN_AUTOREVIEW_STALL_MS`. Session parallelism lives in
+the Pools settings tab (global max-workers + optional per-pool cap).
+
+### pi skill
+
+`skills/pi-kanban/SKILL.md` (installed to `~/.pi/agent/skills/pi-kanban/`) teaches pi the
+workflow contract: card per unit of work, advance it through lanes, never leave stale cards.
 
 ## Scripts
 
@@ -136,19 +100,16 @@ directory and use the card's plan path and thread to locate the work.
 | `bun run dev` | api (`:4600`, watch) + web (`:5174`) |
 | `bun run build` | production web build → `web/dist` |
 | `bun run start` | serve api + built web on `127.0.0.1:4600` |
-| `bun test` | db + cli tests (uses temp DBs) |
+| `bun test` | db + cli tests (temp DBs) |
 | `bun run check` | svelte-check + tsc |
 
 ## Layout
 
 ```
-src/    db.ts (sqlite + queries) · app.ts (elysia, type App) · index.ts (server entry)
-        cli.ts + render.ts (kanban CLI) · search.ts (ranked search) · ids.ts (id gen)
-        autoreview.ts (auto agents: elaborator/planner/reviewer/builder) · thread.ts (card threads)
-        restart.ts + shutdown.ts + dev-reload.ts (restart button & graceful drain)
-        skills.ts + models.ts (pi catalog feeds for the agents panel)
-web/    Svelte 5 SPA: board with nested subtask cards, drag & drop, card detail
-        view, editor, filters
-skills/pi-kanban/SKILL.md   pi skill (source of truth)
-data/kanban.db           your board (gitignored; KANBAN_DB overrides, used by tests)
+src/            db.ts (sqlite + queries) · app.ts (elysia) · index.ts (server)
+                cli.ts + render.ts (CLI) · search.ts · autoreview.ts (auto agents)
+                thread.ts · restart.ts + shutdown.ts · skills.ts + models.ts
+web/            Svelte 5 SPA (board, drag & drop, detail, settings)
+skills/pi-kanban/  pi skill (source of truth)
+data/kanban.db  your board (gitignored; KANBAN_DB overrides)
 ```
