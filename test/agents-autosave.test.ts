@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { agents, DEBOUNCE_MS } from "../web/src/lib/agents.svelte";
 import { board } from "../web/src/lib/board.svelte";
 import type { AgentConfig } from "../src/db";
@@ -279,5 +280,23 @@ describe("agents auto-save store", () => {
     expect(calls[1].body).toEqual({ model: "B" });
     expect(agents.saveState).toBe("saved");
     expect(agents.configs.reviewer).toEqual({ model: "B" });
+  });
+
+  test("AgentsSettings markup: no save button, close goes through the store", () => {
+    const src = readFileSync(new URL("../web/src/lib/AgentsSettings.svelte", import.meta.url), "utf-8");
+    expect(src).not.toContain(">save</button>");
+    expect(src).not.toContain("onclick={save}");
+    expect(src).toContain("agents.close()");
+    expect(src).toContain("save-status");
+    expect(src).toMatch(/await\s+agents\.flush\(\)[\s\S]*role\s*=\s*next/);
+  });
+
+  test("GeneralSettings theme wiring unchanged", () => {
+    const src = readFileSync(new URL("../web/src/lib/GeneralSettings.svelte", import.meta.url), "utf-8");
+    expect(src).toContain('setTheme("dark")');
+    expect(src).toContain('setTheme("light")');
+    expect(src).not.toContain("agents.save");
+    expect(src).not.toContain("agents.flush");
+    expect(src).not.toContain("agents.schedule");
   });
 });

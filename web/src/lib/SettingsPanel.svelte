@@ -26,7 +26,7 @@
   });
 
   function close(): void {
-    agents.open = false;
+    void agents.close();
   }
 
   function autofocus(node: HTMLElement) {

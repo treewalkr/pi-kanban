@@ -38,7 +38,6 @@
 
   let role = $state<AgentRole>("reviewer");
   let form = $state<AgentForm>(toForm(agents.configs.reviewer));
-  let saving = $state(false);
 
   let providers = $derived([...new Set(agents.models.map((m) => m.provider))].sort());
   let modelGroups = $derived.by(() => {
@@ -52,20 +51,18 @@
     return [...groups.entries()];
   });
 
+  function touch(): void {
+    agents.schedule(role, () => toConfig(form));
+  }
+
   // role switch stashes edits in the store so the other role's form can load
-  function switchRole(next: AgentRole): void {
+  async function switchRole(next: AgentRole): Promise<void> {
     if (next === role) return;
+    const ok = await agents.flush();
+    if (!ok) return;
     agents.configs[role] = toConfig(form);
     role = next;
     form = toForm(agents.configs[next]);
-  }
-
-  async function save(): Promise<void> {
-    if (saving) return;
-    saving = true;
-    const ok = await agents.save(role, toConfig(form));
-    saving = false;
-    if (ok) agents.open = false;
   }
 </script>
 
@@ -125,7 +122,7 @@
         <div class="row">
           <label>
             provider
-            <select bind:value={form.provider}>
+            <select bind:value={form.provider} onchange={touch}>
               <option value="">pi default</option>
               {#each providers as p (p)}
                 <option value={p}>{p}</option>
@@ -143,6 +140,7 @@
                 const id = (e.currentTarget as HTMLSelectElement).value;
                 const hit = agents.models.find((m) => m.id === id && (!form.provider || m.provider === form.provider));
                 if (hit) form.provider = hit.provider;
+                touch();
               }}
             >
               <option value="">pi default</option>
@@ -163,11 +161,11 @@
         <div class="row">
           <label>
             provider
-            <input bind:value={form.provider} placeholder="pi default (e.g. anthropic)" />
+            <input bind:value={form.provider} oninput={touch} placeholder="pi default (e.g. anthropic)" />
           </label>
           <label>
             model
-            <input bind:value={form.model} placeholder="pi default" />
+            <input bind:value={form.model} oninput={touch} placeholder="pi default" />
           </label>
         </div>
       {/if}
@@ -181,7 +179,7 @@
       <div class="row">
         <label>
           thinking
-          <select bind:value={form.thinking}>
+          <select bind:value={form.thinking} onchange={touch}>
             <option value="">default{role === "reviewer" || role === "planner" || role === "plan-reviewer" ? " (max)" : ""}</option>
             <option value="off">off</option>
             <option value="minimal">minimal</option>
@@ -194,7 +192,7 @@
         </label>
         <label>
           timeout · min
-          <input inputmode="numeric" bind:value={form.timeoutMin} placeholder="120" />
+          <input inputmode="numeric" bind:value={form.timeoutMin} oninput={touch} placeholder="120" />
         </label>
       </div>
     </div>
@@ -204,7 +202,7 @@
     <h3 class="settings-general-heading">Skills</h3>
     <p class="settings-general-description">Search pi's skill catalog (~/.pi/agent/skills) and toggle skills on — each skill's SKILL.md is injected into the session's system prompt at spawn (and still passed as --skill). Type any path to add one outside the catalog.</p>
     <div class="settings-form">
-      <SkillPicker selected={form.skills} onchange={(paths) => (form.skills = paths)} />
+      <SkillPicker selected={form.skills} onchange={(paths) => { form.skills = paths; touch(); }} />
     </div>
   </section>
 
@@ -216,13 +214,14 @@
         context
         <textarea
           bind:value={form.context}
+          oninput={touch}
           rows="3"
           placeholder={"standing instructions the agent always gets — review lens, conventions, hard rules…"}
         ></textarea>
       </label>
       <label>
         tools
-        <input bind:value={form.tools} placeholder="pi default (e.g. -edit,+bash)" />
+        <input bind:value={form.tools} oninput={touch} placeholder="pi default (e.g. -edit,+bash)" />
       </label>
     </div>
   </section>
@@ -233,14 +232,19 @@
     <div class="settings-form">
       <label>
         flags
-        <textarea bind:value={form.extraArgs} rows="2" placeholder="--no-mcp"></textarea>
+        <textarea bind:value={form.extraArgs} oninput={touch} rows="2" placeholder="--no-mcp"></textarea>
       </label>
     </div>
   </section>
 
   <div class="editor-actions">
     <span class="spacer"></span>
-    <button class="ghost" onclick={() => (agents.open = false)}>cancel</button>
-    <button class="primary" onclick={save} disabled={saving}>save</button>
+    <span class="save-status" data-state={agents.saveState}>
+      {agents.saveState === "saving" ? "saving…" : agents.saveState === "saved" ? "saved" : agents.saveState === "failed" ? "save failed" : ""}
+    </span>
+    {#if agents.saveState === "failed"}
+      <button class="ghost" onclick={() => void agents.flush()}>retry</button>
+    {/if}
+    <button class="ghost" onclick={() => void agents.close()}>close</button>
   </div>
 </div>

@@ -195,7 +195,10 @@
       <div class="meta">{board.activeCount} tasks</div>
       <button
         class="theme-toggle"
-        onclick={() => (agents.open = !agents.open)}
+        onclick={() => {
+          if (agents.open) void agents.close();
+          else agents.open = true;
+        }}
         aria-label="settings"
         title="settings"
       >
