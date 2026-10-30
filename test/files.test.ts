@@ -94,10 +94,14 @@ describe("src/files.ts", () => {
     expect(res).toEqual({
       content: "const x = 1;\n",
       language: "typescript",
+      size: 13,
+      binary: false,
     });
 
     const mdRes = await readFile(dir, "README.md");
     expect(mdRes.language).toBe("markdown");
+    expect(mdRes.size).toBe(8);
+    expect(mdRes.binary).toBe(false);
 
     // Escapes
     expect(readFile(dir, "../secret.txt")).rejects.toThrow(
@@ -115,9 +119,13 @@ describe("src/files.ts", () => {
     );
 
     // Binary file
-    expect(readFile(dir, "binary.bin")).rejects.toThrow(
-      new KanbanError("binary file — no preview", "invalid")
-    );
+    const binRes = await readFile(dir, "binary.bin");
+    expect(binRes).toEqual({
+      content: "",
+      language: "plaintext",
+      size: 100,
+      binary: true,
+    });
 
     // Oversized (>512KB)
     expect(readFile(dir, "large.txt")).rejects.toThrow(

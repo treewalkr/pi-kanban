@@ -90,11 +90,19 @@ describe("Files & Git Status API routes", () => {
     // Normal text read
     const tsRes = await app.handle(new Request("http://localhost/files/content?path=hello.ts"));
     expect(tsRes.status).toBe(200);
-    const tsBody = (await tsRes.json()) as { path: string; content: string; language: string };
+    const tsBody = (await tsRes.json()) as {
+      path: string;
+      content: string;
+      language: string;
+      size: number;
+      binary: boolean;
+    };
     expect(tsBody).toEqual({
       path: "hello.ts",
       content: "console.log('hi');\n",
       language: "typescript",
+      size: 19,
+      binary: false,
     });
 
     // Escapes root -> 400
@@ -109,11 +117,23 @@ describe("Files & Git Status API routes", () => {
     const missBody = (await missRes.json()) as { error: string };
     expect(missBody.error).toContain("no such file: 'nope.txt'");
 
-    // Binary file -> 400
+    // Binary file -> 200 { binary: true, content: "", size: 50, language: "plaintext" }
     const binRes = await app.handle(new Request("http://localhost/files/content?path=bin.dat"));
-    expect(binRes.status).toBe(400);
-    const binBody = (await binRes.json()) as { error: string };
-    expect(binBody.error).toBe("binary file — no preview");
+    expect(binRes.status).toBe(200);
+    const binBody = (await binRes.json()) as {
+      path: string;
+      content: string;
+      language: string;
+      size: number;
+      binary: boolean;
+    };
+    expect(binBody).toEqual({
+      path: "bin.dat",
+      content: "",
+      language: "plaintext",
+      size: 50,
+      binary: true,
+    });
 
     // Oversized -> 400
     const bigRes = await app.handle(new Request("http://localhost/files/content?path=big.txt"));

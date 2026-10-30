@@ -157,7 +157,7 @@ export async function rawFilePath(root: string, relPath: string): Promise<string
 export async function readFile(
   root: string,
   filePath: string
-): Promise<{ content: string; language: string }> {
+): Promise<{ content: string; language: string; size: number; binary: boolean }> {
   const target = resolveSafe(root, filePath);
   let s: Stats;
   try {
@@ -177,13 +177,24 @@ export async function readFile(
 
   const buffer = readFileSync(target);
   const checkLen = Math.min(buffer.length, 8192);
+  let binary = false;
   for (let i = 0; i < checkLen; i++) {
     if (buffer[i] === 0) {
-      throw new KanbanError("binary file — no preview", "invalid");
+      binary = true;
+      break;
     }
+  }
+
+  if (binary) {
+    return {
+      content: "",
+      language: "plaintext",
+      size: s.size,
+      binary: true,
+    };
   }
 
   const content = buffer.toString("utf-8");
   const language = languageForPath(filePath);
-  return { content, language };
+  return { content, language, size: s.size, binary: false };
 }

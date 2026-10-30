@@ -183,13 +183,34 @@ export const createApp = (
     )
     .get(
       "/files/content",
-      async ({ query, status }): Promise<{ path: string; content: string; language: string }> => {
+      async ({
+        query,
+        status,
+      }): Promise<{
+        path: string;
+        content: string;
+        language: string;
+        size: number;
+        binary: boolean;
+      }> => {
         try {
           const root = opts.filesRoot ?? process.cwd();
           const file = await readFile(root, query.path);
-          return { path: query.path, content: file.content, language: file.language };
+          return {
+            path: query.path,
+            content: file.content,
+            language: file.language,
+            size: file.size,
+            binary: file.binary,
+          };
         } catch (e) {
-          return fail<{ path: string; content: string; language: string }>(e, status);
+          return fail<{
+            path: string;
+            content: string;
+            language: string;
+            size: number;
+            binary: boolean;
+          }>(e, status);
         }
       },
       {
