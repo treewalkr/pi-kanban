@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type Lane, type Task, type WorkerPool } from "./db";
+import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type Lane, type Task, type WorkerPool } from "./db";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
@@ -233,6 +233,48 @@ export const createApp = (
         }
       },
       { params: t.Object({ id: t.String() }) },
+    )
+    .post(
+      "/tasks/:id/files",
+      ({ params, body, status }): Attachment | unknown => {
+        try {
+          if (RESERVED_FILE_NAMES.has(body.name))
+            throw new KanbanError(`'${body.name}' is reserved for the agent loop`, "invalid");
+          return status(201, db.attach(params.id, body.name, body.content, body.source));
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Object({
+          name: t.String({ minLength: 1, maxLength: 64 }),
+          content: t.String({ minLength: 1, maxLength: 1_000_000 }),
+          source: t.Optional(t.String()),
+        }),
+      },
+    )
+    .get(
+      "/tasks/:id/files",
+      ({ params, status }): Attachment[] | unknown => {
+        try {
+          return db.latestFiles(params.id);
+        } catch (e) {
+          return fail<Attachment[]>(e, status);
+        }
+      },
+      { params: t.Object({ id: t.String() }) },
+    )
+    .get(
+      "/tasks/:id/files/:name",
+      ({ params, status }): Attachment[] | unknown => {
+        try {
+          return db.attachments(params.id, params.name);
+        } catch (e) {
+          return fail<Attachment[]>(e, status);
+        }
+      },
+      { params: t.Object({ id: t.String(), name: t.String() }) },
     )
     .get(
       "/tasks/:id/comments",
