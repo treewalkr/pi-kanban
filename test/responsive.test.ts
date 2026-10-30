@@ -12,13 +12,17 @@ function getDom() {
   );
 }
 
-function findMediaRule(dom: JSDOM, query: string): CSSMediaRule | undefined {
+function findMediaRules(dom: JSDOM, query: string): CSSMediaRule[] {
   const sheet = dom.window.document.styleSheets[0];
   const rules = Array.from(sheet.cssRules);
-  return rules.find(
+  return rules.filter(
     (r): r is CSSMediaRule =>
       "media" in r && (r as CSSMediaRule).media?.mediaText === query,
   );
+}
+
+function findMediaRule(dom: JSDOM, query: string): CSSMediaRule | undefined {
+  return findMediaRules(dom, query)[0];
 }
 
 describe("board lane grid (app.css)", () => {
@@ -42,5 +46,24 @@ describe("board lane grid (app.css)", () => {
     expect(laneGroupRule).toBeDefined();
     expect(laneGroupRule!.style.width).toBe("auto");
     expect(laneGroupRule!.style.maxHeight).toBe("none");
+  });
+});
+
+describe("sidebar drawer clamp (app.css)", () => {
+  test("drawer width clamps below the viewport at 640px", () => {
+    const dom = getDom();
+    const mediaRules = findMediaRules(dom, "(max-width: 640px)");
+    const allInnerRules = mediaRules.flatMap((m) =>
+      Array.from(m.cssRules),
+    ) as CSSStyleRule[];
+
+    const clampRule = allInnerRules.find(
+      (r) => r.selectorText === ".sidebar, .sidebar > *",
+    );
+    expect(clampRule).toBeDefined();
+    expect(clampRule!.style.width).toBe(
+      "min(var(--sidebar-width, 260px), calc(100vw - 48px))",
+    );
+    expect(clampRule!.style.minWidth).toBe("0px");
   });
 });

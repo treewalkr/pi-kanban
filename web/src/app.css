@@ -942,6 +942,11 @@ button {
     box-shadow: 8px 0 24px rgba(0, 0, 0, 0.25);
   }
 
+  .sidebar, .sidebar > * {
+    width: min(var(--sidebar-width, 260px), calc(100vw - 48px));
+    min-width: 0;
+  }
+
   .sidebar-backdrop {
     display: block;
     position: fixed;
