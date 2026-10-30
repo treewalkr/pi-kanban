@@ -186,4 +186,33 @@ describe("Files & Git Status API routes", () => {
     const escapeRes = await app.handle(new Request("http://localhost/files/raw?path=../escape"));
     expect(escapeRes.status).toBe(400);
   });
+
+  test("GET /files/search scores basename and path queries", async () => {
+    const app = createApp(db, { filesRoot: repoDir });
+
+    const introRes = await app.handle(new Request("http://localhost/files/search?q=intro"));
+    expect(introRes.status).toBe(200);
+    const introBody = (await introRes.json()) as { matches: string[] };
+    expect(introBody.matches).toContain("docs/intro.md");
+
+    const pathRes = await app.handle(new Request("http://localhost/files/search?q=docs/intro"));
+    expect(pathRes.status).toBe(200);
+    const pathBody = (await pathRes.json()) as { matches: string[] };
+    expect(pathBody.matches).toContain("docs/intro.md");
+
+    const zzzRes = await app.handle(new Request("http://localhost/files/search?q=zzz"));
+    expect(zzzRes.status).toBe(200);
+    const zzzBody = (await zzzRes.json()) as { matches: string[] };
+    expect(zzzBody.matches).toEqual([]);
+
+    const emptyRes = await app.handle(new Request("http://localhost/files/search?q="));
+    expect(emptyRes.status).toBe(200);
+    const emptyBody = (await emptyRes.json()) as { matches: string[] };
+    expect(emptyBody.matches).toEqual([]);
+
+    const allRes = await app.handle(new Request("http://localhost/files/search?q=."));
+    expect(allRes.status).toBe(200);
+    const allBody = (await allRes.json()) as { matches: string[] };
+    expect(allBody.matches.length).toBeLessThanOrEqual(20);
+  });
 });

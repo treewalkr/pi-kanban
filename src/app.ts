@@ -7,7 +7,7 @@ import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 import { gitCheckout, gitInfo, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitInfo } from "./git";
-import { contentTypeFor, listFiles, rawFilePath, readFile, type FileEntry } from "./files";
+import { contentTypeFor, listFiles, rawFilePath, readFile, searchFiles, type FileEntry } from "./files";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
 
@@ -216,6 +216,21 @@ export const createApp = (
       {
         query: t.Object({
           path: t.String({ minLength: 1 }),
+        }),
+      },
+    )
+    .get(
+      "/files/search",
+      async ({ query }): Promise<{ matches: string[] }> => {
+        const root = opts.filesRoot ?? process.cwd();
+        const q = (query.q ?? "").trim();
+        if (!q) return { matches: [] };
+        const matches = await searchFiles(root, q, 20);
+        return { matches };
+      },
+      {
+        query: t.Object({
+          q: t.Optional(t.String()),
         }),
       },
     )
