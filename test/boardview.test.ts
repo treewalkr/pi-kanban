@@ -18,6 +18,7 @@ function makeTask(partial: Partial<Task> & { id: string; title: string; laneId: 
     project: "",
     parentId: null,
     previousLane: null,
+    workspace: null,
     priority: "normal",
     position: 100,
     createdAt: 1,

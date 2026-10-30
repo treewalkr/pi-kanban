@@ -34,6 +34,7 @@ export interface Task {
   project: string;
   parentId: string | null;
   previousLane: string | null;
+  workspace: string | null;
   priority: Priority;
   position: number;
   createdAt: number;
@@ -184,12 +185,24 @@ export interface Board {
   links: Record<string, string[]>;
 }
 
+/** Live implementation location of a card, joined against git — not stored. */
+export interface CardWorkspace {
+  branch: string; // the recorded branch, verified to exist in git
+  path: string | null; // worktree path from `git worktree list`, null = branch only
+}
+
+/** GET /board response: board + sparse live workspace per card. */
+export interface BoardPayload extends Board {
+  workspaces: Record<string, CardWorkspace>; // absent key = no live workspace
+}
+
 export interface TaskPatch {
   title?: string;
   note?: string;
   project?: string;
   lane?: string; // lane ref: id, id prefix, name prefix, or 1-based ordinal
   parent?: string | null; // task ref to attach under; null detaches
+  workspace?: string | null;
   priority?: Priority;
   blockedBy?: string[];
   index?: number; // 0-based position within the target lane; omit to append
@@ -234,6 +247,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   project TEXT NOT NULL DEFAULT '',
   parent_id TEXT REFERENCES tasks (id),
   previous_lane TEXT,
+  workspace TEXT,
   priority TEXT NOT NULL DEFAULT 'normal',
   position REAL NOT NULL,
   created_at INTEGER NOT NULL,
@@ -372,6 +386,7 @@ interface TaskRow {
   project: string;
   parent_id: string | null;
   previous_lane: string | null;
+  workspace: string | null;
   priority: string;
   position: number;
   created_at: number;
@@ -416,6 +431,7 @@ const rowToTask = (r: TaskRow): Task => ({
   project: r.project,
   parentId: r.parent_id,
   previousLane: r.previous_lane ?? null,
+  workspace: r.workspace ?? null,
   priority: (r.priority ?? "normal") as Priority,
   position: r.position,
   createdAt: r.created_at,
@@ -596,6 +612,7 @@ export class KanbanDb {
     this.ensureParentColumn();
     this.migratePriorityColumn();
     this.migratePreviousLaneColumn();
+    this.migrateWorkspaceColumn();
     this.db.exec(SCHEMA);
     this.seedLanes();
     this.ensureWaitingLane();
@@ -699,6 +716,15 @@ export class KanbanDb {
     const cols = this.q("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     if (!cols.some((col) => col.name === "previous_lane"))
       this.db.exec("ALTER TABLE tasks ADD COLUMN previous_lane TEXT");
+  }
+
+  /** Boards created before workspace existed need the column added once (nullable, no backfill). */
+  private migrateWorkspaceColumn(): void {
+    const table = this.q("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'").get();
+    if (!table) return; // fresh db: SCHEMA creates the table with the column
+    const cols = this.q("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!cols.some((col) => col.name === "workspace"))
+      this.db.exec("ALTER TABLE tasks ADD COLUMN workspace TEXT");
   }
 
   // boards created before the archive lane existed need it appended once
@@ -1048,10 +1074,23 @@ export class KanbanDb {
 
     const previousLane = laneId === WAITING_LANE_ID ? task.previousLane : null;
 
+    let workspace = task.workspace;
+    if (patch.workspace !== undefined) {
+      if (patch.workspace === null) {
+        workspace = null;
+      } else {
+        const trimmed = patch.workspace.trim();
+        if (!trimmed || trimmed.length > 200 || !/^\S+$/.test(trimmed)) {
+          throw new KanbanError("workspace must be a non-empty branch name without whitespace", "invalid");
+        }
+        workspace = trimmed;
+      }
+    }
+
     const now = Date.now();
     this.q(
       `UPDATE tasks SET
-        title = ?, note = ?, lane_id = ?, project = ?, parent_id = ?, previous_lane = ?, priority = ?, position = ?, updated_at = ?
+        title = ?, note = ?, lane_id = ?, project = ?, parent_id = ?, previous_lane = ?, workspace = ?, priority = ?, position = ?, updated_at = ?
       WHERE id = ?`,
     ).run(
       title ?? task.title,
@@ -1060,6 +1099,7 @@ export class KanbanDb {
       patch.project ?? task.project,
       parentId,
       previousLane,
+      workspace,
       priority,
       position,
       now,
