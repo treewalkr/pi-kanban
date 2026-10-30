@@ -842,4 +842,24 @@ test("kanban check on a clean board prints nothing and exits 0", async () => {
   expect(JSON.parse(jsonRes.stdout)).toEqual([]);
 });
 
+test("mv promotes a backlog card to plan; show and ls confirm", async () => {
+  const added = await cli("add", "promote me", "--lane", "backlog", "--json");
+  expect(added.code).toBe(0);
+  const task = JSON.parse(added.stdout) as Task;
+  expect(task.laneId).toBe("backlog");
+
+  const moved = await cli("mv", task.id, "plan");
+  expect(moved.code).toBe(0);
+  expect(moved.stdout).toContain("→ Plan");
+
+  const shown = await cli("show", task.id);
+  expect(shown.stdout).toMatch(/Plan \(plan\)/);
+
+  const listed = await cli("ls", "plan", "--json");
+  const planTasks = JSON.parse(listed.stdout) as Task[];
+  expect(planTasks).toHaveLength(1);
+  expect(planTasks[0].id).toBe(task.id);
+});
+
+
 
