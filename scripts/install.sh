@@ -3,6 +3,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Refuse to install from a git worktree: the bin symlink would point at the
+# worktree's code (and its own data/kanban.db), so `kanban serve` would come
+# up on a split-brain board (the 10/31 incident).
+if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
+  echo "refusing: $(pwd) is a git worktree — run install.sh from the main checkout" >&2
+  exit 1
+fi
+
 BIN_DIR="${HOME}/.bun/bin"
 mkdir -p "$BIN_DIR"
 chmod +x src/cli.ts
