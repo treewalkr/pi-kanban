@@ -7,4 +7,5 @@ data/
 # agent tooling
 .zcode/
 .playwright-cli/
+test-results/
 docs/
