@@ -62,7 +62,7 @@ under `[autoreview]`.
 
 | role | does |
 | --- | --- |
-| `pi-elaborator` | expands terse notes into intent + acceptance criteria (`--elaborate`, or ✨ in the composer) |
+| `pi-elaborator` | expands terse notes into intent + acceptance criteria (`--elaborate`, or ✨ in the composer, or ✨ inside an open card) |
 | `pi-planner` | plans every Plan-lane card from the [shared template](skills/pi-kanban/plan-template.md); asks `question` comments (with recommended defaults) when an answer would change the plan — the card parks in **Waiting on you** until you reply |
 | `pi-plan-reviewer` | checks each plan against the template checklist — block bounces to the planner (max 2 rounds), pass parks the card in **Waiting on you** |
 | **you** | `kanban approve` arms the builder; `reject --message` re-plans. The gate is human-only and works right from Waiting on you. |
