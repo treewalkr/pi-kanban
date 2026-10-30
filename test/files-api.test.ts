@@ -144,4 +144,26 @@ describe("Files & Git Status API routes", () => {
     const normalGet = await app.handle(new Request("http://localhost/files/content?path=hello.ts"));
     expect(normalGet.headers.get("content-disposition")).toBeNull();
   });
+
+  test("GET /files/raw serves bytes with content type and CSP; download attaches", async () => {
+    const app = createApp(db, { filesRoot: repoDir });
+
+    const rawRes = await app.handle(new Request("http://localhost/files/raw?path=hello.ts"));
+    expect(rawRes.status).toBe(200);
+    expect(rawRes.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(rawRes.headers.get("content-security-policy")).toBe("default-src 'none'");
+    expect(rawRes.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(rawRes.headers.get("content-disposition")).toBeNull();
+    const body = await rawRes.text();
+    expect(body).toBe("console.log('hi');\n");
+
+    const dlRes = await app.handle(
+      new Request("http://localhost/files/raw?path=hello.ts&download=1")
+    );
+    expect(dlRes.status).toBe(200);
+    expect(dlRes.headers.get("content-disposition")).toBe('attachment; filename="hello.ts"');
+
+    const escapeRes = await app.handle(new Request("http://localhost/files/raw?path=../escape"));
+    expect(escapeRes.status).toBe(400);
+  });
 });

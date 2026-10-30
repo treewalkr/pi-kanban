@@ -9,6 +9,39 @@ export interface FileEntry {
 
 export const PREVIEW_MAX_BYTES = 512 * 1024;
 
+const CONTENT_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  pdf: "application/pdf",
+  txt: "text/plain; charset=utf-8",
+  md: "text/plain; charset=utf-8",
+  json: "text/plain; charset=utf-8",
+  ts: "text/plain; charset=utf-8",
+  tsx: "text/plain; charset=utf-8",
+  js: "text/plain; charset=utf-8",
+  mjs: "text/plain; charset=utf-8",
+  cjs: "text/plain; charset=utf-8",
+  css: "text/plain; charset=utf-8",
+  html: "text/plain; charset=utf-8",
+  xml: "text/plain; charset=utf-8",
+  yml: "text/plain; charset=utf-8",
+  yaml: "text/plain; charset=utf-8",
+  toml: "text/plain; charset=utf-8",
+  sh: "text/plain; charset=utf-8",
+};
+
+export function contentTypeFor(name: string): string {
+  const ext = path.extname(name).slice(1).toLowerCase();
+  return CONTENT_TYPES[ext] ?? "application/octet-stream";
+}
+
 export const EXT_TO_HLJS: Record<string, string> = {
   ts: "typescript",
   tsx: "typescript",
@@ -102,6 +135,23 @@ export async function listFiles(root: string, dirPath: string): Promise<FileEntr
   );
 
   return entries;
+}
+
+export async function rawFilePath(root: string, relPath: string): Promise<string> {
+  const target = resolveSafe(root, relPath);
+  let s: Stats;
+  try {
+    s = statSync(target);
+  } catch (err: any) {
+    if (err.code === "ENOENT" || err.code === "ENOTDIR") {
+      throw new KanbanError(`no such file: '${relPath}'`, "not-found");
+    }
+    throw err;
+  }
+  if (s.isDirectory()) {
+    throw new KanbanError(`no such file: '${relPath}'`, "not-found");
+  }
+  return target;
 }
 
 export async function readFile(
