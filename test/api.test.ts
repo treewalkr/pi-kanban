@@ -779,3 +779,27 @@ test("/activity carries the resolved model per session", async () => {
   handle.stop();
   for (const f of finishes) f();
 });
+
+test("PATCH /tasks/:id {lane:'plan'} moves a backlog card; /board reflects it", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "one", lane: "backlog" });
+
+  const res = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lane: "plan" }),
+    }),
+  );
+  expect(res.status).toBe(200);
+  const updated = (await res.json()) as { laneId: string };
+  expect(updated.laneId).toBe("plan");
+
+  const boardRes = await app.handle(new Request("http://localhost/board"));
+  expect(boardRes.status).toBe(200);
+  const board = (await boardRes.json()) as { tasks: Array<{ id: string; laneId: string }> };
+  const boardTask = board.tasks.find((t) => t.id === task.id);
+  expect(boardTask).toBeDefined();
+  expect(boardTask?.laneId).toBe("plan");
+});
+
