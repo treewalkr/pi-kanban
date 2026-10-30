@@ -31,6 +31,8 @@ hljs.registerLanguage("typescript", typescript);
 hljs.registerLanguage("xml", xml);
 hljs.registerLanguage("yaml", yaml);
 
+export { hljs };
+
 marked.use({
   gfm: true,
   breaks: true,

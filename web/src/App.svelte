@@ -7,11 +7,13 @@
   import ListView from "./lib/ListView.svelte";
   import TaskDetail from "./lib/TaskDetail.svelte";
   import TaskEditor from "./lib/TaskEditor.svelte";
+  import FilePreview from "./lib/FilePreview.svelte";
   import AddLane from "./lib/AddLane.svelte";
   import SearchBox from "./lib/SearchBox.svelte";
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import { theme, setTheme } from "./lib/theme.svelte";
+  import { files } from "./lib/files.svelte";
   import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu } from "@lucide/svelte";
   import { wheelPan } from "./lib/wheel";
 
@@ -241,6 +243,10 @@
         <TaskDetail />
       {/if}
     {/key}
+  {/if}
+
+  {#if files.preview}
+    <FilePreview />
   {/if}
 
   {#if agents.open}

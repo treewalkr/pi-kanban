@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { FilesStore, joinPath } from "../web/src/lib/files.svelte";
 
 describe("FilesStore (web/src/lib/files.svelte.ts)", () => {
@@ -229,5 +231,20 @@ describe("FilesStore (web/src/lib/files.svelte.ts)", () => {
       language: "plaintext",
       error: "file exceeds preview limit",
     });
+  });
+
+  test("FilePreview markup and app.css width contract", () => {
+    const appCss = readFileSync(join(import.meta.dir, "..", "web", "src", "app.css"), "utf-8");
+    expect(appCss).toContain(".editor.preview");
+    expect(appCss).toContain("width: min(760px, 100%)");
+
+    const previewSource = readFileSync(
+      join(import.meta.dir, "..", "web", "src", "lib", "FilePreview.svelte"),
+      "utf-8"
+    );
+    expect(previewSource).toContain('aria-label="copy path"');
+    expect(previewSource).toContain('aria-label="close preview"');
+    expect(previewSource).toContain("files.closePreview()");
+    expect(previewSource).toContain("renderMarkdown(preview.content)");
   });
 });

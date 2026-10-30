@@ -2627,6 +2627,104 @@ button.id-copy {
   width: min(720px, 90vw);
 }
 
+/* ---------- file preview dialog ---------- */
+
+.editor.preview {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 40px);
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.preview-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.preview-copy-btn,
+.preview-close-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.preview-copy-btn:hover,
+.preview-close-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.preview-close-btn {
+  width: 24px;
+  padding: 0;
+  justify-content: center;
+}
+
+.preview-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.preview-code {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.preview-content.md {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.preview-error {
+  color: #f87171;
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+
 .detail-head {
   display: flex;
   align-items: center;
