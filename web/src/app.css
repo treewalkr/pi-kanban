@@ -1212,6 +1212,10 @@ button.id-copy {
   color: var(--accent);
 }
 
+.id-copy.failed {
+  color: var(--error);
+}
+
 .chip {
   max-width: 130px;
   overflow: hidden;
