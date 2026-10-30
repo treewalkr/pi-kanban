@@ -67,3 +67,57 @@ describe("sidebar drawer clamp (app.css)", () => {
     expect(clampRule!.style.minWidth).toBe("0px");
   });
 });
+
+describe("touch affordances (app.css)", () => {
+  test("hover-gated controls are always visible without hover", () => {
+    const dom = getDom();
+    const media = findMediaRule(dom, "(hover: none)");
+    expect(media).toBeDefined();
+
+    const innerRules = Array.from(media!.cssRules) as CSSStyleRule[];
+    const laneToolsRule = innerRules.find((r) => r.selectorText === ".lane-tools");
+    expect(laneToolsRule).toBeDefined();
+    expect(laneToolsRule!.style.opacity).toBe("1");
+
+    const promoteRule = innerRules.find((r) => r.selectorText === ".promote");
+    expect(promoteRule).toBeDefined();
+    expect(promoteRule!.style.opacity).toBe("1");
+    expect(promoteRule!.style.pointerEvents).toBe("auto");
+  });
+
+  test("small controls are bumped to 24px+ targets", () => {
+    const dom = getDom();
+    const media = findMediaRule(dom, "(hover: none)");
+    expect(media).toBeDefined();
+
+    const innerRules = Array.from(media!.cssRules) as CSSStyleRule[];
+
+    const btnGroup = innerRules.find(
+      (r) =>
+        r.selectorText ===
+        ".lane-tools button, .view-toggle button, .chips button",
+    );
+    expect(btnGroup).toBeDefined();
+    expect(btnGroup!.style.height).toBe("28px");
+
+    const themeToggle = innerRules.find((r) => r.selectorText === ".theme-toggle");
+    expect(themeToggle).toBeDefined();
+    expect(themeToggle!.style.width).toBe("32px");
+    expect(themeToggle!.style.height).toBe("32px");
+
+    const sidebarToggle = innerRules.find(
+      (r) => r.selectorText === ".sidebar-toggle",
+    );
+    expect(sidebarToggle).toBeDefined();
+    expect(sidebarToggle!.style.width).toBe("40px");
+    expect(sidebarToggle!.style.height).toBe("40px");
+
+    const idCopy = innerRules.find((r) => r.selectorText === ".id-copy");
+    expect(idCopy).toBeDefined();
+    expect(idCopy!.style.padding).toBe("6px");
+
+    const disclosure = innerRules.find((r) => r.selectorText === ".disclosure");
+    expect(disclosure).toBeDefined();
+    expect(disclosure!.style.padding).toBe("7px 4px");
+  });
+});
