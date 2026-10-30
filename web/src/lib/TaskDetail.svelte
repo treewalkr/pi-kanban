@@ -146,13 +146,30 @@
   // finished agent sessions saved on the card (live one renders above these)
   let sessionLogs = $state<Attachment[]>([]);
 
+  async function reloadThread(): Promise<void> {
+    const [commentsRes, sessionsRes] = await Promise.all([
+      api.tasks({ id: task.id }).comments.get(),
+      api.tasks({ id: task.id }).sessions.get(),
+    ]);
+    if (!commentsRes.error) comments = commentsRes.data;
+    if (!sessionsRes.error) sessionLogs = sessionsRes.data;
+  }
+
   $effect(() => {
-    api.tasks({ id: task.id }).comments.get().then(({ data, error }) => {
-      if (!error) comments = data;
-    });
-    api.tasks({ id: task.id }).sessions.get().then(({ data, error }) => {
-      if (!error) sessionLogs = data;
-    });
+    void reloadThread();
+  });
+
+  // finished-session pickup: an open card doesn't ride the SSE refresh (paused
+  // while a modal is open) — pull the board and thread when this card's live
+  // session ends, so the elaborated note appears without closing the card
+  let hadLive = false;
+  $effect(() => {
+    const running = live !== undefined;
+    if (hadLive && !running) {
+      void board.refresh();
+      void reloadThread();
+    }
+    hadLive = running;
   });
 
   async function addComment() {
@@ -388,6 +405,12 @@
           {#if plan}<button class="ghost approve" onclick={approve}>✓ approve plan</button>{/if}
           <button class="ghost reject" onclick={() => (rejecting = true)}>✗ reject</button>
         {/if}
+      {/if}
+      {#if !queuedJob && !live}
+        <button
+          class="ghost"
+          title="queue a pi-elaborator session to expand the note (intent + acceptance criteria)"
+          onclick={() => board.elaborate(me.id)}>✨ elaborate</button>
       {/if}
       <span class="spacer"></span>
       {#if canPromote}

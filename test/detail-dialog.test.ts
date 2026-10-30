@@ -41,3 +41,46 @@ describe("card detail dialog width (app.css)", () => {
     expect(computed.maxWidth).toBe("100%");
   });
 });
+
+const taskDetailPath = join(import.meta.dir, "..", "web", "src", "lib", "TaskDetail.svelte");
+const taskDetailSource = readFileSync(taskDetailPath, "utf-8");
+
+describe("elaborate button: rendered in the footer, hidden while queued or live, wired only to board.elaborate", () => {
+  test("rendered in footer, hidden while queued or live, wired only to board.elaborate", () => {
+    expect(taskDetailSource).toContain("{#if !queuedJob && !live}");
+    expect(taskDetailSource).toContain('title="queue a pi-elaborator session to expand the note (intent + acceptance criteria)"');
+    expect(taskDetailSource).toContain(">✨ elaborate</button>");
+
+    const editorActionsIdx = taskDetailSource.indexOf('<div class="editor-actions">');
+    expect(editorActionsIdx).toBeGreaterThan(-1);
+
+    const atPlanGateIdx = taskDetailSource.indexOf("{#if atPlanGate}", editorActionsIdx);
+    expect(atPlanGateIdx).toBeGreaterThan(editorActionsIdx);
+
+    const btnIdx = taskDetailSource.indexOf("board.elaborate(me.id)", atPlanGateIdx);
+    expect(btnIdx).toBeGreaterThan(atPlanGateIdx);
+
+    const spacerIdx = taskDetailSource.indexOf('<span class="spacer"></span>', btnIdx);
+    expect(spacerIdx).toBeGreaterThan(btnIdx);
+
+    const match = taskDetailSource.match(/onclick=\{([^}]+)\}>✨ elaborate<\/button>/);
+    expect(match).not.toBeNull();
+    const onclickContent = match![1];
+    expect(onclickContent.trim()).toBe("() => board.elaborate(me.id)");
+    expect(onclickContent).not.toContain("approve");
+    expect(onclickContent).not.toContain("reject");
+    expect(onclickContent).not.toContain("toLane");
+    expect(onclickContent).not.toContain("updateTask");
+  });
+});
+
+describe("open card reloads board and thread when its live session ends", () => {
+  test("defines reloadThread, falling-edge effect, and retains queued/live panels", () => {
+    expect(taskDetailSource).toMatch(/async function reloadThread\(\): Promise<void>/);
+    expect(taskDetailSource).toMatch(/\$effect\(\(\) => \{\s*void reloadThread\(\);\s*\}\);/);
+    expect(taskDetailSource).toContain("let hadLive = false;");
+    expect(taskDetailSource).toMatch(/if \(hadLive && !running\) \{\s*void board\.refresh\(\);\s*void reloadThread\(\);\s*\}/);
+    expect(taskDetailSource).toContain("detail-activity queued");
+    expect(taskDetailSource).toContain("roleAuthor(live.role)");
+  });
+});
