@@ -16,6 +16,9 @@ const emptyConfigs = (): Record<AgentRole, AgentConfig> => ({
 
 export type SettingsSection = "general" | "agents" | "pools";
 
+export const DEBOUNCE_MS = 800;
+export type AgentSaveState = "idle" | "saving" | "saved" | "failed";
+
 /** Per-role agent settings for the auto-agent loop; failures surface via the board toast. */
 class AgentsStore {
   open = $state(false);
@@ -30,6 +33,14 @@ class AgentsStore {
   skills = $state<CatalogSkill[]>([]);
   /** Board-level agent-loop pause: no process spawns (or re-spawns) sessions while set. */
   paused = $state(false);
+  saveState = $state<AgentSaveState>("idle");
+
+  private inFlight: Promise<boolean> | null = null;
+  private inFlightVersion = 0;
+  private pending: { role: AgentRole; get: () => AgentConfig } | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private wasFailed = false;
+  private editVersion = 0;
 
   private fail(error: EdenError): void {
     const value = error.value as { error?: string } | undefined;
@@ -43,6 +54,15 @@ class AgentsStore {
   }
 
   async load(): Promise<void> {
+    this.saveState = "idle";
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.pending = null;
+    this.inFlight = null;
+    this.wasFailed = false;
+    this.editVersion = 0;
     const [agents, models, pause, catalog] = await Promise.all([
       api.agents.get(),
       api["pi-models"].get(),
@@ -72,13 +92,98 @@ class AgentsStore {
   }
 
   async save(role: AgentRole, config: AgentConfig): Promise<boolean> {
+    this.saveState = "saving";
     const { error } = await api.agents({ role }).put(config);
     if (error) {
       this.fail(error);
+      this.saveState = "failed";
       return false;
     }
     this.configs[role] = config;
+    this.saveState = "saved";
     return true;
+  }
+
+  /** Register a dirty edit for `role`; re-arms the DEBOUNCE_MS timer. */
+  schedule(role: AgentRole, config: () => AgentConfig): void {
+    if (this.saveState === "failed") {
+      this.wasFailed = true;
+    }
+    this.editVersion++;
+    this.pending = { role, get: config };
+    this.saveState = "saving";
+    if (this.timer) {
+      clearTimeout(this.timer);
+    }
+    this.timer = setTimeout(() => {
+      void this.flush();
+    }, DEBOUNCE_MS);
+  }
+
+  /** Save the pending config now (clears the timer). True = saved or nothing pending; false = save failed (pending re-armed). Awaits any in-flight save first. */
+  async flush(): Promise<boolean> {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+
+    if (this.inFlight) {
+      const flightVer = this.inFlightVersion;
+      const ok = await this.inFlight;
+      if (this.editVersion === flightVer) {
+        return ok;
+      }
+    }
+
+    if (!this.pending) {
+      return true;
+    }
+
+    const { role, get } = this.pending;
+    this.pending = null;
+    const attemptedConfig = get();
+    const versionAtStart = this.editVersion;
+    const recovering = this.wasFailed || this.saveState === "failed";
+
+    this.saveState = "saving";
+    this.inFlightVersion = versionAtStart;
+
+    let savePromise: Promise<boolean> | null = null;
+    savePromise = (async () => {
+      try {
+        const ok = await this.save(role, attemptedConfig);
+        if (ok) {
+          this.saveState = "saved";
+          if (recovering) {
+            board.error = "";
+            this.wasFailed = false;
+          }
+          return true;
+        } else {
+          this.saveState = "failed";
+          this.wasFailed = true;
+          if (!this.pending || this.editVersion === versionAtStart) {
+            this.pending = { role, get: () => attemptedConfig };
+          }
+          return false;
+        }
+      } finally {
+        if (this.inFlight === savePromise) {
+          this.inFlight = null;
+        }
+      }
+    })();
+
+    this.inFlight = savePromise;
+    return savePromise;
+  }
+
+  /** Modal close path: flush → on success open=false and saveState="idle"; on failure modal stays open. */
+  async close(): Promise<void> {
+    const ok = await this.flush();
+    if (!ok) return;
+    this.saveState = "idle";
+    this.open = false;
   }
 }
 
