@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type AgentRole, type Attachment, type Board, type Comment, type Lane, type Task, type WorkerPool } from "./db";
+import { KanbanDb, KanbanError, defaultDbPath, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardStatsPayload, type Comment, type Lane, type Task, type WorkerPool } from "./db";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
@@ -133,6 +133,7 @@ export const createApp = (
       },
     )
     .get("/board", (): Board => db.board())
+    .get("/stats", (): BoardStatsPayload => db.boardStats())
     .post(
       "/tasks/:id/plan",
       ({ params, body, status }): Attachment | unknown => {

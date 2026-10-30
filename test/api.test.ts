@@ -808,3 +808,55 @@ test("PATCH /tasks/:id {lane:'plan'} moves a backlog card; /board reflects it", 
   expect(boardTask?.laneId).toBe("plan");
 });
 
+test("GET /stats returns the board payload", async () => {
+  const app = createApp(db);
+  const res = await app.handle(new Request("http://localhost/stats"));
+  expect(res.status).toBe(200);
+  const data = (await res.json()) as any;
+  expect(data.board).toBeDefined();
+  expect(data.board.wip).toBe(0);
+  expect(data.board.throughput).toHaveLength(8);
+  expect(data.board.laneDwell).toEqual({});
+  expect(data.board.projects).toEqual([]);
+  expect(data.board.cycleAvgMs).toBeNull();
+  expect(data.cards).toEqual({});
+  expect(typeof data.generatedAt).toBe("number");
+});
+
+test("PATCH lane change (drag-drop path) records a lane event visible via /stats", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "card", lane: "backlog" });
+
+  const eventsBefore = db.laneEvents(task.id);
+  expect(eventsBefore).toHaveLength(1);
+
+  // Index-only patch: adds no event
+  const indexPatch = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ index: 0 }),
+    }),
+  );
+  expect(indexPatch.status).toBe(200);
+  expect(db.laneEvents(task.id)).toHaveLength(1);
+
+  // Lane patch (drag-drop path)
+  const lanePatch = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lane: "plan" }),
+    }),
+  );
+  expect(lanePatch.status).toBe(200);
+  expect(db.laneEvents(task.id)).toHaveLength(2);
+
+  const statsRes = await app.handle(new Request("http://localhost/stats"));
+  expect(statsRes.status).toBe(200);
+  const payload = (await statsRes.json()) as any;
+  const cardStats = payload.cards[task.id];
+  expect(cardStats).toBeDefined();
+  expect(cardStats.laneTimes.map((lt: any) => lt.laneId)).toEqual(["backlog", "plan"]);
+});
+
