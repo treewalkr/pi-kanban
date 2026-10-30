@@ -5,6 +5,8 @@
   import PathLabel from "./PathLabel.svelte";
   import Dropdown from "./Dropdown.svelte";
   import { Check, ChevronDown, FolderOpen, GitBranch, Loader2, Plus, Search } from "@lucide/svelte";
+  import { formatRelativeTime, roleVerb } from "./util";
+  import type { AgentRole } from "../../../src/db";
 
   // ---------- header: new card + search ----------
 
@@ -75,6 +77,41 @@
     const error = await ui.checkoutGit(branch);
     if (error) board.error = error; // git's own refusal (e.g. dirty tree) lands in the error bar
   }
+
+  // ---------- queue: cards waiting on you + live agent sessions ----------
+
+  // relative times go stale between SSE refreshes — tick them back to life once a minute
+  let now = $state(Date.now());
+  $effect(() => {
+    const timer = setInterval(() => (now = Date.now()), 60_000);
+    return () => clearInterval(timer);
+  });
+
+  const WAITING_REASONS: Record<string, string> = {
+    gate: "plan gate",
+    question: "asked a question",
+    rerun: "needs a re-run",
+    capped: "review cap",
+    dead: "dead session",
+  };
+
+  const waitingQueue = $derived(
+    board.tasks
+      .filter((t) => t.laneId === "waiting")
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((t) => ({ task: t, reason: board.waiting[t.id] ?? "waiting" })),
+  );
+
+  // live sessions win over queued jobs for the same card — one row per card
+  const runningQueue = $derived.by(() => {
+    const rows: { taskId: string; role: AgentRole; startedAt: number; label: string; queued: boolean }[] = [];
+    for (const s of Object.values(board.activity))
+      rows.push({ taskId: s.taskId, role: s.role, startedAt: s.startedAt, label: s.modelLabel ?? "", queued: false });
+    const live = new Set(rows.map((r) => r.taskId));
+    for (const q of Object.values(board.queued))
+      if (!live.has(q.taskId)) rows.push({ taskId: q.taskId, role: q.role, startedAt: q.enqueuedAt, label: "", queued: true });
+    return rows.sort((a, b) => a.startedAt - b.startedAt);
+  });
 </script>
 
 <div class="sidebar-head">
@@ -212,4 +249,57 @@
   {/if}
 </div>
 
-<div class="sidebar-body"></div>
+<div class="sidebar-body">
+  {#if waitingQueue.length > 0}
+    <div class="queue-group">waiting on you</div>
+    {#each waitingQueue as { task, reason } (task.id)}
+      <button
+        class="queue-row"
+        class:selected={board.editing?.id === task.id}
+        title={task.title}
+        onclick={() => board.openCard(task)}
+      >
+        <span class="queue-glyph" aria-hidden="true">☉</span>
+        <span class="queue-main">
+          <span class="queue-title">{task.title}</span>
+          <span class="queue-meta">
+            <span>{formatRelativeTime(task.updatedAt, now)}</span>
+            <span>{WAITING_REASONS[reason] ?? reason}</span>
+          </span>
+        </span>
+      </button>
+    {/each}
+  {:else}
+    <div class="queue-empty">nothing waits on you</div>
+  {/if}
+
+  {#if runningQueue.length > 0}
+    <div class="queue-group">running</div>
+    {#each runningQueue as row (row.taskId)}
+      {@const task = board.taskById(row.taskId)}
+      <button
+        class="queue-row"
+        class:selected={board.editing?.id === row.taskId}
+        title={task?.title ?? row.taskId}
+        onclick={() => task && board.openCard(task)}
+      >
+        <span class="queue-glyph" aria-hidden="true">
+          {#if row.queued}
+            ⧗
+          {:else}
+            <Loader2 class="spin" size={13} strokeWidth={2} />
+          {/if}
+        </span>
+        <span class="queue-main">
+          <span class="queue-title">{task?.title ?? row.taskId}</span>
+          <span class="queue-meta">
+            <span>
+              {#if row.queued}queued · {roleVerb(row.role)}{:else}{roleVerb(row.role)}{/if}{row.label ? ` · ${row.label}` : ""}
+            </span>
+            <span>{formatRelativeTime(row.startedAt, now)}</span>
+          </span>
+        </span>
+      </button>
+    {/each}
+  {/if}
+</div>
