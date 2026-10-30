@@ -138,6 +138,10 @@ test("elaboration request spawns one elaborator with the fixed prompt", async ()
   expect(job.prompt).toContain("You are pi-elaborator.");
   expect(job.prompt).toContain(card.id);
   expect(job.prompt).toContain(`kanban edit ${card.id} --note`);
+  // The elaborator may correct an obviously broken title, and only that.
+  expect(job.prompt).toContain('--title "<the corrected title>"');
+  expect(job.prompt).toContain("same meaning, same scope");
+  expect(job.prompt).not.toContain("keep the title unchanged");
   expect(job.prompt).toContain("--author pi-elaborator");
   expect(w.elaborationRequests()).toEqual([]);
 

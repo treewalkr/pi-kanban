@@ -266,7 +266,7 @@ export function resumePrompt(task: Task, role: AgentRole, reason: string): strin
     "plan-reviewer": `; then record exactly one verdict: kanban plan-review ${task.id} (--pass | --block --message "<summary>" [--finding "<checklist hit>"]…) --author pi-plan-reviewer`,
     reviewer: `; then record exactly one verdict: kanban review ${task.id} (--approve | --block --message "<summary>" [--finding "<file:line — issue>"]…) --author pi-reviewer`,
     builder: `; then hand off: kanban handoff ${task.id} review --message "<what you built · test status>" --author pi-builder`,
-    elaborator: `; then finish: kanban edit ${task.id} --note "<the elaborated note>" and kanban comment ${task.id} "elaborated — note now carries intent + acceptance criteria" --author pi-elaborator`,
+    elaborator: `; then finish: kanban edit ${task.id} --note "<the elaborated note>" (--title "<the corrected title>" too, if the title still needs its fix) and kanban comment ${task.id} "elaborated — note now carries intent + acceptance criteria" --author pi-elaborator`,
   };
   return `You are ${AUTHOR_BY_ROLE[role]}. Your previous session on kanban card ${task.id} "${task.title}" died before finishing (${reason}) — this spawn continues that same session, so your earlier context is intact: pick up where you left off, do not restart from scratch.
 
@@ -285,12 +285,13 @@ export function elaboratorPrompt(task: Task): string {
 2. Write the elaborated note with exactly two sections, markdown:
    Intent: one or two sentences on what this card wants and why — the title's plain meaning, no invented scope.
    Acceptance criteria: 2-6 numbered lines starting AC1, AC2, … each concrete and observable from the outside.
-   If the card already has a note, it is the seed: preserve every fact it states inside the elaborated note. Do not invent file paths, APIs, or features; keep the title unchanged.
-3. Save it: kanban edit ${task.id} --note "<the elaborated note>"
-4. Record it: kanban comment ${task.id} "elaborated — note now carries intent + acceptance criteria" --author pi-elaborator
+   If the card already has a note, it is the seed: preserve every fact it states inside the elaborated note. Do not invent file paths, APIs, or features.
+3. Fix the title only if it is obviously broken — typos, speech-to-text garble, mangled words. Correct it to what was clearly meant: same meaning, same scope, no rewording for style. A title that reads fine stays untouched.
+4. Save it: kanban edit ${task.id} --note "<the elaborated note>" — add --title "<the corrected title>" to the same edit when you fixed the title
+5. Record it: kanban comment ${task.id} "elaborated — note now carries intent + acceptance criteria" --author pi-elaborator
 
 Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate.
-Your last line: one sentence on what the note now covers.`;
+Your last line: one sentence on what the note now covers (and the title fix, if you made one).`;
 }
 
 export function plannerPrompt(task: Task, now: number = Date.now()): string {

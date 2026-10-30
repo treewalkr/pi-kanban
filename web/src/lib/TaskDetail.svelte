@@ -409,7 +409,7 @@
       {#if !queuedJob && !live}
         <button
           class="ghost"
-          title="queue a pi-elaborator session to expand the note (intent + acceptance criteria)"
+          title="queue a pi-elaborator session to expand the note (intent + acceptance criteria) and fix an obviously broken title"
           onclick={() => board.elaborate(me.id)}>✨ elaborate</button>
       {/if}
       <span class="spacer"></span>

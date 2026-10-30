@@ -45,8 +45,8 @@
     <button
       class="ghost icon-only"
       aria-pressed={elaborate}
-      aria-label="toggle elaboration — queue a pi-elaborator session to expand the note"
-      title="queue a pi-elaborator session to expand the note (intent + acceptance criteria)"
+      aria-label="toggle elaboration — queue a pi-elaborator session to expand the note and fix a broken title"
+      title="queue a pi-elaborator session to expand the note (intent + acceptance criteria) and fix an obviously broken title"
       onclick={() => (elaborate = !elaborate)}>
       <Sparkles size={13} strokeWidth={1.75} fill={elaborate ? "currentColor" : "none"} />
     </button>
