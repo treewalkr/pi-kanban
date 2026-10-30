@@ -861,5 +861,47 @@ test("mv promotes a backlog card to plan; show and ls confirm", async () => {
   expect(planTasks[0].id).toBe(task.id);
 });
 
+test("kanban stats: board + card modes, --json roundtrip", async () => {
+  // Usage error on multiple arguments
+  const bad = await cli("stats", "a", "b");
+  expect(bad.code).toBe(1);
+  expect(bad.stderr).toContain("usage: kanban stats [id]");
+
+  // Board mode --json
+  const boardJsonRes = await cli("stats", "--json");
+  expect(boardJsonRes.code).toBe(0);
+  const boardPayload = JSON.parse(boardJsonRes.stdout);
+  expect(typeof boardPayload.board.wip).toBe("number");
+  expect(boardPayload.board.throughput).toHaveLength(8);
+
+  // Human board mode
+  const boardHuman = await cli("stats");
+  expect(boardHuman.code).toBe(0);
+  expect(boardHuman.stdout).toContain("wip:");
+  expect(boardHuman.stdout).toContain("throughput (done/week):");
+  expect(boardHuman.stdout).toContain("lane dwell:");
+  expect(boardHuman.stdout).toContain("projects:");
+
+  // Create a card and test card mode
+  const addRes = await cli("add", "stats test card", "--lane", "plan", "--json");
+  const task = JSON.parse(addRes.stdout) as Task;
+
+  // Card mode --json
+  const cardJsonRes = await cli("stats", task.id, "--json");
+  expect(cardJsonRes.code).toBe(0);
+  const cardStats = JSON.parse(cardJsonRes.stdout);
+  expect(cardStats.taskId).toBe(task.id);
+  expect(Array.isArray(cardStats.laneTimes)).toBe(true);
+  expect(typeof cardStats.cycleMs).toBe("number");
+
+  // Human card mode
+  const cardHuman = await cli("stats", task.id);
+  expect(cardHuman.code).toBe(0);
+  expect(cardHuman.stdout).toContain("cycle:");
+  expect(cardHuman.stdout).toContain("gate wait:");
+  expect(cardHuman.stdout).toContain("lane times:");
+  expect(cardHuman.stdout).toContain("loop health:");
+});
+
 
 

@@ -1,6 +1,6 @@
-import type { Comment, KanbanDb, Lane, Task } from "./db";
+import type { BoardStatsPayload, CardStats, Comment, KanbanDb, Lane, Task } from "./db";
 import type { SearchResult } from "./search";
-import { clockTime, KIND_TAG_COLORS, latestStateIndex, relTime, shortDate, wrapText } from "./thread";
+import { clockTime, formatDuration, KIND_TAG_COLORS, latestStateIndex, relTime, shortDate, wrapText } from "./thread";
 
 const enabled = !!process.stdout.isTTY && !process.env.NO_COLOR;
 
@@ -259,4 +259,71 @@ export function laneList(db: KanbanDb): string {
       return `${c.dim(`${i + 1}.`)} ${c.hex(laneColor(i), l.name)}${c.dim(` (${l.id})`)}  ${n}${fixed}`;
     })
     .join("\n");
+}
+
+export function statsCard(db: KanbanDb, task: Task, stats: CardStats): string {
+  const lanes = db.lanes();
+  const laneMap = new Map(lanes.map((l) => [l.id, l.name]));
+  const currentLaneName = laneMap.get(task.laneId) ?? task.laneId;
+
+  const out: string[] = [
+    c.bold(task.title),
+    `${c.dim("id:")}           ${c.dim(task.id)}`,
+    `${c.dim("cycle:")}        ${formatDuration(stats.cycleMs)} ${stats.reachedDone ? "(created → first done)" : "(created → now, not done yet)"}`,
+    `${c.dim("current lane:")} ${currentLaneName} ${formatDuration(stats.currentLaneMs)}`,
+    `${c.dim("gate wait:")}    ${formatDuration(stats.gateWaitMs)}`,
+  ];
+
+  if (stats.reviewToDoneMs !== null) {
+    out.push(`${c.dim("review → done:")} ${formatDuration(stats.reviewToDoneMs)}`);
+  }
+
+  out.push(c.dim("lane times:"));
+  for (const lt of stats.laneTimes) {
+    const name = laneMap.get(lt.laneId) ?? lt.laneId;
+    out.push(`  ${name} · ${formatDuration(lt.ms)}`);
+  }
+
+  const loopHealth = `${stats.planReviewBlocks} plan-review blocks · ${stats.reviewBlocks} review blocks · ${stats.cappedHits} cap hits · ${stats.planVersions} plan versions · ${stats.sessions.count} sessions (${formatDuration(stats.sessions.totalMs)})`;
+  out.push(`${c.dim("loop health:")} ${loopHealth}`);
+
+  return out.join("\n");
+}
+
+export function statsBoard(db: KanbanDb, payload: BoardStatsPayload): string {
+  const lanes = db.lanes();
+  const laneMap = new Map(lanes.map((l) => [l.id, l.name]));
+
+  const wipLine =
+    payload.board.cycleAvgMs !== null
+      ? `${c.dim("wip:")} ${payload.board.wip} · avg cycle ${formatDuration(payload.board.cycleAvgMs)}`
+      : `${c.dim("wip:")} ${payload.board.wip}`;
+
+  const out: string[] = [wipLine];
+
+  out.push(c.dim("throughput (done/week):"));
+  for (const tw of payload.board.throughput) {
+    out.push(`  ${shortDate(tw.weekStart, payload.generatedAt)} · ${tw.done}`);
+  }
+
+  out.push(c.dim("lane dwell:"));
+  for (const lane of lanes) {
+    const dwell = payload.board.laneDwell[lane.id];
+    if (dwell) {
+      out.push(`  ${lane.name} · ${formatDuration(dwell.avgMs)} avg · ${dwell.cards} cards`);
+    }
+  }
+  for (const [laneId, dwell] of Object.entries(payload.board.laneDwell)) {
+    if (!laneMap.has(laneId)) {
+      out.push(`  ${laneId} · ${formatDuration(dwell.avgMs)} avg · ${dwell.cards} cards`);
+    }
+  }
+
+  out.push(c.dim("projects:"));
+  for (const p of payload.board.projects) {
+    const projName = p.project === "" ? "(none)" : p.project;
+    out.push(`  ${projName} · ${p.total} total · ${p.active} active · ${p.done} done`);
+  }
+
+  return out.join("\n");
 }

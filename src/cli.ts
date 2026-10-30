@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { KanbanDb, KanbanError, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
-import { c, commentLine, commentThread, laneList, listLanes, searchResults, taskDetail, taskLine } from "./render";
+import { c, commentLine, commentThread, laneList, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
 import { searchBoard } from "./search";
 
 const VERSION = "0.6.0";
@@ -33,6 +33,7 @@ usage:
   kanban done <id>
   kanban archive <id>                        (undo: mv <id> <lane>)
   kanban check [--json]                     (board-health lint: done parents w/ active children, children behind parent, planless build cards; advisory, exit 0)
+  kanban stats [id]                     (board summary, or one card's lane times / cycle / gate metrics)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
   kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force]
   kanban serve [--port <n>] [--open] [--auto-review]
@@ -548,6 +549,23 @@ async function main(): Promise<number> {
           }
           console.log(c.hex("#d29922", line));
         }
+        return 0;
+      }
+
+      case "stats": {
+        if (positional.length > 1) {
+          throw new KanbanError("usage: kanban stats [id] [--json]", "invalid");
+        }
+        if (positional.length === 1) {
+          const task = db.resolveTask(positional[0]);
+          const stats = db.cardStats(task.id);
+          if (json) jsonOut(stats);
+          else console.log(statsCard(db, task, stats));
+          return 0;
+        }
+        const payload = db.boardStats();
+        if (json) jsonOut(payload);
+        else console.log(statsBoard(db, payload));
         return 0;
       }
 

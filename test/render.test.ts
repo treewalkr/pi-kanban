@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Comment } from "../src/db";
-import { commentThread, listLanes, taskDetail } from "../src/render";
+import { commentThread, listLanes, statsBoard, statsCard, taskDetail } from "../src/render";
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -238,6 +238,36 @@ describe("commentThread CLI renderer", () => {
       const lanesOut = stripAnsi(listLanes(db));
       expect(lanesOut).not.toContain("claude-x");
       expect(lanesOut).not.toContain("thinking high");
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("statsCard and statsBoard human renderers format fields properly", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kanban-render-stats-"));
+    const db = new KanbanDb(join(dir, "t.db"));
+    try {
+      const card = db.createTask({ title: "card stats test", lane: "plan" });
+      const cardStats = db.cardStats(card.id, card.createdAt + 60_000);
+      const cardOut = stripAnsi(statsCard(db, card, cardStats));
+      expect(cardOut).toContain("card stats test");
+      expect(cardOut).toContain(`id:           ${card.id}`);
+      expect(cardOut).toContain("cycle:        1m (created → now, not done yet)");
+      expect(cardOut).toContain("current lane: Plan 1m");
+      expect(cardOut).toContain("gate wait:    1m");
+      expect(cardOut).toContain("lane times:");
+      expect(cardOut).toContain("Plan · 1m");
+      expect(cardOut).toContain("loop health: 0 plan-review blocks · 0 review blocks · 0 cap hits · 0 plan versions · 0 sessions (1s)");
+
+      const payload = db.boardStats(card.createdAt + 60_000);
+      const boardOut = stripAnsi(statsBoard(db, payload));
+      expect(boardOut).toContain("wip: 1");
+      expect(boardOut).toContain("throughput (done/week):");
+      expect(boardOut).toContain("lane dwell:");
+      expect(boardOut).toContain("Plan · 1m avg · 1 cards");
+      expect(boardOut).toContain("projects:");
+      expect(boardOut).toContain("(none) · 1 total · 1 active · 0 done");
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });
