@@ -232,6 +232,19 @@ export const createApp = (
       { params: t.Object({ id: t.String() }) },
     )
     .post(
+      "/tasks/:id/elaborate",
+      ({ params, status }): { taskId: string } | unknown => {
+        try {
+          const task = db.resolveTask(params.id);
+          db.queueElaboration(task.id);
+          return status(202, { taskId: task.id });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      { params: t.Object({ id: t.String() }) },
+    )
+    .post(
       "/tasks/:id/comments",
       ({ params, body, status, set }): Comment => {
         try {

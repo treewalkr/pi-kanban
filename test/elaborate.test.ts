@@ -430,3 +430,55 @@ test("agents routes roundtrip elaborator; pools accept the role", async () => {
   const pool2 = (await putPool.json()) as { roles: string[] };
   expect(pool2.roles).toEqual(["elaborator"]);
 });
+
+test("POST /tasks/:id/elaborate queues the same request the CLI uses; unknown id 404s; re-POST re-queues", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "Needs expanding", lane: "backlog", note: "short note" });
+  const preSnapshot = { laneId: task.laneId, title: task.title, note: task.note, updatedAt: task.updatedAt };
+
+  // unknown id → 404
+  const resUnknown = await app.handle(new Request("http://localhost/tasks/nonexistent/elaborate", { method: "POST" }));
+  expect(resUnknown.status).toBe(404);
+  const unknownBody = (await resUnknown.json()) as { code: string };
+  expect(unknownBody.code).toBe("not-found");
+
+  // first POST → 202
+  const res1 = await app.handle(new Request(`http://localhost/tasks/${task.id}/elaborate`, { method: "POST" }));
+  expect(res1.status).toBe(202);
+  const body1 = (await res1.json()) as { taskId: string };
+  expect(body1).toEqual({ taskId: task.id });
+  expect(db.elaborationRequests()).toEqual([{ taskId: task.id, requestedAt: expect.any(Number) }]);
+
+  // second POST → 202 and still exactly one row (upsert)
+  const res2 = await app.handle(new Request(`http://localhost/tasks/${task.id}/elaborate`, { method: "POST" }));
+  expect(res2.status).toBe(202);
+  const body2 = (await res2.json()) as { taskId: string };
+  expect(body2).toEqual({ taskId: task.id });
+  expect(db.elaborationRequests()).toEqual([{ taskId: task.id, requestedAt: expect.any(Number) }]);
+
+  // task fields unchanged
+  const postTask = db.resolveTask(task.id);
+  expect({ laneId: postTask.laneId, title: postTask.title, note: postTask.note, updatedAt: postTask.updatedAt }).toEqual(preSnapshot);
+});
+
+test("POST /tasks/:id/elaborate drains to an elaborator spawn across connections", async () => {
+  const { dbFile, writer: w } = setupLoop();
+  const card = w.createTask({ title: "Needs more info", lane: "backlog" });
+  const app = createApp(w);
+
+  const res = await app.handle(new Request(`http://localhost/tasks/${card.id}/elaborate`, { method: "POST" }));
+  expect(res.status).toBe(202);
+
+  const { calls, spawnFn } = fakeSpawn();
+  startLoop(spawnFn, dbFile);
+
+  await sleep(100);
+  expect(calls.length).toBe(1);
+  const job = calls[0].job;
+  expect(job.role).toBe("elaborator");
+  expect(job.mode).toBe("elaborate");
+  expect(job.prompt).toContain(card.id);
+  expect(w.elaborationRequests()).toEqual([]);
+
+  calls[0].finish({ code: 0 });
+});
