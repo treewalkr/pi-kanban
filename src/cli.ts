@@ -16,6 +16,8 @@ usage:
   kanban next [--project <tag>] [--json]  (what's next: lane priority, then card priority, then oldest; skips blocked)
   kanban search <query…> [--project <tag>] [--json]
   kanban show <id>
+  kanban link <id> <other>                (relate two cards; visible from both)
+  kanban unlink <id> <other>
   kanban elaborate <id>                     (queue AI note elaboration; runs on the auto-agent loop)
   kanban attach <id> <plan-file>            (re-attach versions; show prints the latest)
   kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]
@@ -321,13 +323,49 @@ async function main(): Promise<number> {
         const task = db.resolveTask(positional[0] ?? "");
         if (json) {
           const map = db.blockedByMap();
+          const linksMap = db.linksMap();
           jsonOut({
             ...task,
             blockedBy: map[task.id] ?? [],
             blocking: db.blocking(task.id).map((t) => t.id),
+            links: linksMap[task.id] ?? [],
           });
         } else {
           out(taskDetail(db, task));
+        }
+        return 0;
+      }
+
+      case "link": {
+        const aRef = positional[0];
+        const bRef = positional[1];
+        if (!aRef || !bRef) throw new KanbanError("usage: kanban link <id> <other-id>", "invalid");
+        const a = db.resolveTask(aRef);
+        const b = db.resolveTask(bRef);
+        const links = db.linkCards(a.id, b.id);
+        if (json) {
+          jsonOut({ linked: links.map((t) => t.id) });
+        } else {
+          out(`${c.green("✓")} linked ${c.dim(a.id)} ↔ ${c.dim(b.id)}`);
+        }
+        return 0;
+      }
+
+      case "unlink": {
+        const aRef = positional[0];
+        const bRef = positional[1];
+        if (!aRef || !bRef) throw new KanbanError("usage: kanban unlink <id> <other-id>", "invalid");
+        const a = db.resolveTask(aRef);
+        const b = db.resolveTask(bRef);
+        const removed = db.unlinkCards(a.id, b.id);
+        if (json) {
+          jsonOut({ removed });
+        } else {
+          if (removed) {
+            out(`${c.green("✓")} unlinked ${c.dim(a.id)} ↔ ${c.dim(b.id)}`);
+          } else {
+            out(`${c.green("✓")} ${c.dim(a.id)} and ${c.dim(b.id)} were not linked`);
+          }
         }
         return 0;
       }

@@ -273,4 +273,34 @@ describe("commentThread CLI renderer", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("taskDetail lists linked card ids and titles", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kanban-render-links-"));
+    const db = new KanbanDb(join(dir, "t.db"));
+    try {
+      const a = db.createTask({ title: "Card A" });
+      const b = db.createTask({ title: "Card B" });
+      const blocker = db.createTask({ title: "Blocker Card" });
+      const unlinked = db.createTask({ title: "Unlinked Card" });
+
+      db.setBlockedBy(a.id, [blocker.id]);
+      db.linkCards(a.id, b.id);
+
+      const outA = stripAnsi(taskDetail(db, a));
+      expect(outA).toContain(`linked:     ${b.id}  ${b.title}`);
+      expect(outA).toContain(`blocked by: ${blocker.id}  ${blocker.title}`);
+
+      // Verify column alignment between "blocked by:" and "linked:"
+      const blockedLine = outA.split("\n").find((l) => l.startsWith("blocked by:"))!;
+      const linkedLine = outA.split("\n").find((l) => l.startsWith("linked:"))!;
+      expect(blockedLine.indexOf(blocker.id)).toBe(12);
+      expect(linkedLine.indexOf(b.id)).toBe(12);
+
+      const outUnlinked = stripAnsi(taskDetail(db, unlinked));
+      expect(outUnlinked).not.toContain("linked:");
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

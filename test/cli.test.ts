@@ -903,5 +903,55 @@ test("kanban stats: board + card modes, --json roundtrip", async () => {
   expect(cardHuman.stdout).toContain("loop health:");
 });
 
+test("link/unlink roundtrip: ✓ output, show --json, unlink --json", async () => {
+  const addA = await cli("add", "Card Alpha", "--json");
+  const a = JSON.parse(addA.stdout) as Task;
+  const addB = await cli("add", "Card Beta", "--json");
+  const b = JSON.parse(addB.stdout) as Task;
+
+  // missing positional usage error
+  const missA = await cli("link", a.id);
+  expect(missA.code).toBe(1);
+  expect(missA.stderr).toContain("usage: kanban link <id> <other-id>");
+
+  const missUnlink = await cli("unlink", a.id);
+  expect(missUnlink.code).toBe(1);
+  expect(missUnlink.stderr).toContain("usage: kanban unlink <id> <other-id>");
+
+  // link a b plain output
+  const linkRes = await cli("link", a.id, b.id);
+  expect(linkRes.code).toBe(0);
+  expect(linkRes.stdout).toContain("✓ linked");
+  expect(linkRes.stdout).toContain(a.id);
+  expect(linkRes.stdout).toContain(b.id);
+
+  // show --json has links containing b.id
+  const showAJson = await cli("show", a.id, "--json");
+  expect(showAJson.code).toBe(0);
+  const showAData = JSON.parse(showAJson.stdout);
+  expect(showAData.links).toContain(b.id);
+
+  // plain show lists b.id AND title
+  const showAPlain = await cli("show", a.id);
+  expect(showAPlain.code).toBe(0);
+  expect(showAPlain.stdout).toContain(b.id);
+  expect(showAPlain.stdout).toContain("Card Beta");
+
+  // unlink a b --json prints {"removed":true}
+  const unlinkRes = await cli("unlink", a.id, b.id, "--json");
+  expect(unlinkRes.code).toBe(0);
+  expect(JSON.parse(unlinkRes.stdout)).toEqual({ removed: true });
+
+  // re-unlink prints {"removed":false}, exit 0
+  const reUnlinkRes = await cli("unlink", a.id, b.id, "--json");
+  expect(reUnlinkRes.code).toBe(0);
+  expect(JSON.parse(reUnlinkRes.stdout)).toEqual({ removed: false });
+
+  // plain re-unlink prints were not linked
+  const reUnlinkPlain = await cli("unlink", a.id, b.id);
+  expect(reUnlinkPlain.code).toBe(0);
+  expect(reUnlinkPlain.stdout).toContain("were not linked");
+});
+
 
 

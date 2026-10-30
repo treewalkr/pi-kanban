@@ -204,6 +204,10 @@ export function taskDetail(db: KanbanDb, task: Task): string {
   for (const b of blocking) {
     out.push(`${c.dim("blocking:")}   ${c.dim(b.id)}  ${b.title}`);
   }
+  const links = db.linksOf(task.id);
+  for (const l of links) {
+    out.push(`${c.dim("linked:")}     ${c.dim(l.id)}  ${l.title}`);
+  }
   out.push(
     `${c.dim("lane:")}    ${c.hex(color, lane?.name ?? task.laneId)}${lane ? c.dim(` (${lane.id})`) : ""}`,
     `${c.dim("project:")} ${task.project || c.dim("—")}`,
