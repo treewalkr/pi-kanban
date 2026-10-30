@@ -256,7 +256,7 @@ export const createApp = (
     )
     .get(
       "/tasks/:id/files",
-      ({ params, status }): Attachment[] | unknown => {
+      ({ params, status }): Attachment[] => {
         try {
           return db.latestFiles(params.id);
         } catch (e) {
@@ -267,7 +267,7 @@ export const createApp = (
     )
     .get(
       "/tasks/:id/files/:name",
-      ({ params, status }): Attachment[] | unknown => {
+      ({ params, status }): Attachment[] => {
         try {
           return db.attachments(params.id, params.name);
         } catch (e) {
