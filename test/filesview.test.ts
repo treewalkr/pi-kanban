@@ -378,5 +378,16 @@ describe("FilesStore (web/src/lib/files.svelte.ts)", () => {
     expect(previewSource).toContain('aria-label="close preview"');
     expect(previewSource).toContain("files.closePreview()");
     expect(previewSource).toContain("renderMarkdown(preview.content)");
+    expect(previewSource).toContain("rawFileUrl(preview.path, true)");
+    expect(previewSource).toContain("rawFileUrl(preview.path)");
+    expect(previewSource).not.toMatch(/href=["']\/files\/raw\?/);
+    expect(previewSource).not.toMatch(/src=["']\/files\/raw\?/);
+  });
+
+  test("rawFileUrl formats resource URLs with DEV awareness and download flag", async () => {
+    const { rawFilesUrl, rawFileUrl } = await import("../web/src/api");
+    expect(rawFileUrl("src/cli.ts")).toBe(`${rawFilesUrl}?path=src%2Fcli.ts`);
+    expect(rawFileUrl("src/cli.ts", true)).toBe(`${rawFilesUrl}?path=src%2Fcli.ts&download=1`);
+    expect(rawFileUrl("a b/c.png")).toBe(`${rawFilesUrl}?path=a%20b%2Fc.png`);
   });
 });

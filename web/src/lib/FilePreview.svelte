@@ -11,6 +11,7 @@
     splitHighlightedLines,
   } from "./fileview";
   import { Check, Copy, Download, WrapText, X } from "@lucide/svelte";
+  import { rawFileUrl } from "../api";
 
   const preview = $derived(files.preview);
 
@@ -168,7 +169,7 @@
             class="viewer-icon-btn"
             aria-label="download file"
             title="download file"
-            href="/files/raw?path={encodeURIComponent(preview.path)}&download=1"
+            href={rawFileUrl(preview.path, true)}
             download
           >
             <Download size={13} strokeWidth={2} />
@@ -193,14 +194,14 @@
           <div class="viewer-image-container">
             <img
               class="viewer-image"
-              src="/files/raw?path={encodeURIComponent(preview.path)}"
+              src={rawFileUrl(preview.path)}
               alt={preview.path}
             />
           </div>
         {:else if preview.binary}
           <div class="viewer-binary-fallback">
             <p>binary file — no preview</p>
-            <a href="/files/raw?path={encodeURIComponent(preview.path)}&download=1" download>download</a>
+            <a href={rawFileUrl(preview.path, true)} download>download</a>
           </div>
         {:else if effectiveMode === "preview"}
           <div class="viewer-markdown md">

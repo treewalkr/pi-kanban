@@ -112,6 +112,10 @@ test.describe("files explorer and viewer", () => {
     // Toolbar shows path
     await expect(dialog.locator(".viewer-path")).toHaveText("src/cli.ts");
 
+    // Download anchor uses raw files endpoint with download=1
+    const downloadLink = dialog.locator('a[aria-label="download file"]');
+    await expect(downloadLink).toHaveAttribute("href", /.*\/files\/raw\?path=src%2Fcli\.ts&download=1/);
+
     // Backdrop click closes dialog (click at 5, 5 on overlay)
     const overlay = page.locator(".overlay");
     await overlay.click({ position: { x: 5, y: 5 } });
