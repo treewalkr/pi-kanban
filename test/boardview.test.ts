@@ -184,3 +184,60 @@ describe("boardview store focus mode", () => {
     expect(board.activeCount).toBe(3);
   });
 });
+
+test("board.moveTask PATCHes the lane change and refreshes from /board", async () => {
+  const originalFetch = globalThis.fetch;
+  const task = makeTask({ id: "t-backlog", title: "card in backlog", laneId: "backlog" });
+  let capturedUrl: string | undefined;
+  let capturedInit: RequestInit | undefined;
+
+  try {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (method === "PATCH") {
+        capturedUrl = url;
+        capturedInit = init;
+        return new Response(JSON.stringify({ ...task, laneId: "plan" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (new URL(url).pathname === "/board") {
+        return new Response(
+          JSON.stringify({
+            lanes: [makeLane("backlog", "Backlog"), makeLane("plan", "Plan")],
+            tasks: [{ ...task, laneId: "plan" }],
+            plans: {},
+            waiting: {},
+            blockedBy: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    }) as typeof fetch;
+
+    board.lanes = [makeLane("backlog", "Backlog"), makeLane("plan", "Plan")];
+    board.tasks = [task];
+    board.projectFilter = "";
+    board.search = "";
+
+    await board.moveTask(task.id, "plan");
+
+    expect(capturedUrl).toBeDefined();
+    expect(new URL(capturedUrl!).pathname).toBe("/tasks/" + task.id);
+    expect(capturedInit?.method).toBe("PATCH");
+    expect(JSON.parse(capturedInit?.body as string)).toEqual({ lane: "plan" });
+
+    expect(board.visibleTasks("plan").map((t) => t.id)).toContain(task.id);
+  } finally {
+    globalThis.fetch = originalFetch;
+    board.lanes = [];
+    board.tasks = [];
+  }
+});
+
