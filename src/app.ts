@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type Lane, type Task, type WorkerPool } from "./db";
@@ -5,8 +6,8 @@ import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview"
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
-import { gitCheckout, gitInfo, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitInfo } from "./git";
-import { listFiles, readFile, type FileEntry } from "./files";
+import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
+import { contentTypeFor, listFiles, rawFilePath, readFile, searchFiles, type FileEntry } from "./files";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
 
@@ -182,13 +183,34 @@ export const createApp = (
     )
     .get(
       "/files/content",
-      async ({ query, status }): Promise<{ path: string; content: string; language: string }> => {
+      async ({
+        query,
+        status,
+      }): Promise<{
+        path: string;
+        content: string;
+        language: string;
+        size: number;
+        binary: boolean;
+      }> => {
         try {
           const root = opts.filesRoot ?? process.cwd();
           const file = await readFile(root, query.path);
-          return { path: query.path, content: file.content, language: file.language };
+          return {
+            path: query.path,
+            content: file.content,
+            language: file.language,
+            size: file.size,
+            binary: file.binary,
+          };
         } catch (e) {
-          return fail<{ path: string; content: string; language: string }>(e, status);
+          return fail<{
+            path: string;
+            content: string;
+            language: string;
+            size: number;
+            binary: boolean;
+          }>(e, status);
         }
       },
       {
@@ -198,10 +220,67 @@ export const createApp = (
       },
     )
     .get(
-      "/git/status",
-      async (): Promise<{ files: Record<string, GitFileCode> }> => {
+      "/files/search",
+      async ({ query }): Promise<{ matches: string[] }> => {
         const root = opts.filesRoot ?? process.cwd();
-        return { files: await gitStatusMap(root) };
+        const q = (query.q ?? "").trim();
+        if (!q) return { matches: [] };
+        const matches = await searchFiles(root, q, 20);
+        return { matches };
+      },
+      {
+        query: t.Object({
+          q: t.Optional(t.String()),
+        }),
+      },
+    )
+    .get(
+      "/files/raw",
+      async ({ query, status }): Promise<Response> => {
+        try {
+          const root = opts.filesRoot ?? process.cwd();
+          const target = await rawFilePath(root, query.path);
+          const headers: Record<string, string> = {
+            "Content-Type": contentTypeFor(target),
+            "Content-Security-Policy": "default-src 'none'",
+            "X-Content-Type-Options": "nosniff",
+          };
+          if (query.download === "1") {
+            headers["Content-Disposition"] = `attachment; filename="${path.basename(target)}"`;
+          }
+          return new Response(Bun.file(target), { headers });
+        } catch (e) {
+          return fail<Response>(e, status);
+        }
+      },
+      {
+        query: t.Object({
+          path: t.String({ minLength: 1 }),
+          download: t.Optional(t.String()),
+        }),
+      },
+    )
+    .get(
+      "/git/status",
+      async (): Promise<{ files: Record<string, GitFileCode>; additions: number; deletions: number }> => {
+        const root = opts.filesRoot ?? process.cwd();
+        const [files, stats] = await Promise.all([
+          gitStatusMap(root),
+          gitLineStats(root),
+        ]);
+        return { files, additions: stats.additions, deletions: stats.deletions };
+      },
+    )
+    .get(
+      "/git/diff",
+      async ({ query }): Promise<GitFileDiff> => {
+        const root = opts.filesRoot ?? process.cwd();
+        return gitFileDiff(root, query.path);
+      },
+      {
+        query: t.Object({
+          path: t.String({ minLength: 1 }),
+        }),
       },
     )
     .post(

@@ -55,8 +55,20 @@ describe("Files & Git Status API routes", () => {
     const app = createApp(db, { filesRoot: repoDir });
     const res = await app.handle(new Request("http://localhost/git/status"));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { files: Record<string, string> };
+    const body = (await res.json()) as { files: Record<string, string>; additions: number; deletions: number };
     expect(body.files["m.txt"]).toBe("M");
+  });
+
+  test("GET /git/status reports additions and deletions", async () => {
+    const app = createApp(db, { filesRoot: repoDir });
+    const res = await app.handle(new Request("http://localhost/git/status"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { files: Record<string, string>; additions: number; deletions: number };
+    expect(body.files["m.txt"]).toBe("M");
+    expect(typeof body.additions).toBe("number");
+    expect(typeof body.deletions).toBe("number");
+    expect(body.additions).toBeGreaterThanOrEqual(1);
+    expect(body.deletions).toBeGreaterThanOrEqual(1);
   });
 
   test("GET /files lists the fixture root; ?path= lists a subdirectory", async () => {
@@ -90,11 +102,19 @@ describe("Files & Git Status API routes", () => {
     // Normal text read
     const tsRes = await app.handle(new Request("http://localhost/files/content?path=hello.ts"));
     expect(tsRes.status).toBe(200);
-    const tsBody = (await tsRes.json()) as { path: string; content: string; language: string };
+    const tsBody = (await tsRes.json()) as {
+      path: string;
+      content: string;
+      language: string;
+      size: number;
+      binary: boolean;
+    };
     expect(tsBody).toEqual({
       path: "hello.ts",
       content: "console.log('hi');\n",
       language: "typescript",
+      size: 19,
+      binary: false,
     });
 
     // Escapes root -> 400
@@ -109,11 +129,23 @@ describe("Files & Git Status API routes", () => {
     const missBody = (await missRes.json()) as { error: string };
     expect(missBody.error).toContain("no such file: 'nope.txt'");
 
-    // Binary file -> 400
+    // Binary file -> 200 { binary: true, content: "", size: 50, language: "plaintext" }
     const binRes = await app.handle(new Request("http://localhost/files/content?path=bin.dat"));
-    expect(binRes.status).toBe(400);
-    const binBody = (await binRes.json()) as { error: string };
-    expect(binBody.error).toBe("binary file — no preview");
+    expect(binRes.status).toBe(200);
+    const binBody = (await binRes.json()) as {
+      path: string;
+      content: string;
+      language: string;
+      size: number;
+      binary: boolean;
+    };
+    expect(binBody).toEqual({
+      path: "bin.dat",
+      content: "",
+      language: "plaintext",
+      size: 50,
+      binary: true,
+    });
 
     // Oversized -> 400
     const bigRes = await app.handle(new Request("http://localhost/files/content?path=big.txt"));
@@ -143,5 +175,108 @@ describe("Files & Git Status API routes", () => {
     // GET /files/content never sets content-disposition
     const normalGet = await app.handle(new Request("http://localhost/files/content?path=hello.ts"));
     expect(normalGet.headers.get("content-disposition")).toBeNull();
+  });
+
+  test("GET /files/raw serves bytes with content type and CSP; download attaches", async () => {
+    const app = createApp(db, { filesRoot: repoDir });
+
+    const rawRes = await app.handle(new Request("http://localhost/files/raw?path=hello.ts"));
+    expect(rawRes.status).toBe(200);
+    expect(rawRes.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(rawRes.headers.get("content-security-policy")).toBe("default-src 'none'");
+    expect(rawRes.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(rawRes.headers.get("content-disposition")).toBeNull();
+    const body = await rawRes.text();
+    expect(body).toBe("console.log('hi');\n");
+
+    const dlRes = await app.handle(
+      new Request("http://localhost/files/raw?path=hello.ts&download=1")
+    );
+    expect(dlRes.status).toBe(200);
+    expect(dlRes.headers.get("content-disposition")).toBe('attachment; filename="hello.ts"');
+
+    const escapeRes = await app.handle(new Request("http://localhost/files/raw?path=../escape"));
+    expect(escapeRes.status).toBe(400);
+  });
+
+  test("GET /files/search scores basename and path queries", async () => {
+    const app = createApp(db, { filesRoot: repoDir });
+
+    const introRes = await app.handle(new Request("http://localhost/files/search?q=intro"));
+    expect(introRes.status).toBe(200);
+    const introBody = (await introRes.json()) as { matches: string[] };
+    expect(introBody.matches).toContain("docs/intro.md");
+
+    const pathRes = await app.handle(new Request("http://localhost/files/search?q=docs/intro"));
+    expect(pathRes.status).toBe(200);
+    const pathBody = (await pathRes.json()) as { matches: string[] };
+    expect(pathBody.matches).toContain("docs/intro.md");
+
+    const zzzRes = await app.handle(new Request("http://localhost/files/search?q=zzz"));
+    expect(zzzRes.status).toBe(200);
+    const zzzBody = (await zzzRes.json()) as { matches: string[] };
+    expect(zzzBody.matches).toEqual([]);
+
+    const emptyRes = await app.handle(new Request("http://localhost/files/search?q="));
+    expect(emptyRes.status).toBe(200);
+    const emptyBody = (await emptyRes.json()) as { matches: string[] };
+    expect(emptyBody.matches).toEqual([]);
+
+    const allRes = await app.handle(new Request("http://localhost/files/search?q=."));
+    expect(allRes.status).toBe(200);
+    const allBody = (await allRes.json()) as { matches: string[] };
+    expect(allBody.matches.length).toBeLessThanOrEqual(20);
+  });
+
+  test("GET /git/diff returns patches for modified, untracked, deleted files", async () => {
+    const app = createApp(db, { filesRoot: repoDir });
+
+    // Modified file
+    const modRes = await app.handle(new Request("http://localhost/git/diff?path=m.txt"));
+    expect(modRes.status).toBe(200);
+    const modBody = (await modRes.json()) as { supported: boolean; status?: string; patch?: string };
+    expect(modBody.supported).toBe(true);
+    expect(modBody.status).toBe("modified");
+    expect(modBody.patch).toContain("@@");
+
+    // Untracked file
+    const untrackedRes = await app.handle(
+      new Request("http://localhost/git/diff?path=docs/intro.md")
+    );
+    expect(untrackedRes.status).toBe(200);
+    const untrackedBody = (await untrackedRes.json()) as {
+      supported: boolean;
+      status?: string;
+      patch?: string;
+    };
+    expect(untrackedBody.supported).toBe(true);
+    expect(untrackedBody.status).toBe("untracked");
+    expect(untrackedBody.patch).toContain("new file mode 100644");
+    expect(untrackedBody.patch).toContain("@@ -0,0 +1,1 @@");
+
+    // Clean file -> supported: false
+    const cleanRes = await app.handle(new Request("http://localhost/git/diff?path=hello.ts"));
+    expect(cleanRes.status).toBe(200);
+    const cleanBody = (await cleanRes.json()) as { supported: boolean };
+    expect(cleanBody.supported).toBe(false);
+
+    // Missing file -> supported: false
+    const missRes = await app.handle(new Request("http://localhost/git/diff?path=missing.txt"));
+    expect(missRes.status).toBe(200);
+    const missBody = (await missRes.json()) as { supported: boolean };
+    expect(missBody.supported).toBe(false);
+
+    // Deleted file
+    writeFileSync(join(repoDir, "to-del.txt"), "delete me\n");
+    Bun.spawnSync({ cmd: ["git", "add", "to-del.txt"], cwd: repoDir });
+    Bun.spawnSync({ cmd: ["git", "commit", "-m", "add to-del"], cwd: repoDir });
+    rmSync(join(repoDir, "to-del.txt"));
+
+    const delRes = await app.handle(new Request("http://localhost/git/diff?path=to-del.txt"));
+    expect(delRes.status).toBe(200);
+    const delBody = (await delRes.json()) as { supported: boolean; status?: string; patch?: string };
+    expect(delBody.supported).toBe(true);
+    expect(delBody.status).toBe("deleted");
+    expect(delBody.patch).toContain("@@");
   });
 });
