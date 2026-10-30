@@ -1,5 +1,5 @@
 import type { QueuedJobInfo } from "../../../src/autoreview";
-import type { AgentRole } from "../../../src/db";
+import type { AgentRole, Lane, Task } from "../../../src/db";
 
 // Lane accents follow pi-web's theme accents: pastels on dark (a4c2f4 blue,
 // e8b27a ember, cdb4f0 dusk, acccb7 pine…), deeper hues on light. Defined as
@@ -51,4 +51,8 @@ export function queuedChip(job: QueuedJobInfo): { label: string; title: string }
     label: `⧗ queued · ${roleVerb(job.role)}`,
     title: "waiting for the running agent session — the loop is serial",
   };
+}
+
+export function canPromoteToPlan(task: Pick<Task, "laneId">, lanes: Array<Pick<Lane, "id">>): boolean {
+  return task.laneId === "backlog" && lanes.some((l) => l.id === "plan");
 }

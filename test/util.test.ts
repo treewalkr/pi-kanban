@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { queuedChip, roleAuthor, roleVerb } from "../web/src/lib/util";
+import { canPromoteToPlan, queuedChip, roleAuthor, roleVerb } from "../web/src/lib/util";
 
 test("roleVerb maps each agent role to its chip verb", () => {
   expect(roleVerb("reviewer")).toBe("reviewing");
@@ -22,4 +22,24 @@ test("queuedChip renders the exact label and title", () => {
     label: "⧗ queued · planning",
     title: "waiting for the running agent session — the loop is serial",
   });
+});
+
+test("canPromoteToPlan is true only for Backlog cards when a Plan lane exists", () => {
+  const lane = (id: string) => ({ id });
+  const lanes = [lane("backlog"), lane("plan")];
+
+  expect(canPromoteToPlan({ laneId: "backlog" }, lanes)).toBe(true);
+  for (const laneId of ["waiting", "implement", "review", "done", "archive", "custom-x"]) {
+    expect(canPromoteToPlan({ laneId }, lanes)).toBe(false);
+  }
+});
+
+test("canPromoteToPlan is false when no plan lane exists", () => {
+  const lane = (id: string) => ({ id });
+  const task = { laneId: "backlog" };
+
+  expect(canPromoteToPlan(task, [])).toBe(false);
+  expect(canPromoteToPlan(task, [lane("backlog")])).toBe(false);
+  expect(canPromoteToPlan(task, [lane("backlog"), lane("implement")])).toBe(false);
+  expect(canPromoteToPlan(task, [lane("backlog"), lane("implement"), lane("plan")])).toBe(true);
 });
