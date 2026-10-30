@@ -612,6 +612,13 @@ describe("auto-review", () => {
     expect(prompt).toContain("block finding");
   });
 
+  test("auto-review prompts tell agents to read AGENTS.md and REVIEW.md", () => {
+    const task = { id: "abc12", title: "t", laneId: "review" } as never;
+    expect(reviewerPrompt(task)).toContain("AGENTS.md and REVIEW.md");
+    expect(builderPrompt(task)).toContain("AGENTS.md and REVIEW.md");
+    expect(builderPlanPrompt(task)).toContain("AGENTS.md and REVIEW.md");
+  });
+
   test("REVIEW.md seeds landed rules and the append format", () => {
     const body = readFileSync(fileURLToPath(new URL("../REVIEW.md", import.meta.url)), "utf8");
     expect(body).toContain("Findings require proof");
