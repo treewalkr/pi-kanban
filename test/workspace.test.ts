@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -97,5 +97,91 @@ describe("scripts/workspace.sh", () => {
     const branchRes = await runWorkspace(repo, ["new", "acme"]);
     expect(branchRes.code).toBe(1);
     expect(branchRes.stderr).toContain("workspace: branch acme already exists — pick another slug");
+  });
+
+  test("done merges, removes the worktree, deletes the branch, leaves main clean", async () => {
+    const createRes = await runWorkspace(repo, ["new", "acme"]);
+    expect(createRes.code).toBe(0);
+    const wt = join(container, "repo-acme");
+
+    writeFileSync(join(wt, "feature.txt"), "feature content\n");
+    runGit(wt, ["add", "."]);
+    runGit(wt, ["commit", "-m", "feat: acme feature"]);
+
+    const doneRes = await runWorkspace(repo, ["done", "acme"]);
+    expect(doneRes.code).toBe(0);
+    expect(doneRes.stdout.trim().endsWith("— main tree clean")).toBe(true);
+    expect(doneRes.stdout).toContain("workspace: acme merged and removed — main tree clean");
+
+    expect(existsSync(wt)).toBe(false);
+
+    const worktrees = runGit(repo, ["worktree", "list", "--porcelain"]);
+    const wtCount = (worktrees.match(/^worktree /gm) || []).length;
+    expect(wtCount).toBe(1);
+
+    const branches = runGit(repo, ["branch", "--list", "acme"]);
+    expect(branches).toBe("");
+
+    const lastSubject = runGit(repo, ["log", "-1", "--format=%s"]);
+    expect(lastSubject).toBe("merge: acme");
+
+    expect(existsSync(join(repo, "feature.txt"))).toBe(true);
+
+    const status = runGit(repo, ["status", "--porcelain"]);
+    expect(status).toBe("");
+  });
+
+  test("done refuses a dirty workspace or dirty main", async () => {
+    const createRes = await runWorkspace(repo, ["new", "acme"]);
+    expect(createRes.code).toBe(0);
+    const wt = join(container, "repo-acme");
+
+    // Dirty workspace
+    writeFileSync(join(wt, "uncommitted.txt"), "dirty workspace\n");
+    const dirtyWtRes = await runWorkspace(repo, ["done", "acme"]);
+    expect(dirtyWtRes.code).toBe(1);
+    expect(dirtyWtRes.stderr).toContain(
+      `workspace: ${wt} has uncommitted changes — commit or stash inside it first`,
+    );
+    expect(existsSync(wt)).toBe(true);
+    expect(runGit(repo, ["branch", "--list", "acme"])).not.toBe("");
+    rmSync(join(wt, "uncommitted.txt"));
+
+    // Dirty main
+    writeFileSync(join(repo, "uncommitted.txt"), "dirty main\n");
+    const dirtyMainRes = await runWorkspace(repo, ["done", "acme"]);
+    expect(dirtyMainRes.code).toBe(1);
+    expect(dirtyMainRes.stderr).toContain(
+      `workspace: main tree is dirty — commit or stash in ${repo} before merging`,
+    );
+    expect(existsSync(wt)).toBe(true);
+    expect(runGit(repo, ["branch", "--list", "acme"])).not.toBe("");
+    rmSync(join(repo, "uncommitted.txt"));
+  });
+
+  test("done names a missing workspace and unknown subcommands fail", async () => {
+    const missingWt = join(container, "repo-nonexistent");
+    const missingRes = await runWorkspace(repo, ["done", "nonexistent"]);
+    expect(missingRes.code).toBe(1);
+    expect(missingRes.stderr).toContain(`workspace: no workspace at ${missingWt} — try git worktree list`);
+
+    const unknownRes = await runWorkspace(repo, ["bogus", "acme"]);
+    expect(unknownRes.code).toBe(1);
+    expect(unknownRes.stderr).toContain("workspace: usage: scripts/workspace.sh <new|done> <slug>");
+
+    const tooFewArgsRes = await runWorkspace(repo, ["new"]);
+    expect(tooFewArgsRes.code).toBe(1);
+    expect(tooFewArgsRes.stderr).toContain("workspace: usage: scripts/workspace.sh <new|done> <slug>");
+  });
+
+  test("AGENTS.md documents the workspace workflow", () => {
+    const agentsMd = readFileSync(join(import.meta.dir, "..", "AGENTS.md"), "utf-8");
+    expect(agentsMd).toContain("## Git workspaces");
+
+    const section = agentsMd.split("## Git workspaces")[1];
+    expect(section).toContain("scripts/workspace.sh new");
+    expect(section).toContain("scripts/workspace.sh done");
+    expect(section).toContain("bun install");
+    expect(section).toContain("git worktree list");
   });
 });
