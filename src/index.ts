@@ -90,7 +90,7 @@ function envMs(name: string): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-export async function boot(opts: BootOptions = {}): Promise<void> {
+export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: () => void }> {
   const port = opts.port ?? Number(process.env.PORT ?? 4600);
 
   // single-server guard: SO_REUSEPORT would stack N silent listeners on one
@@ -148,6 +148,7 @@ export async function boot(opts: BootOptions = {}): Promise<void> {
     `kanban on http://127.0.0.1:${port}${existsSync(dist) ? "" : " (api only — run `bun run build` for the web ui)"}`,
   );
 
+  let stopAutoReview: () => void = () => {};
   if (opts.autoReview ?? process.env.KANBAN_AUTO_REVIEW === "1") {
     // own connection, like the CLI — the reviewer/builder children talk to the
     // board through the kanban CLI, never through this process
@@ -160,7 +161,10 @@ export async function boot(opts: BootOptions = {}): Promise<void> {
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(stallMs !== undefined ? { stallMs } : {}),
     });
-    registerShutdown(() => handle.stop());
+    // registerShutdown fires on process signals only — an in-process boot
+    // (bun test) must be able to tear the loop down itself or it leaks live
+    stopAutoReview = () => handle.stop();
+    registerShutdown(stopAutoReview);
   }
 
   // graceful signals: terminate agent children, release leases, then exit —
@@ -173,6 +177,8 @@ export async function boot(opts: BootOptions = {}): Promise<void> {
       })();
     });
   }
+
+  return { stopAutoReview };
 }
 
 if (import.meta.main) {
