@@ -5,6 +5,7 @@ import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview"
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
+import { gitCheckout, gitInfo, type GitInfo } from "./git";
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
 
@@ -134,6 +135,18 @@ export const createApp = (
     )
     .get("/board", (): Board => db.board())
     .get("/stats", (): BoardStatsPayload => db.boardStats())
+    .get("/git", (): Promise<GitInfo | { repo: false }> => gitInfo(process.cwd()))
+    .post(
+      "/git/checkout",
+      async ({ body, status }): Promise<{ branch: string } | unknown> => {
+        try {
+          return status(200, { branch: await gitCheckout(process.cwd(), body.branch) });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      { body: t.Object({ branch: t.String({ minLength: 1 }) }) },
+    )
     .post(
       "/tasks/:id/plan",
       ({ params, body, status }): Attachment | unknown => {

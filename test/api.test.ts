@@ -860,3 +860,27 @@ test("PATCH lane change (drag-drop path) records a lane event visible via /stats
   expect(cardStats.laneTimes.map((lt: any) => lt.laneId)).toEqual(["backlog", "plan"]);
 });
 
+
+test("GET /git reports the serving repo; checkout refuses unknown branches", async () => {
+  const app = createApp(db);
+  const res = await app.handle(new Request("http://localhost/git"));
+  expect(res.status).toBe(200);
+  const info = (await res.json()) as { repo: boolean; branch: string; branches: string[] };
+  // the test cwd is the real kanban repo — assert shape only, never the branch name
+  expect(info.repo).toBe(true);
+  expect(info.branch.length).toBeGreaterThan(0);
+  expect(info.branches).toContain(info.branch);
+
+  // never a real checkout in api tests: a ref outside the local list must 400 before git runs
+  const bad = await app.handle(
+    new Request("http://localhost/git/checkout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ branch: "kanban-test-no-such-branch" }),
+    }),
+  );
+  expect(bad.status).toBe(400);
+  const afterRes = await app.handle(new Request("http://localhost/git"));
+  const after = (await afterRes.json()) as { branch: string };
+  expect(after.branch).toBe(info.branch);
+});
