@@ -316,6 +316,34 @@ test("attachments(kind) returns every version oldest-first", () => {
   expect(db.attachment(task.id, "session")!.content).toBe("second session"); // latest still works
 });
 
+test("attach enforces the card-file name rule", () => {
+  const task = db.createTask({ title: "one" });
+  for (const bad of ["Design", "repro log", "a/b", "../x", "-lead", "x.md.md", "", "a".repeat(49), "x.MD"]) {
+    expect(() => db.attach(task.id, bad, "content")).toThrow(/invalid file name/);
+  }
+  for (const good of ["plan", "session", "design", "design.md", "repro-log-2", "repro-log-2.txt", "a".repeat(48), "7"]) {
+    expect(db.attach(task.id, good, `content of ${good}`).kind).toBe(good);
+  }
+});
+
+test("card files version independently per name; latestFiles lists latest per name, sessions excluded", () => {
+  const task = db.createTask({ title: "one" });
+  db.attach(task.id, "plan", "# v1");
+  db.attach(task.id, "design", "v1");
+  db.attach(task.id, "design", "v2");
+  db.attach(task.id, "repro-log.txt", "v1");
+  db.attach(task.id, "session", "agent log", "autoreview");
+
+  expect(db.attachments(task.id, "design").map((a) => a.version)).toEqual([1, 2]);
+  expect(db.attachments(task.id, "repro-log.txt").map((a) => a.version)).toEqual([1]); // separate sequence
+  expect(db.attachment(task.id, "design")!.content).toBe("v2");
+
+  const files = db.latestFiles(task.id);
+  expect(files.map((f) => f.kind)).toEqual(["design", "plan", "repro-log.txt"]); // name-ordered, no session
+  expect(files.map((f) => f.version)).toEqual([2, 1, 1]);
+  expect(db.latestFiles(db.createTask({ title: "empty" }).id)).toEqual([]);
+});
+
 test("seeds the default workflow lanes in order", () => {
   const lanes = db.lanes();
   expect(lanes.map((l) => l.id)).toEqual(DEFAULT_LANES.map((l) => l.id));

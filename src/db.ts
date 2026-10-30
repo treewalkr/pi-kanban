@@ -44,12 +44,20 @@ export interface Task {
 export interface Attachment {
   id: string;
   taskId: string;
-  kind: string; // "plan" today; the table is generic for future artifact kinds
+  kind: string; // the file name slot — "plan"/"session" are reserved, any other matching FILE_NAME_RE is a card file
   version: number;
   content: string;
   source: string; // path the content was read from, informational only
   createdAt: number;
 }
+
+/**
+ * Card-file names: lowercase kebab, up to 48 base chars, optional short extension (`design`, `repro-log-2.txt`).
+ * `plan` is the gate slot — writable through the normal attach path, just never invented ad hoc.
+ * `session` is written by the auto-review loop only and is rejected at the CLI/HTTP attach surface.
+ */
+export const FILE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,47}(\.[a-z0-9]{1,8})?$/;
+export const RESERVED_FILE_NAMES = new Set(["session"]);
 
 export type CommentKind = "comment" | "review" | "handoff" | "approval" | "rejection" | "question";
 
@@ -1448,6 +1456,11 @@ export class KanbanDb {
   /** Attach `content` as the next version of `kind` on a card; returns the stored row. */
   attach(taskRef: string, kind: string, content: string, source = ""): Attachment {
     const task = this.resolveTask(taskRef);
+    if (!FILE_NAME_RE.test(kind))
+      throw new KanbanError(
+        `invalid file name '${kind}': lowercase kebab, up to 48 chars, optional extension (e.g. design, repro-log-2.txt)`,
+        "invalid",
+      );
     if (!content.trim()) throw new KanbanError("attachment content must not be empty", "invalid");
     for (let attempt = 0; attempt < 5; attempt++) {
       const version =
@@ -1499,6 +1512,21 @@ export class KanbanDb {
        WHERE a.kind = 'plan'`,
     ).all() as AttachmentRow[];
     return Object.fromEntries(rows.map((r) => [r.card_id, rowToAttachment(r)]));
+  }
+
+  /** Latest version of every card file on a card, name-ordered — session logs excluded (they have their own section). */
+  latestFiles(taskRef: string): Attachment[] {
+    const task = this.resolveTask(taskRef);
+    return (
+      this.q(
+        `SELECT a.* FROM attachments a
+         JOIN (SELECT kind, MAX(version) AS v FROM attachments WHERE card_id = ? AND kind != 'session' GROUP BY kind) m
+           ON a.kind = m.kind AND a.version = m.v
+         WHERE a.card_id = ?
+         ORDER BY a.kind ASC`,
+      )
+        .all(task.id, task.id) as AttachmentRow[]
+    ).map(rowToAttachment);
   }
 
   // ---------- waiting state ----------
