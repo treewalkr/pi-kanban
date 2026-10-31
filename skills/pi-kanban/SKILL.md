@@ -51,8 +51,10 @@ For every non-trivial unit of work:
   `archive <id>`. Undo with `kanban undo` (or `mv <id> <lane>`). Done cards also archive
   themselves after N days — tune it with `archive auto [<n>|off]` (default 7,
   `off` disables).
-- **If work is abandoned or superseded**: delete the card (`rm`). Never leave
-  stale cards behind — the board must reflect reality.
+- **If work is rejected, abandoned, or superseded**: leave the one-line
+  reason and archive — see **Out-of-scope memory** under Conventions;
+  delete (`rm`) only noise. The board must reflect reality, including what
+  was said no to and why.
 
 ## Auto-plan loop
 
@@ -63,7 +65,10 @@ a passing card then parks in **Waiting on you** at the gate. **The human owns th
 
 - **Planning**: don't hand-write plans for Plan-lane cards in auto mode — the planner does it,
   using the shared template (`plan-template.md` next to this skill): every section filled or
-  `N/A — reason`, every acceptance criterion mapped to concrete tests at named seams. If an answer would
+  `N/A — reason`, every acceptance criterion mapped to concrete tests at named seams. A card whose note doesn't state user-perspective behavior isn't
+  planner-ready — the planner asks instead of planning, and grounding starts
+  with a redundancy check against existing code (see **Backlog readiness**
+  under Conventions). If an answer would
   genuinely change the plan, the planner posts a `question` comment (each question with a
   recommended default) and stops; any human reply re-arms it — "use the defaults" counts.
   To force a re-plan: `kanban reject <id> --message <what to change>`; the next version lands
@@ -149,6 +154,22 @@ kanban help | version                                                 # CLI help
 
 ## Conventions
 
+- **Backlog readiness**: a card is planner-ready only when its note states
+  the user-perspective behavior — what changes end-to-end for the person
+  using the board, not a list of layers to touch. A note that reads like
+  an implementation sketch isn't ready: rewrite it before planning (the
+  planner asks a `question` instead of planning it).
+- **Redundancy check** (part of readiness): before planning, search the
+  repo (`rg`, `kanban search`) for an existing implementation of the note's
+  stated behavior and cite where you looked — plan around what already
+  exists instead of re-building it.
+- **Out-of-scope memory**: rejected or abandoned cards carry a one-line
+  reason (`kanban comment <id> "out of scope: <why>"`) before leaving the
+  board, then `archive <id>` — the thread is searchable, so "we already
+  said no, and why" stays one `kanban search` away and the same idea
+  doesn't relitigate. Delete (`rm`) only noise: accidental captures,
+  near-simultaneous dupes, test cards — anything whose rejection carries
+  no lesson.
 - **Task ids**: any unique prefix works (`kanban show k7x`). Use full ids in
   scripts, prefixes interactively.
 - **Lane refs**: slug (`backlog`), unique prefix (`imp`), name prefix (`Rev`),
