@@ -1434,6 +1434,12 @@ button:focus-visible {
   line-height: 17px;
 }
 
+.count.over {
+  color: #d29922;
+  border-color: color-mix(in srgb, #d29922 40%, var(--border));
+  background: color-mix(in srgb, #d29922 8%, var(--bg-subtle));
+}
+
 .lane-dwell {
   padding: 0 6px;
   border: 1px solid var(--border);
