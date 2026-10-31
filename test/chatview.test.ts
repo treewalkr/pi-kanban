@@ -69,7 +69,12 @@ class FakeEventSource {
   }
 }
 
+let originalFetch: typeof globalThis.fetch | undefined;
+let originalEventSource: unknown;
+
 beforeEach(() => {
+  originalFetch = globalThis.fetch;
+  originalEventSource = (globalThis as any).EventSource;
   fetchCalls = [];
   FakeEventSource.instances = [];
   (globalThis as any).fetch = mockChatFetch({ get: {} });
@@ -79,6 +84,11 @@ beforeEach(() => {
 
 afterEach(() => {
   chat.close();
+  (globalThis as any).fetch = originalFetch;
+  (globalThis as any).EventSource = originalEventSource;
+  for (const key of ["fetch", "EventSource"]) {
+    if ((globalThis as any)[key] === undefined) delete (globalThis as any)[key];
+  }
 });
 
 const HISTORY: ChatMessage[] = [
