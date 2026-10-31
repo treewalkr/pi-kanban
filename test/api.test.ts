@@ -159,6 +159,47 @@ test("/files routes: attach named file, list latest, version history; reserved +
   expect(await unknown.json()).toEqual([]);
 });
 
+test("GET /tasks/:id/files/:name/diff returns a unified patch; errors mirror cat", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "one" });
+  db.attach(task.id, "design", "content v1\n");
+  db.attach(task.id, "design", "content v2\n");
+  db.attach(task.id, "solo", "only version\n");
+
+  const ok = await app.handle(new Request(`http://localhost/tasks/${task.id}/files/design/diff`));
+  expect(ok.status).toBe(200);
+  const body = (await ok.json()) as { name: string; from: { version: number }; to: { version: number }; patch: string };
+  expect(body.name).toBe("design");
+  expect(body.from.version).toBe(1);
+  expect(body.to.version).toBe(2);
+  expect(body.patch).toContain("-content v1");
+  expect(body.patch).toContain("+content v2");
+
+  const pair = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}/files/design/diff?from=1&to=2`),
+  );
+  expect(pair.status).toBe(200);
+  expect(((await pair.json()) as { from: { version: number } }).from.version).toBe(1);
+
+  const noName = await app.handle(new Request(`http://localhost/tasks/${task.id}/files/nope/diff`));
+  expect(noName.status).toBe(404);
+  expect(await noName.json()).toMatchObject({ error: "no file 'nope' on card — files: design, solo" });
+
+  const single = await app.handle(new Request(`http://localhost/tasks/${task.id}/files/solo/diff`));
+  expect(single.status).toBe(409);
+  expect(await single.json()).toMatchObject({ error: "only v1 of 'solo' — nothing to diff" });
+
+  const noV = await app.handle(new Request(`http://localhost/tasks/${task.id}/files/design/diff?from=3`));
+  expect(noV.status).toBe(404);
+  expect(await noV.json()).toMatchObject({ error: "no v3 of 'design' — versions v1–v2" });
+
+  const badRange = await app.handle(
+    new Request(`http://localhost/tasks/${task.id}/files/design/diff?from=2&to=1`),
+  );
+  expect(badRange.status).toBe(400);
+  expect(await badRange.json()).toMatchObject({ error: "invalid range: v2 → v1 (from must be lower than to)" });
+});
+
 test("/board carries the latest plan per card", async () => {
   const app = createApp(db);
   const task = db.createTask({ title: "one" });
