@@ -1825,7 +1825,7 @@ test("boardOverview: lane counts, oldest age, waiting ages, next proposal, block
   const oldestWaiting = db.createTask({ title: "waiting oldest", lane: "waiting" });
   // park oldestWaiting the longest: rewrite its waiting-entry event to 9 days before `future`
   const raw = new Database(join(dir, "t.db"));
-  raw.run("UPDATE lane_events SET created_at = ? WHERE task_id = ?", future - 9 * day, oldestWaiting.id);
+  raw.run("UPDATE lane_events SET created_at = ? WHERE task_id = ?", [future - 9 * day, oldestWaiting.id]);
   raw.close();
 
   const imp = db.createTask({ title: "implement card", lane: "implement" });
@@ -1852,9 +1852,8 @@ test("boardOverview: lane counts, oldest age, waiting ages, next proposal, block
   // a title over 80 chars is capped in the waiting list
   const longTitle = "x".repeat(120);
   const longCard = db.createTask({ title: longTitle, lane: "waiting" });
-  raw.call ? null : null;
   const raw2 = new Database(join(dir, "t.db"));
-  raw2.run("UPDATE lane_events SET created_at = ? WHERE task_id = ?", future - 12 * day, longCard.id);
+  raw2.run("UPDATE lane_events SET created_at = ? WHERE task_id = ?", [future - 12 * day, longCard.id]);
   raw2.close();
   const overview2 = db.boardOverview(future);
   expect(overview2.waiting[0]!.title).toHaveLength(80);
