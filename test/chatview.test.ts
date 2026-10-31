@@ -140,6 +140,40 @@ test("open loads history and connects; deltas build the streaming message; messa
   expect(chat.tools.size).toBe(0);
 });
 
+test("message_end normalizes legacy toolCall blocks, caps thinking, and appends toolResult rows", async () => {
+  (globalThis as any).fetch = mockChatFetch({ get: {} });
+  await chat.open("t1");
+  const source = FakeEventSource.instances[0];
+
+  // The wire forwards SDK blocks verbatim (legacy id/name/arguments spellings included).
+  source.emit({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "x".repeat(3000) },
+        { type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } },
+      ],
+    },
+  });
+  const finalized = chat.messages[0];
+  if (finalized.role !== "assistant") throw new Error("expected assistant");
+  expect(finalized.blocks).toEqual([
+    { type: "thinking", thinking: "x".repeat(2000), truncated: true },
+    { type: "toolCall", toolCallId: "c1", toolName: "bash", input: { command: "ls" } },
+  ]);
+
+  // toolResult message_end appends its ✓/✗ activity row instead of being dropped.
+  source.emit({ type: "message_end", message: { role: "toolResult", toolCallId: "c1", toolName: "bash", isError: true } });
+  expect(chat.messages[1]).toEqual({
+    role: "toolResult",
+    toolCallId: "c1",
+    toolName: "bash",
+    isError: true,
+    entryId: expect.any(String),
+  });
+});
+
 test("send posts via the api, appends the user message optimistically; stop posts abort", async () => {
   (globalThis as any).fetch = mockChatFetch({ get: { t1: stateWith(HISTORY) } });
   await chat.open("t1");

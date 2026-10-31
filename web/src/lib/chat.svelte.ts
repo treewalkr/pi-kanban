@@ -5,8 +5,8 @@
  * half). All JSON via JSON.parse on server-projected events.
  */
 import { api, chatEventsUrl } from "../api";
-import type { ChatBlock, ChatMessage, ChatQueued } from "../../../src/chat";
-import { INITIAL_STREAMING_STATE, streamReducer, type StreamingState } from "./chatStream";
+import type { ChatMessage, ChatQueued } from "../../../src/chat";
+import { capThinkingBlocks, INITIAL_STREAMING_STATE, normalizeStreamingBlocks, streamReducer, type StreamingState } from "./chatStream";
 
 type ClientEvent = Record<string, any>;
 
@@ -97,19 +97,34 @@ class ChatStore {
         this.streaming = streamReducer(this.streaming, { type: "delta", event: event.assistantMessageEvent });
         break;
       case "message_end": {
-        const message = event.message as { role?: string; content?: unknown; model?: string; provider?: string; stopReason?: string; errorMessage?: string } | undefined;
-        if (message?.role !== "assistant") return;
-        this.messages.push({
-          role: "assistant",
-          blocks: (message.content as ChatBlock[]) ?? [],
-          model: typeof message.model === "string" ? message.model : undefined,
-          provider: typeof message.provider === "string" ? message.provider : undefined,
-          stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined,
-          errorMessage: typeof message.errorMessage === "string" ? message.errorMessage : undefined,
-          entryId: `live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        });
-        this.streaming = INITIAL_STREAMING_STATE;
-        this.note = "";
+        // The wire forwards SDK blocks verbatim (signatures stripped): legacy toolCall
+        // spellings normalize here exactly like the history projection, thinking gets
+        // the same display cap, and toolResult ends append their ✓/✗ row.
+        const message = event.message as { role?: string; content?: unknown; toolCallId?: unknown; toolName?: unknown; isError?: unknown; model?: string; provider?: string; stopReason?: string; errorMessage?: string } | undefined;
+        const entryId = `live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        if (message?.role === "assistant") {
+          this.messages.push({
+            role: "assistant",
+            blocks: capThinkingBlocks(normalizeStreamingBlocks(message.content)),
+            model: typeof message.model === "string" ? message.model : undefined,
+            provider: typeof message.provider === "string" ? message.provider : undefined,
+            stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined,
+            errorMessage: typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+            entryId,
+          });
+          this.streaming = INITIAL_STREAMING_STATE;
+          this.note = "";
+          break;
+        }
+        if (message?.role === "toolResult") {
+          this.messages.push({
+            role: "toolResult",
+            toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : "",
+            toolName: typeof message.toolName === "string" ? message.toolName : undefined,
+            isError: message.isError === true,
+            entryId,
+          });
+        }
         break;
       }
       case "tool_execution_start":

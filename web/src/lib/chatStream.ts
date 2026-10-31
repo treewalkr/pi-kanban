@@ -26,6 +26,19 @@ export const INITIAL_STREAMING_STATE: StreamingState = {
   streamingMessage: null,
 };
 
+/** Display bound for live thinking blocks — mirror of THINKING_BLOCK_CAP in src/chat.ts
+ * (a value import would drag the SDK module graph into the web bundle, so it is mirrored). */
+export const THINKING_DISPLAY_CAP = 2_000;
+
+/** Cap finalized thinking blocks to the same display bound as the server's history projection. */
+export function capThinkingBlocks(blocks: ChatBlock[]): ChatBlock[] {
+  return blocks.map((block) =>
+    block.type === "thinking" && block.thinking.length > THINKING_DISPLAY_CAP
+      ? { ...block, thinking: block.thinking.slice(0, THINKING_DISPLAY_CAP), truncated: true }
+      : block,
+  );
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
