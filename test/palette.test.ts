@@ -41,7 +41,7 @@ function input(partial: Partial<PaletteInput> = {}): PaletteInput {
     projects: [],
     projectFilter: "",
     lanes: LANES,
-    archiveOpen: false,
+    archiveCollapsed: true,
     ...partial,
   };
 }
@@ -192,16 +192,16 @@ describe("palette model", () => {
     expect(dirOf("backlog")).toEqual([-1, 1]);
   });
 
-  test("archive toggle only on the archive lane, label flips with archiveOpen", () => {
-    const closed = paletteItems(input({ archiveOpen: false }));
-    const open = paletteItems(input({ archiveOpen: true }));
-    const archiveItems = closed.filter((i) => i.action.type === "archive-toggle");
+  test("archive toggle only on the archive lane, label flips with archiveCollapsed", () => {
+    const collapsed = paletteItems(input({ archiveCollapsed: true }));
+    const open = paletteItems(input({ archiveCollapsed: false }));
+    const archiveItems = collapsed.filter((i) => i.action.type === "archive-toggle");
     expect(archiveItems.length).toBe(1);
     expect(archiveItems[0]!.label).toBe("expand archive");
     expect(archiveItems[0]!.action).toEqual({ type: "archive-toggle", open: true });
     expect(open.find((i) => i.action.type === "archive-toggle")!.label).toBe("collapse archive");
     // non-archive lanes never emit an archive item: count go items = lanes count
-    expect(closed.filter((i) => i.action.type === "lane-go").length).toBe(LANES.length);
+    expect(collapsed.filter((i) => i.action.type === "lane-go").length).toBe(LANES.length);
   });
 
   test("caps the blank-query list at PALETTE_MAX = 20", () => {

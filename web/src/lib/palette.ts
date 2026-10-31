@@ -31,7 +31,7 @@ export interface PaletteInput {
   projectFilter: string;
   /** Pass board.lanes verbatim (order = board order). */
   lanes: Lane[];
-  archiveOpen: boolean;
+  archiveCollapsed: boolean;
 }
 
 /** Lane name + ancestor titles, root first, joined with " · " — "" if unknown. */
@@ -64,7 +64,7 @@ function matchScore(label: string, q: string, startsWith: number, includes: numb
 
 /** One merged, deterministic item list for the ⌘K palette. */
 export function paletteItems(input: PaletteInput): PaletteItem[] {
-  const { query, tasks, plans, projects, projectFilter, lanes, archiveOpen } = input;
+  const { query, tasks, plans, projects, projectFilter, lanes, archiveCollapsed } = input;
   const q = query.trim().toLowerCase();
   const laneCount = (laneId: string) => tasks.filter((t) => t.laneId === laneId).length;
 
@@ -105,8 +105,8 @@ export function paletteItems(input: PaletteInput): PaletteItem[] {
         });
       if (lane.id === "archive")
         candidates.push({
-          label: archiveOpen ? "collapse archive" : "expand archive",
-          action: { type: "archive-toggle", open: !archiveOpen },
+          label: archiveCollapsed ? "expand archive" : "collapse archive",
+          action: { type: "archive-toggle", open: archiveCollapsed },
           detail: "lane",
         });
       for (const c of candidates) {

@@ -256,7 +256,6 @@ class BoardStore {
 
   editing = $state<Task | null>(null);
   editMode = $state(false);
-  archiveOpen = $state(false);
   dragging = $state<string | null>(null);
   dropHint = $state<{ laneId: string; index: number } | null>(null);
   expanded = $state<Set<string>>(new Set());
@@ -293,11 +292,6 @@ class BoardStore {
     ).length,
   );
   readonly waitingCount = $derived(this.tasks.filter((t) => t.laneId === "waiting").length);
-
-  // a search that matches archived cards reveals the collapsed strip
-  readonly archiveSearchHit = $derived(
-    this.search.trim() !== "" && this.visibleTasks("archive").length > 0,
-  );
 
   readonly searchResults = $derived(searchBoard(this.tasks, this.search, this.plans));
 
@@ -417,7 +411,6 @@ class BoardStore {
     const next = new Set(this.expanded);
     for (const ancestor of this.ancestorsOf(task.id)) next.add(ancestor.id);
     this.expanded = next;
-    if (task.laneId === "archive") this.archiveOpen = true;
     this.setLaneCollapsed(task.laneId, false);
     this.flashId = task.id;
     this.search = "";
