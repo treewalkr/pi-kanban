@@ -117,6 +117,7 @@ kanban link <id> <other> · unlink <id> <other>                        # relate 
 kanban attach <id> <file> [--as <name>]                               # attach/version a card file (default name: plan); show prints the latest
 kanban files <id>                                                     # card files: name · vN · size · source
 kanban cat <id> <name> [--v <n>]                                      # print a file's content (latest, or a given version)
+kanban diff <id> <name> [--from <n>] [--to <n>]                      # unified diff between two versions (default: latest pair)
 kanban ws <id> <branch>                                               # record/clear where the card's implementation lives (--clear to unset)
 kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]  # append to the card's thread (question parks the card)
 kanban comments <id>                                                  # read the thread, oldest first
@@ -191,6 +192,9 @@ kanban help | version                                                 # CLI help
   descriptive name and keep it across revisions (re-attaching versions it);
   invalid names are rejected with the rule in the error. Read one back with
   `kanban cat <id> <name> [--v <n>]`; a wrong name lists what the card has.
+  Compare versions with `kanban diff <id> <name>` — it defaults to the newest
+  pair, so "what changed after the block/rejection" is one command
+  (`--from`/`--to` for any pair; the web detail has a per-file diff toggle).
   `session` is reserved for the agent loop.
 - **Threads**: every card carries a comment thread — the card *is* the forum.
   Kinds: `comment` (default), `review`, `handoff`, `question` (agent asking you something — parks the card in Waiting on you; any human reply returns it),
