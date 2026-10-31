@@ -140,7 +140,7 @@
           }
         }}
       />
-      <button type="button" class="ghost" onclick={() => setAutoArchiveDays(0)} disabled={archiveOff}>disable</button>
+      <button type="button" class="ghost" aria-label="disable auto-archive" onclick={() => setAutoArchiveDays(0)} disabled={archiveOff}>disable</button>
       {#if archiveOff}
         <span class="settings-dev-note">off — done cards stay put</span>
       {/if}
