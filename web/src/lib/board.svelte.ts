@@ -78,6 +78,19 @@ function loadView(): "board" | "list" {
   }
 }
 
+function loadCollapsedLanes(): Set<string> {
+  try {
+    const raw = localStorage.getItem("kanban-collapsed-lanes");
+    if (raw === null) return new Set(["archive"]);
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((x): x is string => typeof x === "string"))
+      : new Set(["archive"]);
+  } catch {
+    return new Set(["archive"]);
+  }
+}
+
 class BoardStore {
   lanes = $state<Lane[]>([]);
   tasks = $state<Task[]>([]);
@@ -212,9 +225,37 @@ class BoardStore {
     this.listCollapsed = next;
   }
 
+  collapsedLanes = $state<Set<string>>(loadCollapsedLanes());
+
+  #persistCollapsed(): void {
+    try {
+      localStorage.setItem("kanban-collapsed-lanes", JSON.stringify([...this.collapsedLanes]));
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
+  toggleLaneCollapsed(id: string): void {
+    const next = new Set(this.collapsedLanes);
+    if (!next.delete(id)) next.add(id);
+    this.collapsedLanes = next;
+    this.#persistCollapsed();
+  }
+
+  setLaneCollapsed(id: string, collapsed: boolean): void {
+    const next = new Set(this.collapsedLanes);
+    if (collapsed) next.add(id);
+    else next.delete(id);
+    this.collapsedLanes = next;
+    this.#persistCollapsed();
+  }
+
+  laneSearchHit(laneId: string): boolean {
+    return this.search.trim() !== "" && this.visibleTasks(laneId).length > 0;
+  }
+
   editing = $state<Task | null>(null);
   editMode = $state(false);
-  archiveOpen = $state(false);
   dragging = $state<string | null>(null);
   dropHint = $state<{ laneId: string; index: number } | null>(null);
   expanded = $state<Set<string>>(new Set());
@@ -251,11 +292,6 @@ class BoardStore {
     ).length,
   );
   readonly waitingCount = $derived(this.tasks.filter((t) => t.laneId === "waiting").length);
-
-  // a search that matches archived cards reveals the collapsed strip
-  readonly archiveSearchHit = $derived(
-    this.search.trim() !== "" && this.visibleTasks("archive").length > 0,
-  );
 
   readonly searchResults = $derived(searchBoard(this.tasks, this.search, this.plans));
 
@@ -375,7 +411,7 @@ class BoardStore {
     const next = new Set(this.expanded);
     for (const ancestor of this.ancestorsOf(task.id)) next.add(ancestor.id);
     this.expanded = next;
-    if (task.laneId === "archive") this.archiveOpen = true;
+    this.setLaneCollapsed(task.laneId, false);
     this.flashId = task.id;
     this.search = "";
     this.openCard(task);
@@ -404,6 +440,12 @@ class BoardStore {
     this.links = boardRes.data.links ?? {};
     this.workspaces = boardRes.data.workspaces ?? {};
     this.loading = false;
+    const laneIds = new Set(this.lanes.map((l) => l.id));
+    const liveCollapsed = new Set([...this.collapsedLanes].filter((id) => laneIds.has(id)));
+    if (liveCollapsed.size !== this.collapsedLanes.size) {
+      this.collapsedLanes = liveCollapsed;
+      this.#persistCollapsed();
+    }
     // a stored project whose tag no longer exists (renamed, or its last card dropped the tag)
     // resets to "all" — an active filter with no visible chip would be a silent empty board
     if (this.projectFilter !== "" && !this.projects.includes(this.projectFilter)) {

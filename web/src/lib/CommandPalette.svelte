@@ -15,7 +15,7 @@
       projects: board.projects,
       projectFilter: board.projectFilter,
       lanes: board.lanes,
-      archiveOpen: board.archiveOpen,
+      archiveCollapsed: board.collapsedLanes.has("archive"),
     }),
   );
   let q = $derived(query.trim().toLowerCase());
@@ -57,7 +57,7 @@
     } else if (action.type === "lane-go") {
       // lanes only exist in board view
       if (board.view === "list") board.view = "board";
-      if (action.laneId === "archive") board.archiveOpen = true;
+      board.setLaneCollapsed(action.laneId, false);
       await tick();
       document
         .querySelector(`[data-lane="${CSS.escape(action.laneId)}"]`)
@@ -70,7 +70,7 @@
       const i = board.lanes.findIndex((l) => l.id === action.laneId);
       if (i >= 0) void board.moveLane(action.laneId, i + action.dir);
     } else {
-      board.archiveOpen = action.open;
+      board.setLaneCollapsed("archive", !action.open);
     }
   }
 

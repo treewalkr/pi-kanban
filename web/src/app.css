@@ -2120,6 +2120,24 @@ button:focus-visible {
     flex: none;
     max-height: none;
   }
+
+  .lane.collapsed {
+    grid-column: 1 / -1;
+    width: auto;
+    flex: none;
+    flex-direction: row;
+    min-height: 36px;
+    padding: 4px 10px;
+  }
+
+  .lane.collapsed .collapsed-head {
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .lane.collapsed .collapsed-name {
+    writing-mode: horizontal-tb;
+  }
 }
 
 
