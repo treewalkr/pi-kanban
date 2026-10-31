@@ -321,18 +321,32 @@ class ChatHandleImpl implements ChatHandle {
           throw new KanbanError("chat is streaming — send steer or followUp", "conflict");
         }
         const seed = hasUserMessage(this.sessionManager) ? "" : `${chatSeed(this.task, this.laneName)}\n\n`;
-        let disposition: "started" | "queued" | "handled" = "started";
-        try {
-          await this.session.prompt(`${seed}${command.message}`, {
-            streamingBehavior: command.streamingBehavior,
-            preflightResult: (d) => {
-              disposition = d;
-            },
-          });
-        } catch (e) {
-          throw new KanbanError(e instanceof Error ? e.message : String(e), "conflict");
-        }
-        return { accepted: true, disposition };
+        // Decision 7 (the rpc-mode contract): the send resolves when the SDK's
+        // preflight callback fires — synchronous validation, auth, and queueing all
+        // happen before it — not when the whole LLM + tool loop finishes. Run output
+        // streams over /chat/:cardId/events; a run that fails after acceptance
+        // surfaces there, not in the POST.
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          const accept = (disposition: "started" | "queued" | "handled") => {
+            if (settled) return;
+            settled = true;
+            resolve({ accepted: true, disposition });
+          };
+          void this.session
+            .prompt(`${seed}${command.message}`, {
+              streamingBehavior: command.streamingBehavior,
+              preflightResult: (disposition) => accept(disposition as "started" | "queued" | "handled"),
+            })
+            .then(
+              () => accept("started"), // compat fallback: SDK resolved without invoking the callback
+              (e: unknown) => {
+                if (settled) return;
+                settled = true;
+                reject(new KanbanError(e instanceof Error ? e.message : String(e), "conflict"));
+              },
+            );
+        });
       }
       case "steer": {
         try {

@@ -139,6 +139,40 @@ test("prompt while streaming without behavior conflicts; steer/followUp queue", 
   await manager.disposeAll();
 });
 
+test("prompt resolves on the preflight callback instead of awaiting the run", async () => {
+  const card = db.createTask({ title: "preflight" });
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+  const handle: ChatHandle = await manager.get(card.id);
+  const live = sessions[0] as { session: Record<string, unknown> };
+  // Mirror the real SDK (dist/core/agent-session.js): preflight fires at _startRun
+  // and prompt() then awaits the whole LLM + tool loop before resolving.
+  live.session.prompt = async (_msg: string, opts?: { preflightResult?: (d: string) => void }) => {
+    opts?.preflightResult?.("started");
+    await new Promise(() => {});
+  };
+
+  const result = (await Promise.race([
+    handle.send({ type: "prompt", message: "hi" }),
+    Bun.sleep(250).then(() => "blocked-waiting-for-full-run"),
+  ])) as { accepted: boolean; disposition: string };
+  expect(result).toEqual({ accepted: true, disposition: "started" });
+
+  // A rejection before preflight (validation/auth) is a conflict refusal.
+  live.session.prompt = async () => {
+    throw new Error("no model selected");
+  };
+  try {
+    await handle.send({ type: "prompt", message: "again" });
+    expect.unreachable();
+  } catch (e) {
+    expect((e as Error).message).toBe("no model selected");
+    expect((e as { code: string }).code).toBe("conflict");
+  }
+  await manager.disposeAll();
+});
+
 test("idle expiry disposes; a streaming session never idles out", async () => {
   let now = 1_000_000;
   const idleOne = db.createTask({ title: "idle-one" });
