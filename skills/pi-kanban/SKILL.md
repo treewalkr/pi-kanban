@@ -205,7 +205,10 @@ kanban help | version                                                 # CLI help
   Kinds: `comment` (default), `review`, `handoff`, `question` (agent asking you something — parks the card in Waiting on you; any human reply returns it),
 `approval`, `rejection` (gate verdicts, human-only). `--author` names the writer:
   agents pass their name (`--author pi`), humans and the web UI default to
-  `user`. The web card detail shows the thread live.
+  `user`. The web card detail shows the thread live. Card chat (the web UI's
+  chat section) writes through the same thread verbs as `--author pi-chat` —
+  its board writes land as ordinary thread entries; approve/reject stay
+  human-owned.
 - **`--json`**: append to any command for machine-readable output; on error the
   CLI exits 1 and prints `kanban: <message>` to stderr.
 - The web UI edits the same database and receives pushed updates (SSE), so
