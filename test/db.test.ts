@@ -1219,6 +1219,29 @@ test("lane_events: creation event + capture on every writer path; none for same-
   expect(all.map((e) => e.id)).toEqual(events.map((e) => e.id));
 });
 
+test("laneEventsAfter returns entries ascending by rowid with card title; maxLaneEventRowid is 0 on empty", () => {
+  expect(db.maxLaneEventRowid()).toBe(0); // fresh, empty table
+  expect(db.laneEventsAfter(0)).toEqual([]);
+
+  const t = db.createTask({ title: "feed me", lane: "backlog" });
+  db.moveTask(t.id, "plan");
+  db.moveTask(t.id, "review");
+
+  const feed = db.laneEventsAfter(0);
+  expect(feed).toHaveLength(3); // create + two moves
+  expect(feed.map((e) => [e.fromLaneId, e.toLaneId])).toEqual([
+    [null, "backlog"],
+    ["backlog", "plan"],
+    ["plan", "review"],
+  ]);
+  expect(feed.every((e) => e.cardTitle === "feed me" && e.taskId === t.id && typeof e.createdAt === "number")).toBe(true);
+  expect([...feed].map((e) => e.rowid)).toEqual([...feed].map((e) => e.rowid).sort((a, b) => a - b)); // ascending
+
+  const last = feed[feed.length - 1].rowid;
+  expect(db.laneEventsAfter(last)).toEqual([]); // cursor at the tail
+  expect(db.maxLaneEventRowid()).toBe(last);
+});
+
 test("lane_events: backfill approximates from thread anchors and is idempotent", () => {
   const path = join(dir, "backfill.db");
   new KanbanDb(path).close();

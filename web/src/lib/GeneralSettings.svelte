@@ -1,5 +1,6 @@
 <script lang="ts">
   import { theme, setTheme } from "./theme.svelte";
+  import { notify } from "./notify.svelte";
   import { api } from "../api";
 
   let restarting = $state(false);
@@ -77,6 +78,23 @@
         <input class="sr-only" type="radio" name="theme" value="light" bind:group={theme.name} onchange={() => setTheme("light")} />
         <span class="seg-label">light</span>
       </label>
+    </div>
+  </section>
+
+  <section class="settings-general-section">
+    <h3 class="settings-general-heading">Notifications</h3>
+    <p class="settings-general-description">Desktop notification when a card enters Review. Fires only while this tab is in the background — a visible board is its own signal.</p>
+    <div class="settings-dev-restart">
+      {#if notify.permission() === "unsupported"}
+        <span class="settings-dev-note">not supported in this browser</span>
+      {:else if notify.permission() === "denied"}
+        <span class="settings-dev-note">blocked — allow notifications for this site in your browser settings</span>
+      {:else if notify.enabled}
+        <span class="settings-dev-note">on — you'll be notified while this tab is in the background</span>
+        <button type="button" class="ghost" onclick={() => notify.disable()}>disable</button>
+      {:else}
+        <button type="button" class="ghost" onclick={() => notify.enable()}>enable notifications</button>
+      {/if}
     </div>
   </section>
 

@@ -13,6 +13,7 @@
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import { theme, setTheme } from "./lib/theme.svelte";
+  import { notify } from "./lib/notify.svelte";
   import { files } from "./lib/files.svelte";
   import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu } from "@lucide/svelte";
   import { wheelPan } from "./lib/wheel";
@@ -52,6 +53,7 @@
     };
     let opened = false;
     source.addEventListener("change", refresh);
+    source.addEventListener("lane", (e) => notify.onLaneData((e as MessageEvent<string>).data));
     source.addEventListener("open", () => {
       // the server's initial sync event covers the first connect; catch up on reconnects
       if (opened) refresh();
