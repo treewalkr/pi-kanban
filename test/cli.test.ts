@@ -93,6 +93,40 @@ test("archive moves a card out of the way and mv brings it back", async () => {
   await cli("rm", task.id, "--json");
 });
 
+test("archive auto shows default, sets days, turns off", async () => {
+  const shown = await cli("archive", "auto");
+  expect(shown.code).toBe(0);
+  expect(shown.stdout.trim()).toBe("auto-archive: 7d");
+
+  const set = await cli("archive", "auto", "14");
+  expect(set.code).toBe(0);
+  expect(set.stdout.trim()).toBe("auto-archive: 14d");
+  expect(JSON.parse((await cli("archive", "auto", "--json")).stdout)).toEqual({ autoArchiveDays: 14 });
+
+  const off = await cli("archive", "auto", "off");
+  expect(off.code).toBe(0);
+  expect(off.stdout.trim()).toBe("auto-archive: off");
+  expect((await cli("archive", "auto")).stdout.trim()).toBe("auto-archive: off");
+
+  // 0 is the numeric spelling of off
+  expect((await cli("archive", "auto", "0")).stdout.trim()).toBe("auto-archive: off");
+  expect(JSON.parse((await cli("archive", "auto", "--json")).stdout)).toEqual({ autoArchiveDays: 0 });
+});
+
+test("archive auto rejects out-of-range input", async () => {
+  const bad = await cli("archive", "auto", "400");
+  expect(bad.code).toBe(1);
+  expect(bad.stderr).toContain("auto-archive days must be between 0 and 365");
+
+  // `kanban archive <id>` still moves a card — the subcommand didn't eat the id path
+  const added = await cli("add", "archive regression", "--json");
+  const task = JSON.parse(added.stdout) as Task;
+  const archived = await cli("archive", task.id, "--json");
+  expect(archived.code).toBe(0);
+  expect(JSON.parse(archived.stdout).laneId).toBe("archive");
+  await cli("rm", task.id, "--json");
+});
+
 test("human ls output groups by lane", async () => {
   await cli("add", "human readable", "--lane", "back");
   const out = await cli("ls");

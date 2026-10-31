@@ -38,7 +38,7 @@ usage:
                           [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>…]
                           [--clear-note] [--clear-parent] [--clear-blocked-by] [--clear-tags]
   kanban done <id>
-  kanban archive <id>                        (undo: mv <id> <lane>)
+  kanban archive <id> | auto [<n>|off]        (card → Archive; auto: done cards archive after N days — off disables, default 7)
   kanban check [--json]                     (board-health lint: done parents w/ active children, children behind parent, planless build cards, lanes over WIP limit; advisory, exit 0)
   kanban stats [id]                     (board summary, or one card's lane times / cycle / gate metrics)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
@@ -682,6 +682,16 @@ async function main(): Promise<number> {
       }
 
       case "archive": {
+        if (positional[0] === "auto") {
+          const arg = positional[1];
+          if (arg !== undefined) {
+            db.setAutoArchiveDays(arg === "off" ? 0 : Number(arg)); // validates: integer 0–365, else KanbanError
+          }
+          const days = db.autoArchiveDays();
+          if (json) jsonOut({ autoArchiveDays: days });
+          else out(days === 0 ? "auto-archive: off" : `auto-archive: ${days}d`);
+          return 0;
+        }
         const task = db.resolveTask(positional[0] ?? "");
         const moved = db.moveTask(task.id, laneById(db, "archive"), undefined, { cause: "archive" });
         if (json) jsonOut(moved);
