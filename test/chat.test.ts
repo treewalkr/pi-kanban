@@ -1,0 +1,323 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  CHAT_SESSION_ID_PREFIX,
+  ChatManager,
+  chatSeed,
+  chatSystemAppend,
+  DEFAULT_CHAT_IDLE_TIMEOUT_MS,
+  defaultChatSessionFactory,
+  projectEntries,
+  THINKING_BLOCK_CAP,
+  type ChatHandle,
+  type ChatSessionFactory,
+} from "../src/chat";
+import { KanbanDb } from "../src/db";
+
+let dir = "";
+let db: KanbanDb;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "kanban-chat-"));
+  db = new KanbanDb(join(dir, "t.db"));
+});
+
+afterEach(() => {
+  db.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** A fake SDK session: only the surface ChatHandleImpl touches. */
+function fakeSession(overrides: Record<string, unknown> = {}) {
+  const listeners = new Set<(event: unknown) => void>();
+  return {
+    subscribe: (listener: (event: unknown) => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    isStreaming: false,
+    isCompacting: false,
+    model: null,
+    thinkingLevel: "off",
+    getSteeringMessages: () => [] as string[],
+    getFollowUpMessages: () => [] as string[],
+    agent: { state: {} },
+    prompt: async () => {},
+    steer: async () => "queued" as const,
+    followUp: async () => "queued" as const,
+    abort: async () => {},
+    dispose: () => {},
+    ...overrides,
+  };
+}
+
+function factorySpy(sessions: unknown[]) {
+  let count = 0;
+  const factory: ChatSessionFactory = async (opts) => {
+    count += 1;
+    const session = fakeSession();
+    sessions.push({ ...opts, session });
+    return session as never;
+  };
+  return { factory, count: () => count };
+}
+
+test("get returns one alive handle per card and memoizes concurrent creation", async () => {
+  const one = db.createTask({ title: "one" });
+  const sessions: unknown[] = [];
+  const { factory, count } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+
+  const [a, b] = await Promise.all([manager.get(one.id), manager.get(one.id)]);
+  expect(a).toBe(b);
+  expect(count()).toBe(1); // parallel gets share one factory invocation
+
+  const again = await manager.get(one.id);
+  expect(again).toBe(a);
+  expect(manager.peek(one.id)).toBe(a);
+  expect(manager.peek("zzzzz")).toBeNull();
+  expect(manager.sessionCount()).toBe(1);
+});
+
+test("deterministic id: fresh card creates kanban-chat-<id>, existing file resumes it", async () => {
+  const fresh = db.createTask({ title: "fresh" });
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const sessionDir = join(dir, "sessions");
+  const manager = new ChatManager({ cwd: dir, db, sessionDir, createSession: factory });
+
+  const handle = await manager.get(fresh.id);
+  expect(handle.sessionId).toBe(CHAT_SESSION_ID_PREFIX + fresh.id);
+  const first = sessions[0] as { sessionManager: { getSessionId(): string } };
+  expect(first.sessionManager.getSessionId()).toBe(handle.sessionId);
+  await manager.disposeAll();
+
+  // A pre-written session file under the same dir is opened, not re-created.
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const id = CHAT_SESSION_ID_PREFIX + fresh.id;
+  const pre = SessionManager.create(dir, sessionDir, { id });
+  pre.appendMessage({ role: "user", content: "hello from disk", timestamp: 1 });
+
+  const resumeSessions: unknown[] = [];
+  const { factory: resumeFactory } = factorySpy(resumeSessions);
+  const manager2 = new ChatManager({ cwd: dir, db, sessionDir, createSession: resumeFactory });
+  const resumed = await manager2.get(fresh.id);
+  expect(resumed.sessionId).toBe(id);
+  const history = resumed.historyFromDisk();
+  expect(history.some((m) => m.role === "user" && m.content === "hello from disk")).toBe(true);
+  await manager2.disposeAll();
+});
+
+test("prompt while streaming without behavior conflicts; steer/followUp queue", async () => {
+  const busy = db.createTask({ title: "busy" });
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+  const handle: ChatHandle = await manager.get(busy.id);
+  const live = sessions[0] as { session: Record<string, unknown> };
+  live.session.isStreaming = true;
+
+  try {
+    await handle.send({ type: "prompt", message: "hi" });
+    expect.unreachable();
+  } catch (e) {
+    expect((e as Error).message).toBe("chat is streaming — send steer or followUp");
+    expect((e as { code: string }).code).toBe("conflict");
+  }
+
+  const steered = (await handle.send({ type: "steer", message: "s" })) as { accepted: boolean; disposition: string };
+  expect(steered).toEqual({ accepted: true, disposition: "queued" });
+  const followUp = (await handle.send({ type: "followUp", message: "f" })) as { accepted: boolean };
+  expect(followUp.accepted).toBe(true);
+
+  const queued = (await handle.send({ type: "prompt", message: "q", streamingBehavior: "followUp" })) as { accepted: boolean };
+  expect(queued.accepted).toBe(true);
+  await manager.disposeAll();
+});
+
+test("idle expiry disposes; a streaming session never idles out", async () => {
+  let now = 1_000_000;
+  const idleOne = db.createTask({ title: "idle-one" });
+  const idleTwo = db.createTask({ title: "idle-two" });
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({
+    cwd: dir,
+    db,
+    createSession: factory,
+    idleTimeoutMs: DEFAULT_CHAT_IDLE_TIMEOUT_MS,
+    now: () => now,
+  });
+
+  const shutdowns: unknown[] = [];
+  const handle = await manager.get(idleOne.id);
+  handle.onEvent((e) => shutdowns.push(e));
+  now += DEFAULT_CHAT_IDLE_TIMEOUT_MS + 1;
+  await Bun.sleep(400); // the idle sweep ticks at 250ms
+  expect(manager.peek(idleOne.id)).toBeNull();
+  expect(shutdowns).toContainEqual({ type: "shutdown", reason: "idle" });
+
+  const streamingSessions: unknown[] = [];
+  const { factory: streamingFactory } = factorySpy(streamingSessions);
+  const manager2 = new ChatManager({ cwd: dir, db, createSession: streamingFactory, now: () => now });
+  const live = await manager2.get(idleTwo.id);
+  (streamingSessions[0] as { session: Record<string, unknown> }).session.isStreaming = true;
+  now += DEFAULT_CHAT_IDLE_TIMEOUT_MS * 2;
+  await Bun.sleep(400);
+  expect(live.isAlive()).toBe(true);
+  await manager2.disposeAll();
+  expect(manager2.sessionCount()).toBe(0);
+});
+
+test("disposeAll emits shutdown with reason server on every listener", async () => {
+  const d1 = db.createTask({ title: "d1" });
+  const d2 = db.createTask({ title: "d2" });
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory, idleTimeoutMs: 0 });
+  const a = await manager.get(d1.id);
+  const b = await manager.get(d2.id);
+  const got: unknown[] = [];
+  a.onEvent((e) => got.push(e));
+  b.onEvent((e) => got.push(e));
+  await manager.disposeAll();
+  expect(got).toContainEqual({ type: "shutdown", reason: "server" });
+  expect(manager.sessionCount()).toBe(0);
+  expect(a.isAlive()).toBe(false);
+  expect(b.isAlive()).toBe(false);
+});
+
+test("first prompt carries the seed; system append carries the skill body and gate rules", async () => {
+  const seeded = db.createTask({ title: "seeded", note: "the note body" });
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+  const handle = await manager.get(seeded.id);
+
+  const capture = sessions[0] as { session: Record<string, unknown>; sessionManager: { appendMessage(m: unknown): string } };
+  const prompts: string[] = [];
+  capture.session.prompt = async (text: string) => {
+    prompts.push(text);
+    // Mirror the real SDK: a prompt appends the user entry, so later prompts skip the seed.
+    capture.sessionManager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+  };
+
+  const id = seeded.id;
+  const resolved = seeded;
+  const laneName = db.lanes().find((l) => l.id === resolved.laneId)!.name;
+  await handle.send({ type: "prompt", message: "what next?" });
+  await handle.send({ type: "prompt", message: "verbatim second" });
+
+  const seed = chatSeed(resolved, laneName);
+  expect(prompts[0].startsWith(seed)).toBe(true);
+  expect(prompts[0]).toContain(id);
+  expect(prompts[0]).toContain("the note body");
+  expect(prompts[0]).toContain(`kanban brief ${id}`);
+  expect(prompts[0].endsWith("what next?")).toBe(true);
+  expect(prompts[1]).toBe("verbatim second"); // later prompts are bare
+
+  const append = (sessions[0] as { appendSystemPrompt: string }).appendSystemPrompt;
+  expect(append).toContain(`<skill name="pi-kanban"`);
+  expect(append).toContain("--author pi-chat");
+  expect(append).toContain("Never run kanban approve, kanban reject, kanban review, or kanban plan-review");
+  expect(append).toContain(`kanban card ${id} "seeded"`);
+  await manager.disposeAll();
+});
+
+test("history projection caps thinking blocks and the message tail", () => {
+  const long = "x".repeat(THINKING_BLOCK_CAP + 50);
+  const entries = [
+    ...Array.from({ length: 120 }, (_, i) => ({
+      type: "message",
+      id: `e${i}`,
+      message: { role: "user", content: `m${i}` },
+    })),
+    {
+      type: "message",
+      id: "e-thinking",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: long }, { type: "text", text: "done" }] },
+    },
+    { type: "message", id: "e-tool", message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "ls" } }] } },
+    { type: "message", id: "e-result", message: { role: "toolResult", toolCallId: "call-1", toolName: "bash", isError: false } },
+    { type: "message", id: "e-system", message: { role: "system", content: "hidden" } },
+  ];
+  const { messages, truncated } = projectEntries(entries);
+  expect(truncated).toBe(true);
+  expect(messages.length).toBe(100);
+  const thinkingMsg = messages.find((m) => m.role === "assistant" && m.entryId === "e-thinking");
+  if (thinkingMsg?.role !== "assistant") throw new Error("assistant message lost");
+  expect(thinkingMsg.blocks.find((b) => b.type === "thinking")).toEqual({
+    type: "thinking",
+    thinking: "x".repeat(THINKING_BLOCK_CAP),
+    truncated: true,
+  });
+  expect(thinkingMsg.blocks.find((b) => b.type === "text")).toEqual({ type: "text", text: "done" });
+
+  const toolMsg = messages.find((m) => m.role === "assistant" && m.entryId === "e-tool");
+  if (toolMsg?.role !== "assistant") throw new Error("tool message lost");
+  expect(toolMsg.blocks[0]).toEqual({ type: "toolCall", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } });
+
+  expect(messages.some((m) => m.role === "toolResult" && m.toolCallId === "call-1")).toBe(true);
+  expect(messages.some((m) => m.role === "user" && m.content === "m0")).toBe(false); // tail-capped away
+  expect(messages.some((m) => m.role === "user" && m.content === "m119")).toBe(true);
+  expect(messages.some((m) => m.role === "user" && m.content === "hidden")).toBe(false); // system skipped
+});
+
+test("active tool events replay to new listeners; end and agent_end clear them", async () => {
+  const tools = db.createTask({ title: "tools" });
+  let sessionListener: ((event: unknown) => void) | undefined;
+  const manager = new ChatManager({
+    cwd: dir,
+    db,
+    idleTimeoutMs: 0,
+    createSession: async () =>
+      fakeSession({
+        subscribe: (listener: (event: unknown) => void) => {
+          sessionListener = listener;
+          return () => {};
+        },
+      }) as never,
+  });
+  const handle = await manager.get(tools.id);
+  if (!sessionListener) throw new Error("session listener not captured");
+
+  // Nothing running yet: a fresh listener gets no replay.
+  const early: unknown[] = [];
+  handle.onEvent((e) => early.push(e))();
+  expect(early).toEqual([]);
+
+  sessionListener({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: {} });
+  sessionListener({ type: "tool_execution_update", toolCallId: "call-1", toolName: "bash", args: {}, partialResult: "v2" });
+  sessionListener({ type: "tool_execution_start", toolCallId: "call-1/nested", toolName: "read", args: {}, parentToolCallId: "call-1" });
+
+  const replay: unknown[] = [];
+  handle.onEvent((e) => replay.push(e));
+  expect(replay.map((e) => (e as { toolCallId: string }).toolCallId)).toEqual(["call-1", "call-1/nested"]);
+  expect((replay[0] as { partialResult: unknown }).partialResult).toBe("v2"); // latest update wins
+  expect(handle.activeToolEvents().length).toBe(2);
+
+  sessionListener({ type: "tool_execution_end", toolCallId: "call-1", toolName: "bash", result: {}, isError: false });
+  expect(handle.activeToolEvents().map((e) => (e as { toolCallId: string }).toolCallId)).toEqual([]); // nested `<id>/` ids die with the parent
+
+  sessionListener({ type: "tool_execution_start", toolCallId: "call-2", toolName: "edit", args: {} });
+  sessionListener({ type: "agent_end", messages: [] });
+  expect(handle.activeToolEvents()).toEqual([]);
+  await manager.disposeAll();
+});
+
+test("real SDK session constructs in-memory under bun", async () => {
+  let sdk: typeof import("@earendil-works/pi-coding-agent");
+  try {
+    sdk = await import("@earendil-works/pi-coding-agent");
+  } catch {
+    return; // package import broken → pass here; the suite fails loudly elsewhere
+  }
+  const sessionManager = sdk.SessionManager.inMemory(dir);
+  const session = await defaultChatSessionFactory({ cwd: dir, sessionManager, appendSystemPrompt: "chat append" });
+  expect(typeof session.subscribe).toBe("function");
+  session.dispose();
+});

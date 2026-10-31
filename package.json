@@ -17,6 +17,7 @@
     "check": "svelte-check --workspace web && tsc --noEmit -p tsconfig.src.json"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@elysiajs/cors": "^1.4.2",
     "@elysiajs/static": "^1.4.10",
     "@lucide/svelte": "^1.64.0",
