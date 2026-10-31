@@ -269,6 +269,13 @@ export function taskDetail(db: KanbanDb, task: Task): string {
     }
     out.push(c.dim("  (kanban cat <id> <name> prints one · kanban diff <id> <name> compares versions)"));
   }
+  const ghLinks = db.ghLinksOf(task.id);
+  if (ghLinks.length > 0) {
+    for (const l of ghLinks) {
+      const state = db.ghState(l.url)?.state ?? "unsynced";
+      out.push(`gh: ${l.repo}#${l.number} ${c.dim(`(${l.kind} · ${state})`)}`);
+    }
+  }
   const sessions = db.attachments(task.id, "session");
   if (sessions.length > 0) {
     out.push(c.dim("sessions:"));

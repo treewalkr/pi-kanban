@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
 import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
+import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
 import { searchBoard } from "./search";
 import { cardFileDiff } from "./diff";
 
@@ -20,7 +21,9 @@ usage:
   kanban link <id> <other>                (relate two cards; visible from both)
   kanban unlink <id> <other>
   kanban elaborate <id>                     (queue AI note elaboration; runs on the auto-agent loop)
-  kanban attach <id> <file> [--as <name>]   (default name: plan; re-attach versions; show prints the latest)
+  kanban attach <id> <file|gh-ref> [--as <name>]  (files: default name plan, re-attach versions; GitHub refs: <pr-url|issue-url|gh:owner/repo#n>)
+  kanban gh unlink <id> <ref>                (remove a GitHub link; ref: url, gh:owner/repo#n, or #n)
+  kanban import gh:<owner>/<repo> [--limit <n>]  (seed Backlog from the repo's open GitHub issues)
   kanban files <id> [--json]                  (card files: name · vN · size · source)
   kanban cat <id> <name> [--v <n>]            (print a file's content, latest or a given version)
   kanban diff <id> <name> [--from <n>] [--to <n>]  (unified diff between versions; default: the latest pair)
@@ -69,7 +72,7 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to"]);
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit"]);
 const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
@@ -347,6 +350,7 @@ async function main(): Promise<number> {
             blockedBy: map[task.id] ?? [],
             blocking: db.blocking(task.id).map((t) => t.id),
             links: linksMap[task.id] ?? [],
+            ghLinks: db.ghLinksOf(task.id),
           });
         } else {
           out(taskDetail(db, task));
@@ -388,6 +392,38 @@ async function main(): Promise<number> {
         return 0;
       }
 
+      case "gh": {
+        const [ghSub, ghId, ghRef] = positional;
+        if (ghSub !== "unlink" || !ghId || !ghRef) {
+          throw new KanbanError("usage: kanban gh unlink <id> <ref>  (ref: url, gh:owner/repo#n, or #n)", "invalid");
+        }
+        const task = db.resolveTask(ghId);
+        const links = db.ghLinksOf(task.id);
+        let link = links.find((l) => l.url === ghRef);
+        if (!link) {
+          const parsed = parseGhRef(ghRef);
+          if (parsed) link = links.find((l) => l.url === parsed.url);
+        }
+        if (!link) {
+          const bare = /^#(\d+)$/.exec(ghRef);
+          if (bare) {
+            const matches = links.filter((l) => l.number === Number(bare[1]));
+            if (matches.length === 1) link = matches[0];
+            else if (matches.length > 1) {
+              throw new KanbanError(
+                `ambiguous GitHub link '${ghRef}' on card '${task.id}': ${matches.map((m) => `${m.repo}#${m.number} (${m.kind})`).join(", ")}`,
+                "conflict",
+              );
+            }
+          }
+        }
+        if (!link) throw new KanbanError(`no GitHub link matching '${ghRef}' on card '${task.id}'`, "not-found");
+        db.unlinkGhLinkById(task.id, link.id);
+        if (json) jsonOut({ removed: true });
+        else out(`${c.green("✓")} unlinked ${c.bold(`${link.repo}#${link.number}`)} from ${c.dim(task.id)}`);
+        return 0;
+      }
+
       case "brief": {
         const idRef = positional[0];
         if (!idRef) throw new KanbanError("usage: kanban brief <id>", "invalid");
@@ -418,6 +454,34 @@ async function main(): Promise<number> {
       case "attach": {
         const [idRef, file] = positional;
         if (!idRef || !file) throw new KanbanError("usage: kanban attach <id> <file> [--as <name>]", "invalid");
+        const ghRef = parseGhRef(file);
+        if (ghRef) {
+          if (typeof flags.as === "string" && flags.as) {
+            throw new KanbanError("--as is for file attachments — GitHub links take no --as", "invalid");
+          }
+          const link = db.attachGhLink(idRef, ghRef);
+          if (json) jsonOut(link);
+          else {
+            out(`${c.green("✓")} linked ${c.bold(`${link.repo}#${link.number}`)} ${c.dim(`(${link.kind})`)} to ${c.dim(link.cardId)}`);
+            if (process.env.KANBAN_GH_SYNC_MS !== "0") {
+              // best-effort: fill the state cache right away; failure prints nothing extra
+              try {
+                const st = await refreshGhUrl(db, link.url);
+                if (st) out(c.dim(`  state: ${st.state}`));
+              } catch {
+                // offline or unauthenticated gh — the sync loop retries within the ttl
+              }
+            }
+          }
+          return 0;
+        }
+        // url-shaped input that is not a valid GitHub ref must never fall through to readFileSync
+        if (file.startsWith("https://") || file.startsWith("gh:")) {
+          throw new KanbanError(
+            `not a GitHub pr/issue ref: '${file}' (expected https://github.com/{owner}/{repo}/pull/{n} or /issues/{n}, or gh:{owner}/{repo}#{n})`,
+            "invalid",
+          );
+        }
         const name = typeof flags.as === "string" && flags.as ? flags.as : "plan";
         if (RESERVED_FILE_NAMES.has(name)) throw new KanbanError(`'${name}' is reserved for the agent loop`, "invalid");
         let content: string;
@@ -429,6 +493,35 @@ async function main(): Promise<number> {
         const stored = db.attach(idRef, name, content, resolve(file));
         if (json) jsonOut(stored);
         else out(`${c.green("✓")} attached ${c.bold(name)} ${c.dim(`v${stored.version}`)} to ${c.dim(stored.taskId)}`);
+        return 0;
+      }
+
+      case "import": {
+        const [target] = positional;
+        if (!target || !/^gh:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(target)) {
+          throw new KanbanError("usage: kanban import gh:<owner>/<repo> [--limit <n>]", "invalid");
+        }
+        const repo = target.slice("gh:".length);
+        const rawLimit = str(flags, "limit");
+        let limit = 50;
+        if (rawLimit !== undefined) {
+          if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1) {
+            throw new KanbanError(`--limit must be a positive integer (got '${rawLimit}')`, "invalid");
+          }
+          limit = Math.min(Number(rawLimit), 200);
+        }
+        let result;
+        try {
+          result = await importIssues(db, repo, { limit });
+        } catch (err) {
+          const detail = String((err as Error)?.message ?? err).replace(/\s+/g, " ").trim();
+          throw new KanbanError(`gh issue list failed: ${detail.slice(-200)}`, "invalid");
+        }
+        if (json) jsonOut(result);
+        else {
+          out(`${c.green("✓")} imported ${c.bold(String(result.created))} issues from ${c.bold(repo)} ${c.dim(`(${result.skipped} skipped)`)}`);
+          for (const card of result.cards) out(c.dim(`  #${card.number} → ${card.cardId}`));
+        }
         return 0;
       }
 
