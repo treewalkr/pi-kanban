@@ -121,6 +121,7 @@ export type LaneEventCause =
   | "approve"
   | "done"
   | "archive"
+  | "auto-archive"
   | "backfill";
 
 export interface LaneEvent {
@@ -2119,6 +2120,40 @@ export class KanbanDb {
       "INSERT INTO board_state (key, value) VALUES ('max_workers', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     ).run(String(n));
     return this.maxWorkers();
+  }
+
+  /** Days a card sits in Done before the sweep archives it; absent or corrupt row falls back to 7. 0 disables the sweep. */
+  autoArchiveDays(): number {
+    const row = this.q("SELECT value FROM board_state WHERE key = 'auto_archive_days'").get() as
+      | { value: string }
+      | undefined;
+    if (!row) return 7;
+    const n = Number(row.value);
+    return Number.isInteger(n) && n >= 0 && n <= 365 ? n : 7;
+  }
+
+  setAutoArchiveDays(n: number): number {
+    if (!Number.isInteger(n) || n < 0 || n > 365) {
+      throw new KanbanError("auto-archive days must be between 0 and 365", "invalid");
+    }
+    this.q(
+      "INSERT INTO board_state (key, value) VALUES ('auto_archive_days', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(String(n));
+    return this.autoArchiveDays();
+  }
+
+  /** Done cards whose latest done-entry (fallback updated_at) is at least autoArchiveDays() old; [] when disabled. */
+  dueForAutoArchive(now: number = Date.now()): Task[] {
+    const days = this.autoArchiveDays();
+    if (days === 0) return [];
+    const cutoff = now - days * 86_400_000;
+    return this.q(
+      `SELECT t.* FROM tasks t
+       WHERE t.lane_id = 'done'
+         AND COALESCE((SELECT MAX(le.created_at) FROM lane_events le
+                       WHERE le.task_id = t.id AND le.to_lane_id = 'done'), t.updated_at) <= ?
+       ORDER BY t.created_at, t.id`,
+    ).all(cutoff) as Task[];
   }
 
   // ---------- agent session leases ----------
