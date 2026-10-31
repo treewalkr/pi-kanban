@@ -200,6 +200,66 @@ test("attach versions a plan file; show prints the latest; bad file fails", asyn
   await cli("rm", task.id, "--json");
 });
 
+test("kanban diff: adjacent pair by default, any pair with --from/--to", async () => {
+  const added = await cli("add", "diff card", "--json");
+  const task = JSON.parse(added.stdout) as Task;
+
+  const designFile = join(dir, "diff-design.md");
+  await Bun.write(designFile, "# design v1");
+  await cli("attach", task.id, designFile, "--as", "design.md");
+  await Bun.write(designFile, "# design v2");
+  await cli("attach", task.id, designFile, "--as", "design.md");
+
+  const onlyFile = join(dir, "only.txt");
+  await Bun.write(onlyFile, "single version");
+  await cli("attach", task.id, onlyFile, "--as", "only.txt");
+
+  const d = await cli("diff", task.id, "design.md");
+  expect(d.code).toBe(0);
+  expect(d.stdout).toContain("design.md v1 → v2");
+  expect(d.stdout).toContain("--- a/v1");
+  expect(d.stdout).toContain("-# design v1");
+  expect(d.stdout).toContain("+# design v2");
+
+  const pair = await cli("diff", task.id, "design.md", "--from", "1", "--to", "2");
+  expect(pair.code).toBe(0);
+  expect(pair.stdout).toContain("design.md v1 → v2");
+
+  const unknown = await cli("diff", task.id, "nope.md");
+  expect(unknown.code).toBe(1);
+  expect(unknown.stderr).toContain("no file 'nope.md' on card");
+  expect(unknown.stderr).toContain("design.md");
+
+  const single = await cli("diff", task.id, "only.txt");
+  expect(single.code).toBe(1);
+  expect(single.stderr).toContain("only v1 of 'only.txt' — nothing to diff");
+
+  const noV = await cli("diff", task.id, "design.md", "--from", "9");
+  expect(noV.code).toBe(1);
+  expect(noV.stderr).toContain("no v9 of 'design.md' — versions v1–v2");
+
+  const badRange = await cli("diff", task.id, "design.md", "--from", "2", "--to", "1");
+  expect(badRange.code).toBe(1);
+  expect(badRange.stderr).toContain("invalid range: v2 → v1");
+
+  const asJson = await cli("diff", task.id, "design.md", "--json");
+  expect(asJson.code).toBe(0);
+  const parsed = JSON.parse(asJson.stdout) as { name: string; from: { version: number }; to: { version: number }; patch: string };
+  expect(parsed.name).toBe("design.md");
+  expect(parsed.from.version).toBe(1);
+  expect(parsed.to.version).toBe(2);
+  expect(parsed.patch).toContain("+# design v2");
+
+  const badFlag = await cli("diff", task.id, "design.md", "--from", "abc");
+  expect(badFlag.code).toBe(1);
+  expect(badFlag.stderr).toContain("--from must be a positive integer (got 'abc')");
+
+  const show = await cli("show", task.id);
+  expect(show.stdout).toContain("kanban diff <id> <name>");
+
+  await cli("rm", task.id, "--json");
+});
+
 test("attach --as, files, cat: named card files with versioned reads", async () => {
   const added = await cli("add", "card files", "--json");
   const task = JSON.parse(added.stdout) as Task;
