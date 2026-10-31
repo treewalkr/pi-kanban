@@ -403,6 +403,51 @@ test("waiting lane: seeds first, fixed, and migrates existing boards", () => {
   adopted.close();
 });
 
+test("wip limit: set → roundtrip → clear; invalid values rejected", () => {
+  expect(db.lanes().every((l) => l.wipLimit === null)).toBe(true);
+  const lane = db.updateLane("implement", { wipLimit: 3 });
+  expect(lane.wipLimit).toBe(3);
+  expect(db.lanes().find((l) => l.id === "implement")?.wipLimit).toBe(3);
+  db.updateLane("implement", { name: "Test + Implement" });
+  expect(db.lanes().find((l) => l.id === "implement")?.wipLimit).toBe(3);
+  db.updateLane("implement", { wipLimit: null });
+  expect(db.lanes().find((l) => l.id === "implement")?.wipLimit).toBeNull();
+  for (const bad of [0, 1.5, 1000, "3" as any]) {
+    expect(() => db.updateLane("implement", { wipLimit: bad })).toThrow(
+      new KanbanError("wip limit must be an integer from 1 to 999 (or null to clear)", "invalid"),
+    );
+  }
+  expect(db.updateLane("review", { wipLimit: 1 }).wipLimit).toBe(1);
+  expect(db.updateLane("review", { wipLimit: 999 }).wipLimit).toBe(999);
+  db.updateLane("review", { wipLimit: null });
+});
+
+test("adds the wip_limit column when reopening a board that predates it", () => {
+  const path = join(dir, "oldwip.db");
+  const raw = new Database(path); // simulate a board written before wip_limit existed
+  raw.exec(`
+    CREATE TABLE lanes (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      position REAL NOT NULL, fixed INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+      lane_id TEXT NOT NULL REFERENCES lanes (id), project TEXT NOT NULL DEFAULT '',
+      position REAL NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+    INSERT INTO lanes (id, name, description, position, fixed) VALUES ('todo', 'Todo', '', 100, 0);
+    INSERT INTO tasks (id, title, note, lane_id, project, position, created_at, updated_at)
+      VALUES ('wip34', 'legacy', '', 'todo', '', 100, 0, 0);
+  `);
+  raw.close();
+  const reopened = new KanbanDb(path);
+  const todo = reopened.lanes().find((l) => l.id === "todo");
+  expect(todo?.wipLimit).toBeNull();
+  expect(reopened.updateLane("todo", { wipLimit: 2 }).wipLimit).toBe(2);
+  expect(reopened.lanes().find((l) => l.id === "todo")?.wipLimit).toBe(2);
+  reopened.close();
+});
+
 test("adds the parent column when reopening a board that predates hierarchy", () => {
   const path = join(dir, "old.db");
   const raw = new Database(path); // simulate a board written before parent_id existed

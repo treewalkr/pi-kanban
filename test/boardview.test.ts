@@ -41,6 +41,7 @@ function makeLane(id: string, name: string): Lane {
     description: "",
     position: 0,
     fixed: 0,
+    wipLimit: null,
   };
 }
 
