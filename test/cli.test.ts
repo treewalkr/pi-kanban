@@ -1206,3 +1206,116 @@ test("search --tag scopes results to tagged cards", async () => {
   expect(results.length).toBeGreaterThan(0);
   expect(results.every((r) => r.task.tags.includes("ui"))).toBe(true);
 });
+
+test("lane limit sets, shows in lane ls, clears with off", async () => {
+  const wipDb = join(dir, "lane-limit.db");
+  const run = (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: wipDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code }));
+  };
+
+  const set = await run("lane", "limit", "impl", "2");
+  expect(set.code).toBe(0);
+  expect(set.stdout).toContain("implement  wip limit 2");
+
+  await run("add", "limit-a", "--lane", "implement");
+  await run("add", "limit-b", "--lane", "implement");
+  const ls = await run("lane", "ls");
+  expect(ls.stdout).toMatch(/implement.*2\/2/);
+
+  const off = await run("lane", "limit", "impl", "off");
+  expect(off.code).toBe(0);
+  expect(off.stdout).toContain("implement  wip limit cleared");
+  const lsAfter = await run("lane", "ls");
+  expect(lsAfter.stdout).toMatch(/Test \+ Implement \(implement\)\s+2\b/);
+  expect(lsAfter.stdout).not.toContain("2/2");
+
+  for (const bad of [["0"], ["abc"], []] as const) {
+    const res = await run("lane", "limit", "impl", ...bad);
+    expect(res.code).toBe(1);
+  }
+  expect((await run("lane", "limit", "impl", "0")).stderr).toContain("wip limit must be an integer from 1 to 999 (or 'off' to clear)");
+  expect((await run("lane", "limit", "impl")).stderr).toContain("usage: kanban lane limit <ref> <n|off>");
+
+  const badSub = await run("lane", "badsub");
+  expect(badSub.code).toBe(1);
+  expect(badSub.stderr).toContain("limit");
+});
+
+test("approve into an over-limit Implement warns but still succeeds", async () => {
+  const gateDb = join(dir, "wip-approve.db");
+  const run = (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: gateDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code }));
+  };
+
+  await run("lane", "limit", "impl", "1");
+  // card B already in implement (occupies the 1 slot)
+  await run("add", "already-building", "--lane", "implement");
+  // card A: plan-gate ready (mv to plan + attach plan)
+  const a = JSON.parse((await run("add", "gate-card", "--lane", "plan", "--json")).stdout) as Task;
+  const planPath = join(dir, "gate-plan.md");
+  writeFileSync(planPath, "# Gate plan");
+  const attached = await run("attach", a.id, planPath);
+  expect(attached.code).toBe(0);
+
+  const res = await run("approve", a.id);
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain("→ Test + Implement");
+  expect(res.stdout).toContain("⚠ implement over WIP limit: 2/1");
+
+  const shown = JSON.parse((await run("show", a.id, "--json")).stdout) as Task;
+  expect(shown.laneId).toBe("implement");
+});
+
+test("check prints wip-over-limit, JSON carries it, exit stays 0", async () => {
+  const checkDb = join(dir, "wip-check.db");
+  const run = (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: checkDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code }));
+  };
+
+  await run("lane", "limit", "impl", "1");
+  const a = JSON.parse((await run("add", "over-a", "--lane", "implement", "--json")).stdout) as Task;
+  const b = JSON.parse((await run("add", "over-b", "--lane", "implement", "--json")).stdout) as Task;
+  writeFileSync(join(dir, "a.md"), "p");
+  writeFileSync(join(dir, "b.md"), "p");
+  await run("attach", a.id, join(dir, "a.md"));
+  await run("attach", b.id, join(dir, "b.md"));
+
+  const res = await run("check");
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain("⚠ implement over WIP limit: 2/1");
+
+  const jsonRes = await run("check", "--json");
+  expect(jsonRes.code).toBe(0);
+  const violations = JSON.parse(jsonRes.stdout) as Array<{ kind: string; laneId?: string; limit?: number; count?: number }>;
+  expect(violations).toContainEqual({ kind: "wip-over-limit", laneId: "implement", limit: 1, count: 2 });
+});

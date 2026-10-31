@@ -93,7 +93,12 @@ export function taskLine(db: KanbanDb, task: Task): string {
   const color = laneColor(lanes.indexOf(lane!));
   const chip = task.project ? c.dim(` [${task.project}]`) : "";
   const tags = task.tags.length > 0 ? c.dim(` ${task.tags.map((t) => `#${t}`).join(" ")}`) : "";
-  return `${c.green("✓")} ${c.dim(task.id)}  ${task.title}${chip}${tags}  ${c.hex(color, `→ ${lane?.name ?? task.laneId}`)}`;
+  const n = lane ? db.taskCount(lane.id) : 0;
+  const wip =
+    lane && lane.wipLimit !== null && n > lane.wipLimit
+      ? `  ${c.hex("#d29922", `⚠ ${lane.id} over WIP limit: ${n}/${lane.wipLimit}`)}`
+      : "";
+  return `${c.green("✓")} ${c.dim(task.id)}  ${task.title}${chip}${tags}  ${c.hex(color, `→ ${lane?.name ?? task.laneId}`)}${wip}`;
 }
 
 /** One-line confirmation after writing a comment. */
@@ -300,7 +305,8 @@ export function laneList(db: KanbanDb): string {
     .map((l, i) => {
       const n = db.taskCount(l.id);
       const fixed = l.fixed ? c.dim(" · fixed") : "";
-      return `${c.dim(`${i + 1}.`)} ${c.hex(laneColor(i), l.name)}${c.dim(` (${l.id})`)}  ${n}${fixed}`;
+      const limit = l.wipLimit !== null ? c.dim(`/${l.wipLimit}`) : "";
+      return `${c.dim(`${i + 1}.`)} ${c.hex(laneColor(i), l.name)}${c.dim(` (${l.id})`)}  ${n}${limit}${fixed}`;
     })
     .join("\n");
 }
