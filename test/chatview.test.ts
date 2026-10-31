@@ -174,6 +174,35 @@ test("message_end normalizes legacy toolCall blocks, caps thinking, and appends 
   });
 });
 
+test("tools map is reactive: start/update/end re-run effects (copy-on-write, not in-place mutation)", async () => {
+  (globalThis as any).fetch = mockChatFetch({ get: {} });
+  await chat.open("t1");
+  const source = FakeEventSource.instances[0];
+  const $ = await import("svelte/internal/client");
+  const sizes: number[] = [];
+  const stop = $.effect_root(() => {
+    $.user_effect(() => {
+      sizes.push(chat.tools.size);
+    });
+  });
+  $.flush();
+
+  source.emit({ type: "tool_execution_start", toolCallId: "c1", toolName: "bash" });
+  $.flush();
+  expect(chat.tools.size).toBe(1);
+  expect(sizes).toEqual([0, 1]); // an in-place Map.set would leave this at [0]
+
+  source.emit({ type: "tool_execution_update", toolCallId: "c1", toolName: "bash", partialResult: "out" });
+  expect(chat.tools.get("c1")).toMatchObject({ toolName: "bash", partial: "out" });
+
+  source.emit({ type: "tool_execution_end", toolCallId: "c1", toolName: "bash", isError: false });
+  await Bun.sleep(1_100); // the end row lingers 1s, then drops
+  $.flush();
+  expect(chat.tools.size).toBe(0);
+  expect(sizes.at(-1)).toBe(0);
+  stop();
+});
+
 test("send posts via the api, appends the user message optimistically; stop posts abort", async () => {
   (globalThis as any).fetch = mockChatFetch({ get: { t1: stateWith(HISTORY) } });
   await chat.open("t1");

@@ -128,18 +128,23 @@ class ChatStore {
         break;
       }
       case "tool_execution_start":
-        this.tools.set(event.toolCallId, { toolName: event.toolName, startedAt: Date.now() });
+        // Copy-on-write: $state proxies do not observe in-place Map mutations.
+        this.tools = new Map(this.tools).set(event.toolCallId, { toolName: event.toolName, startedAt: Date.now() });
         break;
       case "tool_execution_update": {
         const entry = this.tools.get(event.toolCallId);
-        if (entry) entry.partial = event.partialResult;
+        if (!entry) break;
+        this.tools = new Map(this.tools).set(event.toolCallId, { ...entry, partial: event.partialResult });
         break;
       }
       case "tool_execution_end": {
         // Keep the finished row visible for a beat, then drop it.
         const toolCallId = event.toolCallId;
         setTimeout(() => {
-          if (this.openCardId === cardId) this.tools.delete(toolCallId);
+          if (this.openCardId !== cardId || !this.tools.has(toolCallId)) return;
+          const next = new Map(this.tools);
+          next.delete(toolCallId);
+          this.tools = next;
         }, 1_000);
         break;
       }
