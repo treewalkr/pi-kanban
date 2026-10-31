@@ -92,8 +92,10 @@
   }
 
   // move focus into the dialog so Tab doesn't cycle the board behind the overlay
+  // — straight onto the query input so typing works immediately
   function autofocus(node: HTMLElement) {
-    node.focus();
+    const input = node.querySelector<HTMLInputElement>("input.palette-input");
+    (input ?? node).focus();
   }
 </script>
 
