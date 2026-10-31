@@ -2727,7 +2727,7 @@ export class KanbanDb {
 
   laneWorkers(filter?: { status?: string; laneId?: string; limit?: number }): LaneWorkerRun[] {
     const clauses: string[] = [];
-    const args: unknown[] = [];
+    const args: Array<string | number> = [];
     if (filter?.status) {
       clauses.push("status = ?");
       args.push(filter.status);
