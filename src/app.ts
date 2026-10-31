@@ -825,6 +825,22 @@ export const createApp = (
         params: t.Object({ id: t.String() }),
       },
     )
+    .get("/autoarchive", (): { days: number } => ({ days: db.autoArchiveDays() }))
+    .put(
+      "/autoarchive",
+      ({ body, status }): { days: number } | unknown => {
+        try {
+          return status(200, { days: db.setAutoArchiveDays(body.days) });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        body: t.Object({
+          days: t.Number({ minimum: 0, maximum: 365 }),
+        }),
+      },
+    )
     .delete(
       "/lanes/:id",
       ({ params, query, status }): unknown => {

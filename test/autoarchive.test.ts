@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { createApp } from "../src/app";
 import { KanbanDb, KanbanError } from "../src/db";
 import { runAutoArchive, startAutoArchiveSweep } from "../src/autoarchive";
 
@@ -154,4 +155,39 @@ test("dueForAutoArchive falls back to updated_at when no done event exists", () 
 
   backdate("UPDATE tasks SET updated_at = ? WHERE id = ?", now - 8 * DAY, t.id);
   expect(db.dueForAutoArchive(now).map((x) => x.id)).toEqual([t.id]);
+});
+
+// ---------- API ----------
+
+let app: ReturnType<typeof createApp>;
+
+beforeEach(() => {
+  app = createApp(db);
+});
+
+const apiCall = async (method: string, path: string, body?: unknown): Promise<Response> =>
+  app.handle(new Request(`http://localhost${path}`, {
+    method,
+    ...(body !== undefined ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {}),
+  }));
+
+test("GET/PUT /autoarchive round-trips days", async () => {
+  const fresh = (await apiCall("GET", "/autoarchive")).json() as Promise<{ days: number }>;
+  expect(await fresh).toEqual({ days: 7 });
+
+  const put = (await apiCall("PUT", "/autoarchive", { days: 14 })).json() as Promise<{ days: number }>;
+  expect(await put).toEqual({ days: 14 });
+  expect(((await apiCall("GET", "/autoarchive")).json() as Promise<{ days: number }>)).resolves.toEqual({ days: 14 }); // persisted
+
+  const off = (await apiCall("PUT", "/autoarchive", { days: 0 })).json() as Promise<{ days: number }>;
+  expect(await off).toEqual({ days: 0 });
+});
+
+test("PUT /autoarchive rejects out-of-range and non-integer days", async () => {
+  db.setAutoArchiveDays(3);
+  for (const days of [366, -1, 1.5]) {
+    const res = await apiCall("PUT", "/autoarchive", { days });
+    expect(res.status).toBeGreaterThanOrEqual(400); // Elysia validation 422 or fail() 400
+    expect(db.autoArchiveDays()).toBe(3); // the failed PUT changed nothing
+  }
 });
