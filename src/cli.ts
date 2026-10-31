@@ -9,7 +9,7 @@ import { cardFileDiff } from "./diff";
 
 const VERSION = "0.6.0";
 
-const HELP = `kanban ${VERSION} — task board for the pi agent
+export const HELP = `kanban ${VERSION} — task board for the pi agent
 
 usage:
   kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--tag <tag>]… [--parent <id>]

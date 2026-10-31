@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { app } from "../src/app";
 import { boot, type IncumbentHealth } from "../src/index";
 import { consumeShareToken, mintShareToken } from "../src/restart";
-import type { Task } from "../src/db";
+import { KanbanDb, type Task } from "../src/db";
 
 const root = join(import.meta.dir, "..");
 
@@ -228,5 +228,84 @@ describe("gh sync loop hosted by boot (plan AC3 wiring)", () => {
     expect(existsSync(marker)).toBe(true);
     expect(await readFileSync(marker, "utf8")).toContain("pr view");
     rmSync(dist, { recursive: true, force: true });
+  });
+});
+
+describe("lane worker runner hosted by boot (KANBAN_WORKERS)", () => {
+  let dir = "";
+  let dbFile = "";
+  let saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "kanban-boot-workers-"));
+    dbFile = join(dir, "t.db");
+    saved = Object.fromEntries(
+      ["KANBAN_DB", "KANBAN_AUTO_REVIEW", "KANBAN_AUTO_ARCHIVE", "KANBAN_GH_SYNC_MS", "KANBAN_WORKERS"].map((k) => [
+        k,
+        process.env[k],
+      ]),
+    );
+    process.env.KANBAN_DB = dbFile;
+    process.env.KANBAN_AUTO_REVIEW = "1";
+    process.env.KANBAN_AUTO_ARCHIVE = "0";
+    process.env.KANBAN_GH_SYNC_MS = "0";
+  });
+
+  afterEach(() => {
+    app.stop();
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A stale running row: proof the runner reaped it at boot (the reap is its only immediate side effect). */
+  function seedStaleRun(): void {
+    const w = new KanbanDb(dbFile);
+    const run = w.queueLaneWorker({ laneId: "backlog" });
+    w.claimLaneWorker(run.id, "kanban-worker-backlog-stale", Date.now());
+    w.close();
+  }
+
+  test("default boots the runner — orphaned runs are reaped at boot", async () => {
+    delete process.env.KANBAN_WORKERS;
+    seedStaleRun();
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...parts: unknown[]) => logs.push(parts.join(" "));
+    const dist = emptyDist();
+    try {
+      const handles = await boot({ port: 0, probePort: probeFree, checkHealth: health(null), dist });
+      console.log = orig;
+      expect(logs.some((l) => l.includes("[workers]") && l.includes("reaped 1"))).toBe(true);
+      expect(typeof handles.stopWorkers).toBe("function");
+      handles.stopAutoReview();
+      handles.stopWorkers();
+    } finally {
+      console.log = orig;
+      app.stop();
+      rmSync(dist, { recursive: true, force: true });
+    }
+  });
+
+  test("KANBAN_WORKERS=0 keeps the runner off", async () => {
+    process.env.KANBAN_WORKERS = "0";
+    seedStaleRun();
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...parts: unknown[]) => logs.push(parts.join(" "));
+    const dist = emptyDist();
+    try {
+      const handles = await boot({ port: 0, probePort: probeFree, checkHealth: health(null), dist });
+      console.log = orig;
+      expect(logs.some((l) => l.includes("[workers]"))).toBe(false);
+      handles.stopAutoReview();
+      handles.stopWorkers();
+    } finally {
+      console.log = orig;
+      app.stop();
+      rmSync(dist, { recursive: true, force: true });
+    }
   });
 });
