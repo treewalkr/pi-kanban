@@ -1301,7 +1301,7 @@ describe("auto-review", () => {
         expect(result.timedOut).toBeUndefined();
       },
     );
-  });
+  }, 20_000); // streams 12×100ms through a fake pi — 5s default flakes under full-suite load
 
   test("defaultSpawn still kills an endless stream at the total cap", async () => {
     await withFakePi(

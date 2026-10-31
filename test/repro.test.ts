@@ -48,7 +48,7 @@ describe("repro.sh REPRO_PORT guard", () => {
     expect(r.stdout).toContain("repro board → http://127.0.0.1:4615");
     expect(r.stderr).not.toContain("REPRO_PORT must be");
     expect(r.code).toBe(0);
-  });
+  }, 30_000); // boots a real server + waits out the TTL reap — 5s default flakes under full-suite load
 
   test("no REPRO_PORT still scans 4611-4620", async () => {
     const r = await repro({ REPRO_PORT: "", REPRO_TTL: "2" }); // empty ⇒ scan
