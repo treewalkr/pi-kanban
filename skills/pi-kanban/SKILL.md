@@ -36,7 +36,7 @@ For every non-trivial unit of work:
   write it to a file and `kanban attach <id> <plan-file>` — re-attaching a
   revised plan versions it (latest wins). Write plans with
   [plan-template.md](plan-template.md): every section filled or `N/A — reason`,
-  every acceptance criterion mapped to concrete tests.
+  every acceptance criterion mapped to concrete tests at named seams.
   Record the workspace on its card right after creating it: `kanban ws <id> <slug>` — the
   board shows it while the branch/worktree exists; nothing to clear after `done`
   (it disappears once git no longer has it).
@@ -63,7 +63,7 @@ a passing card then parks in **Waiting on you** at the gate. **The human owns th
 
 - **Planning**: don't hand-write plans for Plan-lane cards in auto mode — the planner does it,
   using the shared template (`plan-template.md` next to this skill): every section filled or
-  `N/A — reason`, every acceptance criterion mapped to concrete tests. If an answer would
+  `N/A — reason`, every acceptance criterion mapped to concrete tests at named seams. If an answer would
   genuinely change the plan, the planner posts a `question` comment (each question with a
   recommended default) and stops; any human reply re-arms it — "use the defaults" counts.
   To force a re-plan: `kanban reject <id> --message <what to change>`; the next version lands
