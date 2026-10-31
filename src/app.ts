@@ -9,6 +9,17 @@ import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
 import { contentTypeFor, listFiles, rawFilePath, readFile, searchFiles, type FileEntry } from "./files";
+import { ChatManager, PROMPT_MAX_CHARS, type ChatState, type ChatSessionFactory } from "./chat";
+import { createChatEventStream, type ChatStreamSession } from "./chat-events";
+
+/** POST /chat/:cardId success shapes (Eden infers them for the web client). */
+export interface ChatAccepted {
+  accepted: true;
+  disposition: "started" | "queued" | "handled";
+}
+export interface ChatStopped {
+  stopped: true;
+}
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
 
@@ -98,7 +109,8 @@ export const createApp = (
     sessions?: () => number;
     filesRoot?: string;
     notify?: (title: string, body: string) => void; // test seam for the osascript fallback
-  } = {}, // test seams for /restart and /files
+    chat?: { cwd?: string; sessionDir?: string; createSession?: ChatSessionFactory; idleTimeoutMs?: number }; // test seam for the chat manager
+  } = {}, // test seams for /restart, /files, and chat
 ) => {
   const notify = opts.notify ?? defaultNotify;
   const osascriptNotify = process.env.KANBAN_OSASCRIPT_NOTIFY === "1"; // opt-in, read once
@@ -124,6 +136,25 @@ export const createApp = (
   );
   const booted = Date.now(); // lets clients tell an old server from a restarted one
   db.watch(() => bus.emit()); // CLI writes commit from another connection
+  const chatManager = new ChatManager({
+    cwd: opts.chat?.cwd ?? process.cwd(),
+    db,
+    sessionDir: opts.chat?.sessionDir,
+    createSession: opts.chat?.createSession,
+    idleTimeoutMs: opts.chat?.idleTimeoutMs,
+  });
+  /** ChatHandle → the SSE stream's view of a session (live getters, not snapshots). */
+  const asChatStreamSession = (handle: import("./chat").ChatHandle): ChatStreamSession => ({
+    get isStreaming() {
+      return handle.state().isStreaming;
+    },
+    get streamingMessage() {
+      return handle.streamingMessage();
+    },
+    isAlive: () => handle.isAlive(),
+    onEvent: (listener) => handle.onEvent(listener),
+    activeToolEvents: () => handle.activeToolEvents(),
+  });
   return new Elysia()
     .use(cors({ origin: /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ }))
     .onAfterHandle(({ request }) => {
@@ -196,8 +227,8 @@ export const createApp = (
         const origin = request.headers.get("origin");
         if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(origin))
           return status(403, { error: "restart is local-only", code: "forbidden" });
-        // in-flight guard: a restart kills running agent sessions — make it explicit
-        const inFlight = opts.sessions ? opts.sessions() : activitySnapshot().sessions.length;
+        // in-flight guard: a restart kills running agent sessions and chat sessions — make it explicit
+        const inFlight = (opts.sessions ? opts.sessions() : activitySnapshot().sessions.length) + chatManager.sessionCount();
         if (inFlight > 0 && query.force !== "true")
           return status(409, {
             error: `${inFlight} agent session(s) in flight — restart kills them; retry with force to proceed`,
@@ -509,6 +540,70 @@ export const createApp = (
         }
       },
       { params: t.Object({ id: t.String() }) },
+    )
+    .get(
+      "/chat/:cardId",
+      ({ params, status }): ChatState => {
+        try {
+          const task = db.resolveTask(params.cardId);
+          const live = chatManager.peek(task.id);
+          if (live) return live.state();
+          const disk = chatManager.historyFromDisk(task.id);
+          return {
+            running: false,
+            sessionId: disk.sessionId,
+            isStreaming: false,
+            isCompacting: false,
+            queued: { steering: [], followUp: [] },
+            model: null,
+            thinkingLevel: "off",
+            messages: disk.messages,
+            messagesTruncated: disk.messagesTruncated,
+          };
+        } catch (e) {
+          return fail<ChatState>(e, status);
+        }
+      },
+      { params: t.Object({ cardId: t.String() }) },
+    )
+    .post(
+      "/chat/:cardId",
+      async ({ params, body, status }): Promise<ChatAccepted | ChatStopped> => {
+        try {
+          const handle = await chatManager.get(params.cardId);
+          if (body.type === "abort") return (await handle.send({ type: "abort" })) as ChatStopped;
+          return (await handle.send(body)) as ChatAccepted;
+        } catch (e) {
+          return fail<ChatAccepted | ChatStopped>(e, status);
+        }
+      },
+      {
+        params: t.Object({ cardId: t.String() }),
+        body: t.Union([
+          t.Object({
+            type: t.Literal("prompt"),
+            message: t.String({ minLength: 1, maxLength: PROMPT_MAX_CHARS }),
+            streamingBehavior: t.Optional(t.Union([t.Literal("steer"), t.Literal("followUp")])),
+          }),
+          t.Object({ type: t.Literal("abort") }),
+        ]),
+      },
+    )
+    .get(
+      "/chat/:cardId/events",
+      ({ params, request, status }) => {
+        try {
+          db.resolveTask(params.cardId); // 404 before the transport opens
+          const stream = createChatEventStream(
+            request,
+            chatManager.get(params.cardId).then((handle) => asChatStreamSession(handle)),
+          );
+          return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      { params: t.Object({ cardId: t.String() }) },
     )
     .post(
       "/tasks/:id/elaborate",
