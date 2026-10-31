@@ -8,4 +8,5 @@ data/
 .zcode/
 .playwright-cli/
 test-results/
-docs/
+docs/*
+!docs/adr
