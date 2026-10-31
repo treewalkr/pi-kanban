@@ -8,7 +8,9 @@ customizable), behind a fixed **Waiting on you** lane: an agent's `question` com
 passed plan review parks the card there — a `↩ from <lane>` chip remembers its home lane,
 and any human reply (or the approve/reject gate) returns it. Cards nest into an
 **epic → story → subtask** hierarchy; every card moves
-independently. The CLI writes the DB directly (no server needed for agent-side CRUD); the
+independently. Every card wears an age chip showing how long it has sat in its current lane, and
+done cards auto-archive after a configurable number of days (`archive auto [<n>|off]`, default 7).
+The CLI writes the DB directly (no server needed for agent-side CRUD); the
 server pushes live updates to the web UI over SSE and raises notifications when a card
 enters Review (browser notification in a background tab; set `KANBAN_OSASCRIPT_NOTIFY=1`
 to also get a macOS notification from the server when no tab is open).
@@ -43,7 +45,7 @@ kanban elaborate <id>               # retrofit/retry elaboration on any card
 kanban ls · search <query> · show <id> · brief <id>
 kanban next                         # lane → priority → oldest; skips blocked, counts waiting
 kanban link <id> <other> · unlink <id> <other>
-kanban mv <id> <lane> · edit <id> … · done <id> · archive <id> · rm <id> --force
+kanban mv <id> <lane> · edit <id> … · done <id> · archive <id> · archive auto [<n>|off] · rm --force
 kanban lane ls | add | rename | rm
 kanban attach <id> <plan-file>      # versioned plan attach — re-attaching versions it
 kanban comment <id> <text…> [--kind comment|review|handoff|question] · comments <id>
