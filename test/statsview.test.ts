@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { BoardStatsPayload, Task } from "../src/db";
-import { cycleChip, laneDwellLabel } from "../web/src/lib/statsview";
+import { cycleChip, laneAgeChip, laneDwellLabel } from "../web/src/lib/statsview";
 
 function task(partial: Partial<Task> & { id: string; title: string }): Task {
   return {
@@ -94,4 +94,33 @@ test("laneDwellLabel + cycleChip derive labels and stay null-safe", () => {
   // Missing card in stats returns null
   const tUnknown = task({ id: "t3", title: "Unknown" });
   expect(cycleChip(payload, tUnknown)).toBeNull();
+});
+
+test("laneAgeChip formats lane age and stays null-safe", () => {
+  const t = task({ id: "t1", title: "Implement Card", laneId: "implement" });
+  const card = (currentLaneMs: number) => ({
+    taskId: t.id,
+    laneTimes: [{ laneId: "implement", ms: currentLaneMs }],
+    cycleMs: currentLaneMs,
+    currentLaneMs,
+    gateWaitMs: 0,
+    reachedDone: false,
+    reviewToDoneMs: null,
+    planReviewBlocks: 0,
+    reviewBlocks: 0,
+    cappedHits: 0,
+    planVersions: 0,
+    sessions: { count: 0, totalMs: 0 },
+  });
+
+  // null stats / missing card → null
+  expect(laneAgeChip(null, t, "Test + Implement")).toBeNull();
+  const tUnknown = task({ id: "t9", title: "Unknown" });
+  const payload: BoardStatsPayload = { board: { wip: 0, throughput: [], laneDwell: {}, projects: [], cycleAvgMs: 0 }, cards: { t1: card(3 * 86_400_000) }, generatedAt: Date.now() };
+  expect(laneAgeChip(payload, tUnknown, "Backlog")).toBeNull();
+
+  // 3 days in the lane → "3d", tooltip carries the lane-entry timestamp
+  const chip = laneAgeChip(payload, t, "Test + Implement")!;
+  expect(chip.label).toBe("3d");
+  expect(chip.title.startsWith("in Test + Implement since ")).toBe(true);
 });

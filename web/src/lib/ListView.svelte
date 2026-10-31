@@ -2,6 +2,7 @@
   import { board } from "./board.svelte";
   import { listRows } from "./listview";
   import IdChip from "./IdChip.svelte";
+  import { laneAgeChip } from "./statsview";
   import { laneColor, timeAgo } from "./util";
   import { CircleSlash } from "@lucide/svelte";
 
@@ -36,6 +37,8 @@
       {#each shown as row (row.task.id)}
         {@const task = row.task}
         {@const collapsed = board.listCollapsed.has(task.id)}
+        {@const laneName = board.lanes.find((l) => l.id === task.laneId)?.name ?? task.laneId}
+        {@const ageChip = laneAgeChip(board.stats, task, laneName)}
         <div
           class="row"
           class:dim={row.dim}
@@ -105,7 +108,11 @@
           {/if}
           <span class="row-meta">
             <IdChip id={task.id} />
-            <span class="age" title={new Date(task.updatedAt).toLocaleString()}>{timeAgo(task.updatedAt)}</span>
+            {#if ageChip}
+              <span class="age" title={ageChip.title}>{ageChip.label}</span>
+            {:else}
+              <span class="age" title={new Date(task.updatedAt).toLocaleString()}>{timeAgo(task.updatedAt)}</span>
+            {/if}
           </span>
         </div>
       {/each}
