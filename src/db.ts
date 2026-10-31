@@ -112,6 +112,36 @@ export interface Comment {
   createdAt: number;
 }
 
+/** What a card's GitHub link points at; "unknown" until the first sync resolves pr vs issue. */
+export type GhLinkKind = "pr" | "issue" | "unknown";
+
+/** One GitHub pr/issue attached to a card (card-local; the same url can sit on several cards). */
+export interface GhLink {
+  id: string;
+  cardId: string;
+  /** Canonical https://github.com/{owner}/{repo}/issues|pull/{n} (shorthand `gh:o/r#n` canonicalizes to /issues/n). */
+  url: string;
+  kind: GhLinkKind;
+  /** '{owner}/{repo}' */
+  repo: string;
+  number: number;
+  createdAt: number;
+}
+
+/** DB-cached live state of one GitHub url — disposable, refreshed by the gh sync (TTL). */
+export interface GhStatus {
+  url: string;
+  kind: "pr" | "issue";
+  /** gh's state string: prs OPEN|MERGED|CLOSED, issues OPEN|CLOSED. */
+  state: string;
+  title: string;
+  /** Epoch ms of the pr's merge, null when not merged (or an issue). */
+  mergedAt: number | null;
+  fetchedAt: number;
+  /** "" when the last fetch was ok, else the gh error tail. */
+  error: string;
+}
+
 export type LaneEventCause =
   | "create"
   | "mv"
@@ -122,7 +152,8 @@ export type LaneEventCause =
   | "done"
   | "archive"
   | "auto-archive"
-  | "backfill";
+  | "backfill"
+  | "gh";
 
 export interface LaneEvent {
   id: string;
@@ -206,6 +237,8 @@ export interface Board {
   blockedBy: Record<string, string[]>;
   /** Sparse card-id → linked card ids, both directions. */
   links: Record<string, string[]>;
+  /** GitHub pr/issue links per card id (sparse — only cards with links). */
+  ghLinks: Record<string, GhLink[]>;
 }
 
 /** Live implementation location of a card, joined against git — not stored. */
@@ -363,6 +396,26 @@ CREATE TABLE IF NOT EXISTS lane_events (
 );
 CREATE INDEX IF NOT EXISTS lane_events_task ON lane_events (task_id, created_at);
 CREATE INDEX IF NOT EXISTS lane_events_to_lane ON lane_events (to_lane_id, created_at);
+CREATE TABLE IF NOT EXISTS gh_links (
+  id TEXT PRIMARY KEY,
+  card_id TEXT NOT NULL REFERENCES tasks (id),
+  url TEXT NOT NULL,             -- canonical https://github.com/{owner}/{repo}/issues|pull/{n}
+  kind TEXT NOT NULL,            -- 'pr' | 'issue' | 'unknown'
+  repo TEXT NOT NULL,            -- '{owner}/{repo}'
+  number INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS gh_links_card_url ON gh_links (card_id, url);
+CREATE INDEX IF NOT EXISTS gh_links_url ON gh_links (url);
+CREATE TABLE IF NOT EXISTS gh_state (
+  url TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  state TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  merged_at INTEGER,
+  fetched_at INTEGER NOT NULL,
+  error TEXT NOT NULL DEFAULT ''
+);
 `;
 
 export const DEFAULT_LANES: Array<Omit<Lane, "position" | "wipLimit">> = [
@@ -458,6 +511,26 @@ interface CommentRow {
   created_at: number;
 }
 
+interface GhLinkRow {
+  id: string;
+  card_id: string;
+  url: string;
+  kind: string;
+  repo: string;
+  number: number;
+  created_at: number;
+}
+
+interface GhStateRow {
+  url: string;
+  kind: string;
+  state: string;
+  title: string;
+  merged_at: number | null;
+  fetched_at: number;
+  error: string;
+}
+
 interface LaneEventRow {
   id: string;
   task_id: string;
@@ -513,6 +586,26 @@ const rowToComment = (r: CommentRow): Comment => ({
   kind: r.kind as CommentKind,
   body: r.body,
   createdAt: r.created_at,
+});
+
+const rowToGhLink = (r: GhLinkRow): GhLink => ({
+  id: r.id,
+  cardId: r.card_id,
+  url: r.url,
+  kind: r.kind as GhLinkKind,
+  repo: r.repo,
+  number: r.number,
+  createdAt: r.created_at,
+});
+
+const rowToGhState = (r: GhStateRow): GhStatus => ({
+  url: r.url,
+  kind: r.kind as "pr" | "issue",
+  state: r.state,
+  title: r.title,
+  mergedAt: r.merged_at ?? null,
+  fetchedAt: r.fetched_at,
+  error: r.error,
 });
 
 const rowToLaneEvent = (r: LaneEventRow): LaneEvent => ({
@@ -1035,6 +1128,7 @@ export class KanbanDb {
       waiting: this.waitingStates(),
       blockedBy: this.blockedByMap(),
       links: this.linksMap(),
+      ghLinks: this.ghLinksMap(),
     };
   }
 
@@ -1278,6 +1372,7 @@ export class KanbanDb {
     const delComments = this.q("DELETE FROM comments WHERE card_id = ?");
     const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
     const delLinks = this.q("DELETE FROM card_links WHERE card_a = ? OR card_b = ?");
+    const delGhLinks = this.q("DELETE FROM gh_links WHERE card_id = ?");
     const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
     const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
     const delElaborationRequests = this.q("DELETE FROM elaboration_requests WHERE task_id = ?");
@@ -1288,6 +1383,7 @@ export class KanbanDb {
       delComments.run(id);
       delBlockedBy.run(id, id);
       delLinks.run(id, id);
+      delGhLinks.run(id);
       delCardSessions.run(id);
       delResumeRequests.run(id);
       delElaborationRequests.run(id);
@@ -1596,6 +1692,94 @@ export class KanbanDb {
       (map[row.card_b] ??= []).push(row.card_a);
     }
     return map;
+  }
+
+  // ---------- github links ----------
+
+  /** Attach a GitHub pr/issue to a card; the same url twice on one card is a conflict. */
+  attachGhLink(
+    taskRef: string,
+    ref: { url: string; kind: GhLinkKind; repo: string; number: number },
+  ): GhLink {
+    const task = this.resolveTask(taskRef);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const id = newId();
+      try {
+        this.q(
+          "INSERT INTO gh_links (id, card_id, url, kind, repo, number, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ).run(id, task.id, ref.url, ref.kind, ref.repo, ref.number, Date.now());
+        const row = this.q("SELECT * FROM gh_links WHERE id = ?").get(id) as GhLinkRow;
+        return rowToGhLink(row);
+      } catch (err) {
+        if (!(err instanceof Error && err.message.includes("UNIQUE"))) throw err;
+        // (card_id, url) collision → already linked; id collision (newId) → retry
+        const dup = this.q("SELECT * FROM gh_links WHERE card_id = ? AND url = ?").get(task.id, ref.url) as
+          | GhLinkRow
+          | undefined;
+        if (dup) {
+          throw new KanbanError(`card '${task.id}' already links ${ref.url}`, "conflict");
+        }
+      }
+    }
+    throw new KanbanError("could not attach the GitHub link without an id collision", "conflict");
+  }
+
+  /** Remove one GitHub link by its id from a card; true when a row was removed. */
+  unlinkGhLinkById(taskRef: string, linkId: string): boolean {
+    const task = this.resolveTask(taskRef);
+    return this.q("DELETE FROM gh_links WHERE card_id = ? AND id = ?").run(task.id, linkId).changes > 0;
+  }
+
+  /** A card's GitHub links, oldest first. */
+  ghLinksOf(taskRef: string): GhLink[] {
+    const task = this.resolveTask(taskRef);
+    return (
+      this.q("SELECT * FROM gh_links WHERE card_id = ? ORDER BY created_at, id").all(task.id) as GhLinkRow[]
+    ).map(rowToGhLink);
+  }
+
+  /** Every GitHub link on the board, grouped by card id — the board payload shape. */
+  ghLinksMap(): Record<string, GhLink[]> {
+    const rows = this.q("SELECT * FROM gh_links ORDER BY created_at, id").all() as GhLinkRow[];
+    const map: Record<string, GhLink[]> = {};
+    for (const row of rows) (map[row.card_id] ??= []).push(rowToGhLink(row));
+    return map;
+  }
+
+  /** Cards linked to one GitHub url (pr/issue state is shared board-wide). */
+  ghLinkCards(url: string): Task[] {
+    const rows = this.q(
+      "SELECT t.* FROM tasks t JOIN gh_links g ON g.card_id = t.id WHERE g.url = ? ORDER BY g.created_at, t.id",
+    ).all(url) as TaskRow[];
+    return rows.map(rowToTask);
+  }
+
+  /** Distinct linked GitHub urls board-wide — the sync pass's fetch list. */
+  ghUrls(): string[] {
+    return (this.q("SELECT DISTINCT url FROM gh_links").all() as Array<{ url: string }>).map((r) => r.url);
+  }
+
+  /** Cached live state of one GitHub url, or null when never fetched. */
+  ghState(url: string): GhStatus | null {
+    const row = this.q("SELECT * FROM gh_state WHERE url = ?").get(url) as GhStateRow | undefined;
+    return row ? rowToGhState(row) : null;
+  }
+
+  /** Every cached GitHub state, newest fetch first. */
+  ghStates(): GhStatus[] {
+    return (this.q("SELECT * FROM gh_state ORDER BY fetched_at DESC, url").all() as GhStateRow[]).map(rowToGhState);
+  }
+
+  /** Cache one GitHub url's live state (full-row replace — the sync is the only writer). */
+  setGhState(row: GhStatus): void {
+    this.q(
+      "INSERT OR REPLACE INTO gh_state (url, kind, state, title, merged_at, fetched_at, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(row.url, row.kind, row.state, row.title, row.mergedAt, row.fetchedAt, row.error);
+  }
+
+  /** Resolve "unknown" link kinds to pr/issue once the first sync has seen the url. */
+  setGhLinkKind(url: string, kind: "pr" | "issue"): void {
+    this.q("UPDATE gh_links SET kind = ? WHERE url = ? AND kind = 'unknown'").run(kind, url);
   }
 
   // ---------- attachments ----------
@@ -2503,6 +2687,7 @@ export class KanbanDb {
       const delComments = this.q("DELETE FROM comments WHERE card_id = ?");
       const delBlockedBy = this.q("DELETE FROM blocked_by WHERE card_id = ? OR blocker_id = ?");
       const delLinks = this.q("DELETE FROM card_links WHERE card_a = ? OR card_b = ?");
+      const delGhLinks = this.q("DELETE FROM gh_links WHERE card_id = ?");
       const delCardSessions = this.q("DELETE FROM card_sessions WHERE task_id = ?");
       const delResumeRequests = this.q("DELETE FROM resume_requests WHERE task_id = ?");
       const delElaborationRequests = this.q("DELETE FROM elaboration_requests WHERE task_id = ?");
@@ -2514,6 +2699,7 @@ export class KanbanDb {
           delComments.run(id);
           delBlockedBy.run(id, id);
           delLinks.run(id, id);
+          delGhLinks.run(id);
           delCardSessions.run(id);
           delResumeRequests.run(id);
           delElaborationRequests.run(id);
