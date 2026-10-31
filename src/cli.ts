@@ -62,16 +62,16 @@ human comment); a passing review parks the card in "Waiting on you", where the h
 kanban approve (arms a plan-build pi-builder) or kanban reject --message (re-plans with the feedback);
 the same loop elaborates newly added cards on request (add --elaborate / the ✨ composer toggle).`;
 
-interface Parsed {
+export interface Parsed {
   flags: Record<string, string | true | string[]>;
   positional: string[];
 }
 
 const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to"]);
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
-function parse(argv: string[]): Parsed {
+export function parse(argv: string[]): Parsed {
   const flags: Record<string, string | true | string[]> = {};
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -95,6 +95,10 @@ function parse(argv: string[]): Parsed {
     }
   }
   return { flags, positional };
+}
+
+export function applyServeEnv(flags: Parsed["flags"]): void {
+  if (flags.agents || flags["auto-review"]) process.env.KANBAN_AUTO_REVIEW = "1";
 }
 
 const str = (flags: Parsed["flags"], key: string): string | undefined => {
@@ -200,7 +204,7 @@ async function main(): Promise<number> {
     // serve in-process: one process, one cmdline — killing `kanban serve` kills
     // the server and its agent loop, no orphaned wrapper children
     process.env.PORT = String(port);
-    if (flags["auto-review"]) process.env.KANBAN_AUTO_REVIEW = "1";
+    applyServeEnv(flags);
     const { boot } = await import("./index");
     await boot(); // resolves after listen; the listener keeps the process alive
     return 0;
@@ -788,12 +792,14 @@ async function main(): Promise<number> {
   }
 }
 
-try {
-  process.exitCode = await main();
-  await flushOut();
-} catch (err) {
-  const msg = err instanceof KanbanError ? err.message : (err as Error)?.message ?? String(err);
-  console.error(`kanban: ${msg}`);
-  await flushOut().catch(() => {});
-  process.exitCode = 1;
+if (import.meta.main) {
+  try {
+    process.exitCode = await main();
+    await flushOut();
+  } catch (err) {
+    const msg = err instanceof KanbanError ? err.message : (err as Error)?.message ?? String(err);
+    console.error(`kanban: ${msg}`);
+    await flushOut().catch(() => {});
+    process.exitCode = 1;
+  }
 }
