@@ -10,11 +10,11 @@ const VERSION = "0.6.0";
 const HELP = `kanban ${VERSION} — task board for the pi agent
 
 usage:
-  kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>]
+  kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--tag <tag>]… [--parent <id>]
                       [--priority <high|normal|low>] [--blocked-by <id>]… [--top] [--elaborate]
-  kanban ls [lane] [--project <tag>] [--json]
+  kanban ls [lane] [--project <tag>] [--tag <tag>]… [--json]
   kanban next [--project <tag>] [--json]  (what's next: lane priority, then card priority, then oldest; skips blocked)
-  kanban search <query…> [--project <tag>] [--json]
+  kanban search <query…> [--project <tag>] [--tag <tag>]… [--json]
   kanban show <id>
   kanban link <id> <other>                (relate two cards; visible from both)
   kanban unlink <id> <other>
@@ -32,9 +32,9 @@ usage:
   kanban plan-review <id> (--pass | --block --message <text> [--finding <text>]…)  (plan reviewer's verdict; --pass parks the card in "Waiting on you")
   kanban brief <id>                         (pickup context: note, plan, thread)
   kanban mv <id> <lane> [--pos <1-based>]     kanban mv <id> --next | --prev
-  kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>]
+  kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--tag <tag>]… [--lane <ref>]
                           [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>…]
-                          [--clear-note] [--clear-parent] [--clear-blocked-by]
+                          [--clear-note] [--clear-parent] [--clear-blocked-by] [--clear-tags]
   kanban done <id>
   kanban archive <id>                        (undo: mv <id> <lane>)
   kanban check [--json]                     (board-health lint: done parents w/ active children, children behind parent, planless build cards; advisory, exit 0)
@@ -66,8 +66,8 @@ interface Parsed {
 }
 
 const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v"]);
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by", "elaborate", "clear"]);
-const MULTI_FLAGS = new Set(["finding", "blocked-by"]); // repeatable: each occurrence appends one value
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
+const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
 function parse(argv: string[]): Parsed {
   const flags: Record<string, string | true | string[]> = {};
@@ -254,6 +254,7 @@ async function main(): Promise<number> {
           note: str(flags, "note"),
           lane: str(flags, "lane"),
           project,
+          tags: arr(flags, "tag").length > 0 ? arr(flags, "tag") : undefined,
           parent: str(flags, "parent"),
           priority: str(flags, "priority"),
           blockedBy,
@@ -273,15 +274,17 @@ async function main(): Promise<number> {
       case "ls": {
         const laneRef = positional[0];
         if (laneRef) db.resolveLane(laneRef); // validate before filtering
+        const tagFilter = arr(flags, "tag");
         const tasks = db
           .tasks()
           .filter((t) => (laneRef ? t.laneId === db.resolveLane(laneRef).id : true))
-          .filter((t) => (project ? t.project === project : true));
+          .filter((t) => (project ? t.project === project : true))
+          .filter((t) => (tagFilter.length > 0 ? tagFilter.every((tag) => t.tags.includes(tag)) : true));
         if (json) {
           const map = db.blockedByMap();
           jsonOut(tasks.map((t) => ({ ...t, blockedBy: map[t.id] ?? [] })));
         } else {
-          out(listLanes(db, laneRef, project));
+          out(listLanes(db, laneRef, project, tagFilter));
         }
         return 0;
       }
@@ -311,9 +314,13 @@ async function main(): Promise<number> {
 
       case "search": {
         const query = positional.join(" ").trim();
-        if (!query) throw new KanbanError("usage: kanban search <query…> [--project <tag>]", "invalid");
+        if (!query) throw new KanbanError("usage: kanban search <query…> [--project <tag>] [--tag <tag>]…", "invalid");
+        const tagFilter = arr(flags, "tag");
         const results = searchBoard(
-          db.tasks().filter((t) => (project ? t.project === project : true)),
+          db
+            .tasks()
+            .filter((t) => (project ? t.project === project : true))
+            .filter((t) => (tagFilter.length > 0 ? tagFilter.every((tag) => t.tags.includes(tag)) : true)),
           query,
           db.latestPlans(),
         );
@@ -612,6 +619,8 @@ async function main(): Promise<number> {
         if (str(flags, "note") !== undefined) patch.note = str(flags, "note");
         if (flags["clear-note"]) patch.note = "";
         if (project !== undefined) patch.project = project;
+        if (arr(flags, "tag").length > 0) patch.tags = arr(flags, "tag");
+        if (flags["clear-tags"]) patch.tags = [];
         if (str(flags, "lane") !== undefined) patch.lane = str(flags, "lane");
         if (str(flags, "parent") !== undefined) patch.parent = str(flags, "parent");
         if (flags["clear-parent"]) patch.parent = null;
@@ -620,7 +629,7 @@ async function main(): Promise<number> {
         if (flags["clear-blocked-by"]) patch.blockedBy = [];
         if (Object.keys(patch).length === 0) {
           throw new KanbanError(
-            "nothing to edit — pass --title, --note, --project, --lane, --parent, --priority, --blocked-by or clear flags",
+            "nothing to edit — pass --title, --note, --project, --tag, --lane, --parent, --priority, --blocked-by or clear flags",
             "invalid",
           );
         }
