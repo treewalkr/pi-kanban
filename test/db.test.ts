@@ -641,6 +641,36 @@ test("boardViolations reports all three kinds", () => {
   ]);
 });
 
+test("boardViolations reports wip-over-limit per over lane", () => {
+  // No limits set anywhere → unchanged clean-board behavior.
+  expect(db.boardViolations()).toEqual([]);
+
+  db.updateLane("implement", { wipLimit: 2 });
+  const a = db.createTask({ title: "wip-a", lane: "implement" });
+  const b = db.createTask({ title: "wip-b", lane: "implement" });
+  db.attach(a.id, "plan", "p");
+  db.attach(b.id, "plan", "p");
+  // At exactly the limit → no violation.
+  expect(db.boardViolations()).toEqual([]);
+
+  const c = db.createTask({ title: "wip-c", lane: "implement" });
+  db.attach(c.id, "plan", "p");
+  expect(db.boardViolations()).toEqual([
+    { kind: "wip-over-limit", laneId: "implement", limit: 2, count: 3 },
+  ]);
+
+  // Second limited lane adds its own violation, in board-lane order (review after implement).
+  const r1 = db.createTask({ title: "wip-r1", lane: "review" });
+  const r2 = db.createTask({ title: "wip-r2", lane: "review" });
+  db.attach(r1.id, "plan", "p");
+  db.attach(r2.id, "plan", "p");
+  db.updateLane("review", { wipLimit: 1 });
+  expect(db.boardViolations()).toEqual([
+    { kind: "wip-over-limit", laneId: "implement", limit: 2, count: 3 },
+    { kind: "wip-over-limit", laneId: "review", limit: 1, count: 2 },
+  ]);
+});
+
 test("boardViolations on a clean board is empty; activeChildren excludes done/archive", () => {
   const parent = db.createTask({ title: "parent", lane: "backlog" });
   const childBacklog = db.createTask({ title: "child-backlog", parent: parent.id, lane: "backlog" });

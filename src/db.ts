@@ -395,7 +395,8 @@ export const UNBLOCKED_LANES = ["done", "archive"] as const;
 export type BoardViolation =
   | { kind: "done-parent-active-children"; cardId: string; childIds: string[] }
   | { kind: "child-behind-parent"; cardId: string; parentId: string; cardLaneId: string; parentLaneId: string }
-  | { kind: "missing-plan"; cardId: string; laneId: string };
+  | { kind: "missing-plan"; cardId: string; laneId: string }
+  | { kind: "wip-over-limit"; laneId: string; limit: number; count: number };
 
 export function defaultDbPath(): string {
   return process.env.KANBAN_DB ?? join(import.meta.dir, "..", "data", "kanban.db");
@@ -1336,6 +1337,13 @@ export class KanbanDb {
           });
         }
       }
+    }
+
+    // (d) lane over its WIP limit (advisory; fires only when a limit is set)
+    for (const lane of lanes) {
+      if (lane.wipLimit === null) continue;
+      const count = this.taskCount(lane.id);
+      if (count > lane.wipLimit) violations.push({ kind: "wip-over-limit", laneId: lane.id, limit: lane.wipLimit, count });
     }
 
     return violations;
