@@ -10,6 +10,7 @@
   import { collapseDiff, parseUnifiedDiff } from "./fileview";
   import { canPromoteToPlan, laneColor, roleAuthor, timeAgo } from "./util";
   import { canResume } from "./waiting";
+  import { blockerCandidates } from "./blockerPicker";
 
   const task = board.editing!;
 
@@ -82,6 +83,63 @@
     const t = linkTarget.trim();
     if (!t) return;
     if (await board.addLink(me.id, t)) linkTarget = "";
+  }
+
+  // add-blocker picker: local query inside the modal (never board.search — that
+  // drives the header SearchBox and would filter the board behind the dialog)
+  let blockerQuery = $state("");
+  let blockerHighlighted = $state(0);
+  let blockerOpen = $state(false);
+  let blockerError = $state("");
+  let blockerCandidatesList = $derived(
+    blockerCandidates(board.tasks, blockerQuery, me.id, board.blockedBy[me.id] ?? []),
+  );
+  let showBlockerDropdown = $derived(
+    blockerOpen && blockerQuery.trim() !== "" && blockerCandidatesList.length > 0,
+  );
+
+  // clamp the highlight when the candidate set shrinks under the cursor
+  $effect(() => {
+    blockerHighlighted = Math.max(0, Math.min(blockerHighlighted, blockerCandidatesList.length - 1));
+  });
+
+  // keep the keyboard highlight visible in the scrolling dropdown
+  $effect(() => {
+    void blockerHighlighted;
+    if (showBlockerDropdown)
+      document.querySelector('.dep-picker-results [aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  });
+
+  const laneCrumb = (t: Task): string => board.lanes.find((l) => l.id === t.laneId)?.name ?? t.laneId;
+
+  async function commitBlocker(picked: Task): Promise<void> {
+    blockerQuery = "";
+    blockerError = "";
+    const err = await board.addBlocker(me.id, picked.id);
+    if (err) blockerError = err; // the API's own 409/404 message, inline
+  }
+
+  async function unblock(blockerId: string): Promise<void> {
+    const err = await board.removeBlocker(me.id, blockerId);
+    blockerError = err ?? "";
+  }
+
+  function blockerKeydown(e: KeyboardEvent): void {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (!showBlockerDropdown) return;
+      e.preventDefault();
+      const dir = e.key === "ArrowDown" ? 1 : -1;
+      blockerHighlighted = (blockerHighlighted + dir + blockerCandidatesList.length) % blockerCandidatesList.length;
+    } else if (e.key === "Enter") {
+      if (showBlockerDropdown && blockerCandidatesList[blockerHighlighted]) {
+        e.preventDefault();
+        void commitBlocker(blockerCandidatesList[blockerHighlighted]!);
+      }
+    } else if (e.key === "Escape" && blockerOpen) {
+      e.preventDefault();
+      e.stopPropagation(); // the first Escape closes the dropdown only; the next closes the modal
+      blockerOpen = false;
+    }
   }
 
   const fmt = (ts: number) => new Date(ts).toLocaleString();
@@ -277,18 +335,53 @@
       </nav>
     {/if}
     <div class="detail-deps">
-      {#if blockers.length > 0}
-        <div class="dep-row">
-          <span class="dep-k" class:stuck={board.isBlocked(me.id)}>blocked by</span>
-          {#each blockers as b (b.id)}
-            <button class="dep-chip" title="open {b.title}" onclick={() => board.openCard(b)}>
-              <span class="id">{b.id}</span>
-              <span class="t">{b.title}</span>
-              {#if b.laneId === "done" || b.laneId === "archive"}<span class="ok">✓</span>{/if}
-            </button>
-          {/each}
-        </div>
-      {/if}
+      <div class="dep-row">
+        <span class="dep-k" class:stuck={board.isBlocked(me.id)}>blocked by</span>
+        {#each blockers as b (b.id)}
+          <button class="dep-chip" title="open {b.title}" onclick={() => board.openCard(b)}>
+            <span class="id">{b.id}</span>
+            <span class="t">{b.title}</span>
+            {#if b.laneId === "done" || b.laneId === "archive"}<span class="ok">✓</span>{/if}
+          </button>
+          <button class="dep-x" title="unblock {b.title}" onclick={() => unblock(b.id)}>✕</button>
+        {/each}
+        <span class="dep-add blocker-add">
+          <input
+            placeholder="block by title or id…"
+            aria-label="add blocker"
+            aria-haspopup="listbox"
+            bind:value={blockerQuery}
+            onfocus={() => (blockerOpen = true)}
+            onblur={() => (blockerOpen = false)}
+            oninput={() => {
+              blockerOpen = true;
+              blockerHighlighted = 0;
+              blockerError = "";
+            }}
+            onkeydown={blockerKeydown}
+          />
+          {#if showBlockerDropdown}
+            <div class="dep-picker-results" role="listbox">
+              {#each blockerCandidatesList as t, i (t.id)}
+                <button
+                  class="dep-option"
+                  class:active={i === blockerHighlighted}
+                  role="option"
+                  aria-selected={i === blockerHighlighted}
+                  onmousedown={(e) => e.preventDefault()}
+                  onpointerenter={() => (blockerHighlighted = i)}
+                  onclick={() => void commitBlocker(t)}
+                >
+                  <span class="id">{t.id}</span>
+                  <span class="t">{t.title}</span>
+                  <span class="crumb">{laneCrumb(t)}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </span>
+        {#if blockerError}<span class="dep-error" role="alert">{blockerError}</span>{/if}
+      </div>
       {#if dependents.length > 0}
         <div class="dep-row">
           <span class="dep-k">blocking</span>
