@@ -1,7 +1,8 @@
 import * as path from "node:path";
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type Lane, type LaneEventFeedEntry, type Task, type WorkerPool } from "./db";
+import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneEventFeedEntry, type Task, type WorkerPool } from "./db";
+import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listPiModels } from "./models";
@@ -649,6 +650,48 @@ export const createApp = (
         params: t.Object({ id: t.String(), targetId: t.String() }),
       },
     )
+    .post(
+      "/tasks/:id/gh",
+      ({ params, body, status, set }): { link: GhLink } => {
+        try {
+          const ref = parseGhRef(body.ref);
+          if (!ref) {
+            throw new KanbanError(
+              `not a GitHub pr/issue ref: '${body.ref}' (expected https://github.com/{owner}/{repo}/pull/{n} or /issues/{n}, or gh:{owner}/{repo}#{n})`,
+              "invalid",
+            );
+          }
+          const link = db.attachGhLink(params.id, ref);
+          set.status = 201;
+          // fire-and-forget: warm the gh_state cache without blocking or failing
+          // the response; KANBAN_GH_SYNC_MS=0 disables all gh spawning (e2e seam)
+          if (process.env.KANBAN_GH_SYNC_MS !== "0") {
+            void refreshGhUrl(db, link.url).catch(() => {});
+          }
+          return { link };
+        } catch (e) {
+          return fail<{ link: GhLink }>(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Object({ ref: t.String({ minLength: 1, maxLength: 200 }) }),
+      },
+    )
+    .delete(
+      "/tasks/:id/gh/:linkId",
+      ({ params, status }): { ok: true; removed: boolean } => {
+        try {
+          return { ok: true, removed: db.unlinkGhLinkById(params.id, params.linkId) };
+        } catch (e) {
+          return fail<{ ok: true; removed: boolean }>(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String(), linkId: t.String() }),
+      },
+    )
+    .get("/gh/statuses", (): { statuses: GhStatus[] } => ({ statuses: db.ghStates() }))
     .post(
       "/tasks/:id/comments",
       ({ params, body, status, set }): Comment => {
