@@ -335,6 +335,8 @@ const MIN_GAP = 0.01;
 
 const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "review", "handoff", "approval", "rejection", "question"]);
 const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder", "planner", "plan-reviewer", "elaborator"]);
+/** Roles storable in agent_configs: the loop roles plus the board manager and lane worker (card d26pe). */
+const AGENT_CONFIG_ROLES: ReadonlySet<string> = new Set([...AGENT_ROLES, "manager", "worker"]);
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lanes (
@@ -2522,8 +2524,8 @@ export class KanbanDb {
 
   /** Full replace of a role's config; empty strings/arrays drop out. */
   setAgentConfig(role: string, config: AgentConfig): AgentConfig {
-    if (!AGENT_ROLES.has(role)) {
-      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder | planner | plan-reviewer | elaborator)`, "invalid");
+    if (!AGENT_CONFIG_ROLES.has(role)) {
+      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder | planner | plan-reviewer | elaborator | manager | worker)`, "invalid");
     }
     const clean: AgentConfig = {};
     if (config.provider?.trim()) clean.provider = config.provider.trim();

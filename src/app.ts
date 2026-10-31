@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneEventFeedEntry, type Task, type WorkerPool } from "./db";
+import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type WorkerPool } from "./db";
 import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
@@ -10,7 +10,7 @@ import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
 import { contentTypeFor, listFiles, rawFilePath, readFile, searchFiles, type FileEntry } from "./files";
-import { ChatManager, PROMPT_MAX_CHARS, type ChatState, type ChatSessionFactory } from "./chat";
+import { BOARD_CHAT_ID, ChatManager, PROMPT_MAX_CHARS, type ChatState, type ChatSessionFactory } from "./chat";
 import { createChatEventStream, type ChatStreamSession } from "./chat-events";
 
 /** POST /chat/:cardId success shapes (Eden infers them for the web client). */
@@ -546,10 +546,11 @@ export const createApp = (
       "/chat/:cardId",
       ({ params, status }): ChatState => {
         try {
-          const task = db.resolveTask(params.cardId);
-          const live = chatManager.peek(task.id);
+          // the manager chat is not a card — "board" never resolves, so branch first
+          if (params.cardId !== BOARD_CHAT_ID) db.resolveTask(params.cardId);
+          const live = chatManager.peek(params.cardId);
           if (live) return live.state();
-          const disk = chatManager.historyFromDisk(task.id);
+          const disk = chatManager.historyFromDisk(params.cardId);
           return {
             running: false,
             sessionId: disk.sessionId,
@@ -594,7 +595,7 @@ export const createApp = (
       "/chat/:cardId/events",
       ({ params, request, status }) => {
         try {
-          db.resolveTask(params.cardId); // 404 before the transport opens
+          if (params.cardId !== BOARD_CHAT_ID) db.resolveTask(params.cardId); // 404 before the transport opens
           const stream = createChatEventStream(
             request,
             chatManager.get(params.cardId).then((handle) => asChatStreamSession(handle)),
@@ -854,14 +855,19 @@ export const createApp = (
     )
     .get(
       "/agents",
-      (): { planner: AgentConfig | null; reviewer: AgentConfig | null; builder: AgentConfig | null; "plan-reviewer": AgentConfig | null; elaborator: AgentConfig | null } => ({
+      (): { planner: AgentConfig | null; reviewer: AgentConfig | null; builder: AgentConfig | null; "plan-reviewer": AgentConfig | null; elaborator: AgentConfig | null; manager: AgentConfig | null; worker: AgentConfig | null } => ({
         planner: db.agentConfig("planner"),
         reviewer: db.agentConfig("reviewer"),
         builder: db.agentConfig("builder"),
         "plan-reviewer": db.agentConfig("plan-reviewer"),
         elaborator: db.agentConfig("elaborator"),
+        manager: db.agentConfig("manager"),
+        worker: db.agentConfig("worker"),
       }),
     )
+    .get("/workers", (): { workers: Array<Omit<LaneWorkerRun, "log">> } => ({
+      workers: db.laneWorkers({ limit: 25 }).map(({ log: _log, ...row }) => row),
+    }))
     .get("/agents/pause", (): { paused: boolean } => ({ paused: db.agentsPaused() }))
     .put(
       "/agents/pause",
@@ -892,7 +898,7 @@ export const createApp = (
         }
       },
       {
-        params: t.Object({ role: t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer"), t.Literal("elaborator")]) }),
+        params: t.Object({ role: t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer"), t.Literal("elaborator"), t.Literal("manager"), t.Literal("worker")]) }),
         body: t.Object({
           provider: t.Optional(t.String()),
           model: t.Optional(t.String()),
