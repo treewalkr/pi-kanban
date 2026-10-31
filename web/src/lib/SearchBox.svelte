@@ -1,6 +1,10 @@
 <script lang="ts">
   import { board } from "./board.svelte";
   import type { SearchResult } from "../../../src/search";
+  import { files } from "./files.svelte";
+  import { agents } from "./agents.svelte";
+  import { palette } from "./palette.svelte";
+  import { laneCrumb } from "./palette";
 
   let input = $state<HTMLInputElement>();
   let open = $state(false);
@@ -30,14 +34,6 @@
     return "▪";
   }
 
-  /** Lane › ancestor chain, e.g. "backlog · auth epic · token refresh". */
-  function crumb(taskId: string): string {
-    const task = board.taskById(taskId);
-    if (!task) return "";
-    const lane = board.lanes.find((l) => l.id === task.laneId)?.name ?? task.laneId;
-    return [lane, ...board.ancestorsOf(task.id).map((a) => a.title)].join(" · ");
-  }
-
   function jump(r: SearchResult): void {
     open = false;
     board.jumpTo(r.task);
@@ -64,7 +60,13 @@
     if (board.editing) return; // modals own the keyboard while open
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-    if (e.key === "/" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k")) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      if (files.preview || agents.open) return; // never stack over those overlays
+      e.preventDefault();
+      palette.open = !palette.open;
+      return;
+    }
+    if (e.key === "/") {
       e.preventDefault();
       input?.focus();
       input?.select();
@@ -115,7 +117,7 @@
                 {r.text}
               {/if}
             </span>
-            <span class="crumb">{crumb(r.task.id)}</span>
+            <span class="crumb">{laneCrumb(board.tasks, board.lanes, r.task.id)}</span>
           </span>
           <span class="jump">↵</span>
         </button>

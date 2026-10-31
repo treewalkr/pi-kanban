@@ -76,6 +76,7 @@
 {#if collapsed}
   <section
     class="lane collapsed"
+    data-lane={lane.id}
     style="--accent: {laneColor(index)}"
     role="group"
     aria-label="{lane.name} (collapsed)"
@@ -102,6 +103,7 @@
   <section
     class="lane"
     class:archive-lane={isArchive}
+    data-lane={lane.id}
     bind:this={el}
     style="--accent: {laneColor(index)}"
     role="group"

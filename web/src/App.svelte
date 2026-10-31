@@ -10,6 +10,8 @@
   import FilePreview from "./lib/FilePreview.svelte";
   import AddLane from "./lib/AddLane.svelte";
   import SearchBox from "./lib/SearchBox.svelte";
+  import Palette from "./lib/CommandPalette.svelte";
+  import { palette } from "./lib/palette.svelte";
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import { theme, setTheme } from "./lib/theme.svelte";
@@ -277,6 +279,8 @@
   {#if agents.open}
     <SettingsPanel />
   {/if}
+
+  {#if palette.open}<Palette />{/if}
 
   {#if board.error}
     <button class="error-bar" onclick={() => (board.error = "")} title="dismiss">{board.error}</button>
