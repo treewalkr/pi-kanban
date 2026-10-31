@@ -118,7 +118,7 @@ test("setAgentConfig accepts elaborator; invalid role error names elaborator", (
   expect(db.agentConfig("elaborator")).toEqual(saved);
 
   expect(() => db.setAgentConfig("invalid-role", {})).toThrow(
-    "unknown agent role 'invalid-role' (reviewer | builder | planner | plan-reviewer | elaborator)",
+    "unknown agent role 'invalid-role' (reviewer | builder | planner | plan-reviewer | elaborator | manager | worker)",
   );
 });
 
