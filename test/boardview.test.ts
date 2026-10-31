@@ -2,6 +2,38 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { board } from "../web/src/lib/board.svelte";
 import type { Lane, Task } from "../src/db";
 
+function mockStorage(): Map<string, string> {
+  const map = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => map.set(k, String(v)),
+    removeItem: (k: string) => map.delete(k),
+    clear: () => map.clear(),
+  };
+  return map;
+}
+
+/** Minimal /board + /stats fetch stub so refresh() resolves with one task. */
+function stubBoardFetch(task: Task) {
+  return async (input: RequestInfo | URL): Promise<Response> => {
+    const pathname = new URL(String(input)).pathname;
+    if (pathname === "/stats") return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } });
+    if (pathname === "/board") {
+      return new Response(
+        JSON.stringify({
+          lanes: [makeLane("backlog", "Backlog")],
+          tasks: board.tasks,
+          plans: {},
+          waiting: {},
+          blockedBy: {},
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+  };
+}
+
 function makeLane(id: string, name: string): Lane {
   return {
     id,
@@ -322,3 +354,106 @@ test("board.elaborate POSTs to /tasks/:id/elaborate then polls activity and refr
 });
 
 
+
+test("tags derived: distinct, sorted, from all cards", () => {
+  board.tasks = [
+    makeTask({ id: "t1", title: "a", laneId: "backlog", tags: ["ui", "review-loop"] }),
+    makeTask({ id: "t2", title: "b", laneId: "plan", tags: ["ui", "quick-win"] }),
+    makeTask({ id: "t3", title: "c", laneId: "archive", tags: ["old-stuff"] }),
+  ];
+  expect(board.tags).toEqual(["old-stuff", "quick-win", "review-loop", "ui"]);
+});
+
+test("matches(): tag filter is AND across active tags", () => {
+  const tagged = makeTask({ id: "t1", title: "tagged", laneId: "backlog", tags: ["ui", "review-loop"] });
+  const untagged = makeTask({ id: "t2", title: "untagged", laneId: "backlog" });
+  board.tasks = [tagged, untagged];
+
+  board.tagFilter = [];
+  expect(board.matches(tagged)).toBe(true);
+  expect(board.matches(untagged)).toBe(true);
+
+  board.tagFilter = ["ui", "review-loop"];
+  expect(board.matches(tagged)).toBe(true);
+  expect(board.matches(untagged)).toBe(false);
+
+  board.tagFilter = ["ui", "x"];
+  expect(board.matches(tagged)).toBe(false);
+});
+
+test("tagFilter persists to kanban-tags; empty clears the key", () => {
+  const storage = mockStorage();
+  try {
+    board.tagFilter = ["review-loop", "ui", "ui"];
+    expect(board.tagFilter).toEqual(["review-loop", "ui"]); // sorted-unique
+    expect(storage.get("kanban-tags")).toBe(JSON.stringify(["review-loop", "ui"]));
+
+    board.tagFilter = [];
+    expect(board.tagFilter).toEqual([]);
+    expect(storage.has("kanban-tags")).toBe(false);
+  } finally {
+    board.tagFilter = [];
+    delete (globalThis as any).localStorage;
+  }
+});
+
+test("refresh() prunes stale stored tags and keeps live ones", async () => {
+  const storage = mockStorage();
+  const originalFetch = globalThis.fetch;
+  const task = makeTask({ id: "t1", title: "card", laneId: "backlog", tags: ["ui"] });
+  globalThis.fetch = stubBoardFetch(task) as typeof fetch;
+  try {
+    board.tasks = [task];
+    storage.set("kanban-tags", JSON.stringify(["ui", "dead"]));
+    board.tagFilter = ["ui", "dead"];
+    await board.refresh();
+    expect(board.tagFilter).toEqual(["ui"]);
+    expect(storage.get("kanban-tags")).toBe(JSON.stringify(["ui"]));
+
+    // all-stale → filter empties and the key is removed
+    board.tasks = [makeTask({ id: "t2", title: "card 2", laneId: "backlog", tags: [] })];
+    board.tagFilter = ["ui"];
+    await board.refresh();
+    expect(board.tagFilter).toEqual([]);
+    expect(storage.has("kanban-tags")).toBe(false);
+  } finally {
+    board.tagFilter = [];
+    board.tasks = [];
+    globalThis.fetch = originalFetch;
+    delete (globalThis as any).localStorage;
+  }
+});
+
+test("tag filter hides empty lanes and scopes activeCount", () => {
+  board.lanes = [
+    makeLane("backlog", "Backlog"),
+    makeLane("plan", "Plan"),
+    makeLane("done", "Done"),
+    makeLane("archive", "Archive"),
+  ];
+  board.tasks = [
+    makeTask({ id: "t1", title: "ui backlog", laneId: "backlog", tags: ["ui"] }),
+    makeTask({ id: "t2", title: "plain plan", laneId: "plan" }),
+    makeTask({ id: "t3", title: "ui done", laneId: "done", tags: ["ui"] }),
+    makeTask({ id: "t4", title: "ui archived", laneId: "archive", tags: ["ui"] }),
+  ];
+
+  board.tagFilter = ["ui"];
+  expect(board.visibleLanes.map((v) => v.lane.id)).toEqual(["backlog", "done", "archive"]);
+  expect(board.activeCount).toBe(2); // archive excluded
+
+  board.tagFilter = [];
+  expect(board.visibleLanes.map((v) => v.lane.id)).toEqual(["backlog", "plan", "done", "archive"]);
+  expect(board.activeCount).toBe(3);
+});
+
+test("matches(): text filter string includes tags", () => {
+  const tagged = makeTask({ id: "t1", title: "polish the header", laneId: "backlog", tags: ["review-loop"] });
+  board.tasks = [tagged];
+  board.search = "review-loop";
+  expect(board.visibleTasks("backlog").map((t) => t.id)).toEqual(["t1"]);
+  board.search = "review-loo";
+  expect(board.visibleTasks("backlog").length).toBe(1); // substring still matches
+  board.search = "zzz";
+  expect(board.visibleTasks("backlog").length).toBe(0);
+});

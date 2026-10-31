@@ -37,6 +37,15 @@ function loadProjectFilter(): string {
   return initialProject(stored, readHash());
 }
 
+function loadTagFilter(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem("kanban-tags") ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 function loadPrioFilter(): "high" | "" {
   try {
     return localStorage.getItem("kanban-prio") === "high" ? "high" : "";
@@ -103,6 +112,24 @@ class BoardStore {
       /* storage unavailable — the filter still works for this session */
     }
     writeHash(projectHash(v));
+  }
+
+  #tagFilter = $state<string[]>(loadTagFilter());
+
+  /** Active tag chips (AND); persists as a JSON array under kanban-tags. */
+  get tagFilter(): string[] {
+    return this.#tagFilter;
+  }
+
+  set tagFilter(v: string[]) {
+    const next = [...new Set(v)].sort();
+    this.#tagFilter = next;
+    try {
+      if (next.length === 0) localStorage.removeItem("kanban-tags");
+      else localStorage.setItem("kanban-tags", JSON.stringify(next));
+    } catch {
+      /* storage unavailable — the filter still works for this session */
+    }
   }
 
   applyProjectHash(): void {
@@ -202,15 +229,25 @@ class BoardStore {
     [...new Set(this.tasks.map((t) => t.project).filter((p) => p !== ""))].sort(),
   );
 
+  /** Every tag on any card, incl. archive — derived live, no tag table. */
+  readonly tags = $derived([...new Set(this.tasks.flatMap((t) => t.tags))].sort());
+
   readonly visibleLanes = $derived(
     this.lanes
       .map((lane, index) => ({ lane, index }))
-      .filter(({ lane }) => this.#projectFilter === "" || this.visibleTasks(lane.id).length > 0),
+      .filter(
+        ({ lane }) =>
+          (this.#projectFilter === "" && this.#tagFilter.length === 0) ||
+          this.visibleTasks(lane.id).length > 0,
+      ),
   );
 
   readonly activeCount = $derived(
     this.tasks.filter(
-      (t) => t.laneId !== "archive" && (this.#projectFilter === "" || t.project === this.#projectFilter),
+      (t) =>
+        t.laneId !== "archive" &&
+        (this.#projectFilter === "" || t.project === this.#projectFilter) &&
+        (this.#tagFilter.length === 0 || this.#tagFilter.every((tag) => t.tags.includes(tag))),
     ).length,
   );
   readonly waitingCount = $derived(this.tasks.filter((t) => t.laneId === "waiting").length);
@@ -268,14 +305,15 @@ class BoardStore {
     return chain;
   }
 
-  /** True when the task passes the current search/project filter. */
+  /** True when the task passes the current search/project/tag filter. */
   matches(t: Task): boolean {
     if (this.projectFilter && t.project !== this.projectFilter) return false;
+    if (this.#tagFilter.length > 0 && !this.#tagFilter.every((tag) => t.tags.includes(tag))) return false;
     if (this.prioFilter && t.priority !== this.prioFilter) return false;
     if (this.blockedOnly && !this.isBlocked(t.id)) return false;
     if (this.waitingOnly && t.laneId !== "waiting") return false;
     const q = this.search.trim().toLowerCase();
-    return q ? `${t.title} ${t.note} ${t.id} ${t.project}`.toLowerCase().includes(q) : true;
+    return q ? `${t.title} ${t.note} ${t.id} ${t.project} ${t.tags.join(" ")}`.toLowerCase().includes(q) : true;
   }
 
   /** A card is blocked if any direct blocker is outside done or archive (soft blocking). */
@@ -371,6 +409,9 @@ class BoardStore {
     if (this.projectFilter !== "" && !this.projects.includes(this.projectFilter)) {
       this.projectFilter = "";
     }
+    // a multi-tag filter prunes dead tags individually and keeps the live ones
+    const live = this.#tagFilter.filter((tag) => this.tags.includes(tag));
+    if (live.length !== this.#tagFilter.length) this.tagFilter = live;
   }
 
   async pollActivity(): Promise<void> {
