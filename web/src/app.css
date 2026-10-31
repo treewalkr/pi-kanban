@@ -1127,7 +1127,9 @@ button {
 }
 
 /* narrow viewports: brand + count + theme on row 1, chips and search take
-   their own full rows — nothing gets crushed or pushed off-screen */
+   their own full rows — nothing gets crushed or pushed off-screen.
+   The .top-scoped selectors outrank the base .chips/.search-box rules below
+   (which would otherwise win the cascade and re-break the rows). */
 @media (max-width: 640px) {
   .top {
     flex-wrap: wrap;
@@ -1139,12 +1141,12 @@ button {
     margin-left: auto;
   }
 
-  .chips {
+  .top .chips {
     order: 1;
     flex: 1 1 100%;
   }
 
-  .search-box {
+  .top .search-box {
     order: 2;
     flex: 1 1 100%;
   }
