@@ -7,6 +7,10 @@ export const api = treaty<App>(import.meta.env.DEV ? "http://localhost:4600" : w
 // SSE change stream; EventSource is a browser streaming client, not a REST call
 export const eventsUrl = import.meta.env.DEV ? "http://localhost:4600/events" : "/events";
 
+// Card-chat SSE stream — same non-Treaty exception as eventsUrl (EventSource, not fetch)
+export const chatEventsUrl = (cardId: string) =>
+  import.meta.env.DEV ? `http://localhost:4600/chat/${cardId}/events` : `/chat/${cardId}/events`;
+
 // Raw file stream/download URL for resource tags (img src, anchor href)
 export const rawFilesUrl = import.meta.env.DEV ? "http://localhost:4600/files/raw" : "/files/raw";
 
