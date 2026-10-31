@@ -1328,7 +1328,7 @@ test("serve: --agents and --auto-review both set KANBAN_AUTO_REVIEW=1", () => {
       delete process.env.KANBAN_AUTO_REVIEW;
       const parsed = parse([flag]);
       applyServeEnv(parsed.flags);
-      expect(process.env.KANBAN_AUTO_REVIEW).toBe("1");
+      expect(process.env.KANBAN_AUTO_REVIEW as string | undefined).toBe("1");
     }
 
     delete process.env.KANBAN_AUTO_REVIEW;
@@ -1355,4 +1355,72 @@ test("docs: AGENTS.md and SKILL.md reference --agents", () => {
   expect(agentsMd).toContain("--agents");
   expect(skillMd).toContain("--agents");
   expect(skillMd).not.toContain("--auto-review");
+});
+
+test("kanban undo: board-wide, card-scoped, --json, WIP warning, and error exits", async () => {
+  const undoDb = join(dir, "undo.db");
+  const run = (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: undoDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code }));
+  };
+
+  const a = JSON.parse((await run("add", "card a", "--json")).stdout) as Task;
+  const b = JSON.parse((await run("add", "card b", "--json")).stdout) as Task;
+
+  // kanban undo before any move exits 1 with nothing to undo on stderr
+  const beforeMove = await run("undo");
+  expect(beforeMove.code).toBe(1);
+  expect(beforeMove.stderr).toContain("nothing to undo");
+
+  // kanban mv <a.id> plan then kanban done <a.id>
+  const mvRes = await run("mv", a.id, "plan");
+  expect(mvRes.code).toBe(0);
+  const doneRes = await run("done", a.id);
+  expect(doneRes.code).toBe(0);
+
+  // kanban undo --json exits 0 and parses to { task: { id: a.id, laneId: "plan" }, event: { fromLaneId: "plan", toLaneId: "done", cause: "done" } }
+  const undoJson = await run("undo", "--json");
+  expect(undoJson.code).toBe(0);
+  const parsed = JSON.parse(undoJson.stdout) as {
+    task: { id: string; laneId: string };
+    event: { fromLaneId: string; toLaneId: string; cause: string };
+  };
+  expect(parsed.task.id).toBe(a.id);
+  expect(parsed.task.laneId).toBe("plan");
+  expect(parsed.event.fromLaneId).toBe("plan");
+  expect(parsed.event.toLaneId).toBe("done");
+  expect(parsed.event.cause).toBe("done");
+
+  // set backlog WIP limit to 1 so undoing a into backlog (which already has b) triggers WIP warning
+  await run("lane", "limit", "backlog", "1");
+
+  // human kanban undo <a.id> exits 0, prints ✓ <a.id> … → Backlog, and puts a back in backlog
+  const undoHuman = await run("undo", a.id);
+  expect(undoHuman.code).toBe(0);
+  expect(undoHuman.stdout).toContain(`✓ ${a.id}`);
+  expect(undoHuman.stdout).toContain("→ Backlog");
+  expect(undoHuman.stdout).toContain("⚠ backlog over WIP limit: 2/1");
+
+  // verify a is back in backlog
+  const aShow = JSON.parse((await run("show", a.id, "--json")).stdout) as Task;
+  expect(aShow.laneId).toBe("backlog");
+
+  // kanban undo a b exits 1 with usage: kanban undo [id] [--json]
+  const badArity = await run("undo", "a", "b");
+  expect(badArity.code).toBe(1);
+  expect(badArity.stderr).toContain("usage: kanban undo [id] [--json]");
+
+  // kanban help includes kanban undo [id]
+  const helpRes = await run("help");
+  expect(helpRes.code).toBe(0);
+  expect(helpRes.stdout).toContain("kanban undo [id]");
 });
