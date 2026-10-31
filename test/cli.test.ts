@@ -1071,3 +1071,78 @@ test("ws set → show → clear roundtrip", async () => {
 
 
 
+
+test("ls --tag filters AND across repeats in text output and --json alike", async () => {
+  const a = await cli("add", "ui polish card", "--tag", "ui", "--json");
+  const b = await cli("add", "ui and review-loop card", "--tag", "ui", "--tag", "review-loop", "--json");
+  const c = await cli("add", "untagged card", "--json");
+  const ui = JSON.parse(a.stdout) as Task;
+  const both = JSON.parse(b.stdout) as Task;
+  const none = JSON.parse(c.stdout) as Task;
+
+  const text = await cli("ls", "--tag", "ui", "--tag", "review-loop");
+  expect(text.code).toBe(0);
+  expect(text.stdout).toContain(both.title);
+  expect(text.stdout).not.toContain(ui.title);
+  expect(text.stdout).not.toContain(none.title);
+  expect(text.stdout).toContain("● Backlog  1");
+
+  const all = await cli("ls");
+  expect(all.stdout).toContain(ui.title);
+  expect(all.stdout).toContain(both.title);
+  expect(all.stdout).toContain(none.title);
+
+  const json = await cli("ls", "--tag", "ui", "--tag", "review-loop", "--json");
+  expect(json.code).toBe(0);
+  const rows = JSON.parse(json.stdout) as Task[];
+  expect(rows.map((t) => t.id)).toEqual([both.id]);
+
+  const singleJson = await cli("ls", "--tag", "ui", "--json");
+  const singleRows = JSON.parse(singleJson.stdout) as Task[];
+  expect(singleRows.map((t) => t.id).sort()).toEqual([ui.id, both.id].sort());
+});
+
+test("add --tag sets tags and show prints the tags row", async () => {
+  const added = await cli("add", "tagged via cli", "--tag", "ui", "--tag", "review-loop", "--json");
+  const task = JSON.parse(added.stdout) as Task;
+  expect(task.tags).toEqual(["ui", "review-loop"]);
+
+  const shown = await cli("show", task.id);
+  expect(shown.stdout).toContain("tags:    #ui #review-loop");
+
+  const listed = await cli("ls", "--json");
+  const row = (JSON.parse(listed.stdout) as Task[]).find((t) => t.id === task.id)!;
+  expect(row.tags).toEqual(["ui", "review-loop"]);
+});
+
+test("edit --tag replaces tags; --clear-tags empties them; empty edit still errors with --tag in usage", async () => {
+  const added = await cli("add", "edit tags card", "--json");
+  const task = JSON.parse(added.stdout) as Task;
+
+  const replaced = await cli("edit", task.id, "--tag", "a", "--tag", "b", "--json");
+  expect(replaced.code).toBe(0);
+  expect((JSON.parse(replaced.stdout) as Task).tags).toEqual(["a", "b"]);
+
+  const cleared = await cli("edit", task.id, "--clear-tags", "--json");
+  expect(cleared.code).toBe(0);
+  expect((JSON.parse(cleared.stdout) as Task).tags).toEqual([]);
+
+  const empty = await cli("edit", task.id);
+  expect(empty.code).toBe(1);
+  expect(empty.stderr).toContain("--tag");
+});
+
+test("search --tag scopes results to tagged cards", async () => {
+  await cli("add", "widget polish", "--tag", "ui", "--json");
+  await cli("add", "polish the footer", "--json");
+
+  const scoped = await cli("search", "ui", "--tag", "ui");
+  expect(scoped.code).toBe(0);
+  expect(scoped.stdout).toContain("tag: ui");
+  expect(scoped.stdout).not.toContain("polish the footer");
+
+  const json = await cli("search", "ui", "--tag", "ui", "--json");
+  const results = JSON.parse(json.stdout) as Array<{ task: Task }>;
+  expect(results.length).toBeGreaterThan(0);
+  expect(results.every((r) => r.task.tags.includes("ui"))).toBe(true);
+});

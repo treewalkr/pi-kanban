@@ -31,8 +31,8 @@ function truncate(s: string, max: number): string {
   return lines.length > max ? `${lines.slice(0, max - 1)}…` : lines;
 }
 
-/** Board overview: every lane (or one) with its tasks. */
-export function listLanes(db: KanbanDb, laneRef?: string, project?: string): string {
+/** Board overview: every lane (or one) with its tasks; project and tags narrow the listing. */
+export function listLanes(db: KanbanDb, laneRef?: string, project?: string, tags?: string[]): string {
   const all = db.lanes();
   const lanes = laneRef ? [db.resolveLane(laneRef)] : all;
   const width = process.stdout.columns ?? 80;
@@ -42,7 +42,8 @@ export function listLanes(db: KanbanDb, laneRef?: string, project?: string): str
     const color = laneColor(idx >= 0 ? idx : 0);
     const tasks = db
       .laneTasks(lane.id)
-      .filter((t) => (project ? t.project === project : true));
+      .filter((t) => (project ? t.project === project : true))
+      .filter((t) => (tags && tags.length > 0 ? tags.every((tag) => t.tags.includes(tag)) : true));
     out.push(c.hex(color, `● ${lane.name}`) + c.dim(`  ${tasks.length}`));
     if (tasks.length === 0) {
       out.push(c.dim("  (empty)"));
@@ -74,7 +75,8 @@ export function taskLine(db: KanbanDb, task: Task): string {
   const lane = lanes.find((l) => l.id === task.laneId);
   const color = laneColor(lanes.indexOf(lane!));
   const chip = task.project ? c.dim(` [${task.project}]`) : "";
-  return `${c.green("✓")} ${c.dim(task.id)}  ${task.title}${chip}  ${c.hex(color, `→ ${lane?.name ?? task.laneId}`)}`;
+  const tags = task.tags.length > 0 ? c.dim(` ${task.tags.map((t) => `#${t}`).join(" ")}`) : "";
+  return `${c.green("✓")} ${c.dim(task.id)}  ${task.title}${chip}${tags}  ${c.hex(color, `→ ${lane?.name ?? task.laneId}`)}`;
 }
 
 /** One-line confirmation after writing a comment. */
@@ -168,11 +170,13 @@ export function searchResults(db: KanbanDb, query: string, results: SearchResult
     const text =
       r.kind === "checklist"
         ? `${c.dim(r.checked ? "[x]" : "[ ]")} ${truncate(r.text, max - 4)}`
-        : r.kind === "note"
-          ? `${c.dim("note:")} ${truncate(r.text, max - 6)}`
-          : r.kind === "plan"
-            ? `${c.dim("plan:")} ${truncate(r.text, max - 6)}`
-            : truncate(r.text, max);
+        : r.kind === "tag"
+          ? `${c.dim("tag:")} ${truncate(r.text, max - 5)}`
+          : r.kind === "note"
+            ? `${c.dim("note:")} ${truncate(r.text, max - 6)}`
+            : r.kind === "plan"
+              ? `${c.dim("plan:")} ${truncate(r.text, max - 6)}`
+              : truncate(r.text, max);
     const arrow = c.hex(laneColor(lanes.indexOf(lane!)), `→ ${lane?.name ?? r.task.laneId}`);
     out.push(`  ${c.dim(r.task.id)}  ${text}${chip}  ${arrow}`);
   }
@@ -216,6 +220,11 @@ export function taskDetail(db: KanbanDb, task: Task): string {
   out.push(
     `${c.dim("lane:")}    ${c.hex(color, lane?.name ?? task.laneId)}${lane ? c.dim(` (${lane.id})`) : ""}`,
     `${c.dim("project:")} ${task.project || c.dim("—")}`,
+  );
+  if (task.tags.length > 0) {
+    out.push(`${c.dim("tags:")}    ${task.tags.map((t) => `#${t}`).join(" ")}`);
+  }
+  out.push(
     `${c.dim("workspace:")} ${task.workspace ?? c.dim("—")}`,
     `${c.dim("created:")} ${new Date(task.createdAt).toLocaleString()}`,
     `${c.dim("updated:")} ${new Date(task.updatedAt).toLocaleString()}`,

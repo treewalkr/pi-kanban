@@ -7,6 +7,7 @@ function task(partial: Partial<Task> & { id: string; title: string }): Task {
     note: "",
     laneId: "backlog",
     project: "",
+    tags: [],
     parentId: null,
     previousLane: null,
     workspace: null,

@@ -1013,3 +1013,60 @@ test("board payload lists a link from both connected cards", async () => {
   expect(board.links[a.id]).toContain(b.id);
   expect(board.links[b.id]).toContain(a.id);
 });
+
+test("POST /tasks accepts tags; PATCH /tasks/:id replaces or clears; bad shape 422", async () => {
+  const app = createApp(db);
+
+  const post = await app.handle(
+    new Request("http://localhost/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "tagged", tags: [" ui ", "ui", "review-loop"] }),
+    }),
+  );
+  expect(post.status).toBe(201);
+  const created = (await post.json()) as { id: string; tags: string[] };
+  expect(created.tags).toEqual(["ui", "review-loop"]);
+
+  const patched = await app.handle(
+    new Request(`http://localhost/tasks/${created.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tags: ["ui", "x"] }),
+    }),
+  );
+  expect(patched.status).toBe(200);
+  expect(((await patched.json()) as { tags: string[] }).tags).toEqual(["ui", "x"]);
+
+  const cleared = await app.handle(
+    new Request(`http://localhost/tasks/${created.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tags: [] }),
+    }),
+  );
+  expect(cleared.status).toBe(200);
+  expect(((await cleared.json()) as { tags: string[] }).tags).toEqual([]);
+
+  const badShape = await app.handle(
+    new Request("http://localhost/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "x", tags: "ui" }),
+    }),
+  );
+  expect(badShape.status).toBe(422); // tags must be an array
+
+  const tooMany = await app.handle(
+    new Request("http://localhost/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "x", tags: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"] }),
+    }),
+  );
+  expect(tooMany.status).toBe(400);
+  expect((await tooMany.json()) as { error: string; code: string }).toEqual({
+    error: "a card carries at most 10 tags",
+    code: "invalid",
+  });
+});

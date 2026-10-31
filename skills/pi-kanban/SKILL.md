@@ -108,10 +108,10 @@ review your own work in that mode unless asked.
 ## Commands
 
 ```
-kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--top]  # new card (Backlog by default; --parent nests it)
-kanban ls [lane] [--project <tag>] [--json]                           # board overview / one lane (children indented; ▲▼ priority, ⊘ blocked, ☉ waiting)
+kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--tag <tag>]… [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--top]  # new card (Backlog by default; --parent nests it)
+kanban ls [lane] [--project <tag>] [--tag <tag>]… [--json]                           # board overview / one lane (children indented; ▲▼ priority, ⊘ blocked, ☉ waiting)
 kanban next [--project <tag>] [--json]                           # what's next: lane priority, then card priority, then oldest; skips blocked (prints blocked & waiting counts)
-kanban search <query…> [--project <tag>] [--json]                     # ranked matches: titles, checklist lines, notes, plans
+kanban search <query…> [--project <tag>] [--tag <tag>]… [--json]                     # ranked matches: titles, checklist lines, tags, notes, plans
 kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers, from-lane
 kanban link <id> <other> · unlink <id> <other>                        # relate / unrelate two cards (undirected; visible from both)
 kanban attach <id> <file> [--as <name>]                               # attach/version a card file (default name: plan); show prints the latest
@@ -127,7 +127,7 @@ kanban reject <id> --message <feedback>   # plan gate: reject with feedback → 
 kanban brief <id>                                                     # full pickup context: note, latest plan, files, thread
 kanban mv <id> <lane> [--pos <1-based>]                               # move / reorder
 kanban mv <id> --next | --prev                                        # advance / pull back one lane
-kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--lane <ref>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--clear-blocked-by] [--clear-note] [--clear-parent]
+kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--tag <tag>]… [--lane <ref>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--clear-blocked-by] [--clear-tags] [--clear-note] [--clear-parent]
 kanban done <id>                                                      # shortcut → Done
 kanban archive <id>                                                   # shortcut → Archive (undo: mv <id> <lane>)
 kanban check [--json]                                                 # board-health lint: done parents w/ active children, children behind parent, planless build cards (advisory, exit 0)
@@ -147,6 +147,10 @@ kanban help | version                                                 # CLI help
 - **`--project`**: tag cards with the repo name (`--project kanban`) so the
   board stays scannable across projects; filter with `kanban ls --project X`
   or the chips in the web UI.
+- **`--tag`**: tags are free-form cross-cutting labels (`ui`, `review-loop`,
+  `quick-win`), multiple per card. Filter with `ls --tag X --tag Y` (repeats
+  AND) or `search --tag X`; set via `add`/`edit --tag` (replace), clear with
+  `edit --clear-tags`.
 - **`--parent`**: nest a card under another (epic → story → subtask, max depth
   3). `add --parent <id>` defaults the child to the parent's lane;
   `edit --parent <id>` reparents, `edit --clear-parent` detaches. Each card

@@ -1,6 +1,6 @@
 import type { Attachment, Task } from "./db";
 
-export type SearchResultKind = "title" | "checklist" | "note" | "plan";
+export type SearchResultKind = "title" | "checklist" | "tag" | "note" | "plan";
 
 export interface SearchResult {
   kind: SearchResultKind;
@@ -73,6 +73,16 @@ export function searchBoard(
         results.push({ kind: "checklist", task, text: item.text, checked: item.checked, score: 60 });
       else if (text.includes(q))
         results.push({ kind: "checklist", task, text: item.text, checked: item.checked, score: 50 });
+    }
+
+    // a tag row would just duplicate the card when the title already matched
+    if (!titleMatched) {
+      for (const tag of task.tags) {
+        if (tag.toLowerCase().includes(q)) {
+          results.push({ kind: "tag", task, text: tag, score: 45 });
+          break; // one tag row per card, the first matching tag in tag order
+        }
+      }
     }
 
     // a note-body row would just duplicate the card when the title already matched

@@ -1481,3 +1481,47 @@ test("linkCards: self-link invalid, duplicate idempotent, canonical order", () =
   expect(db.unlinkCards(a.id, b.id)).toBe(false);
 });
 
+
+test("tags: default empty; create/patch roundtrip; normalization trims, drops empties, dedupes, keeps order; limits throw", () => {
+  const plain = db.createTask({ title: "untagged" });
+  expect(plain.tags).toEqual([]);
+
+  const tagged = db.createTask({ title: "tagged", tags: [" ui ", "", "ui", "review-loop", "  "] });
+  expect(tagged.tags).toEqual(["ui", "review-loop"]);
+
+  // patch replaces the whole array; [] clears
+  const replaced = db.updateTask(tagged.id, { tags: ["a"] });
+  expect(replaced.tags).toEqual(["a"]);
+  const cleared = db.updateTask(tagged.id, { tags: [] });
+  expect(cleared.tags).toEqual([]);
+
+  // omitting tags on patch keeps them
+  expect(db.updateTask(cleared.id, { tags: ["k"] }).tags).toEqual(["k"]);
+  expect(db.updateTask(cleared.id, { title: "renamed" }).tags).toEqual(["k"]);
+
+  expect(() => db.createTask({ title: "x", tags: ["u".repeat(49)] })).toThrow(
+    "tags must be at most 48 characters each",
+  );
+  expect(() =>
+    db.createTask({ title: "x", tags: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"] }),
+  ).toThrow("a card carries at most 10 tags");
+  expect(() => db.updateTask(plain.id, { tags: ["u".repeat(49)] })).toThrow(
+    "tags must be at most 48 characters each",
+  );
+});
+
+test("tags: pre-tags database migrates with tags defaulting to []", () => {
+  const a = db.createTask({ title: "a" });
+  const b = db.createTask({ title: "b", tags: ["ui"] });
+  db.close();
+  const raw = new Database(join(dir, "t.db"));
+  raw.exec("ALTER TABLE tasks DROP COLUMN tags");
+  raw.close();
+
+  const reopened = new KanbanDb(join(dir, "t.db"));
+  const tasks = reopened.tasks();
+  expect(tasks.map((t) => t.id).sort()).toEqual([a.id, b.id].sort());
+  expect(tasks.every((t) => t.tags.length === 0)).toBe(true);
+  expect(reopened.updateTask(a.id, { tags: ["x"] }).tags).toEqual(["x"]);
+  reopened.close();
+});

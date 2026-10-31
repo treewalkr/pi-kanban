@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Comment } from "../src/db";
-import { commentThread, listLanes, statsBoard, statsCard, taskDetail } from "../src/render";
+import { searchBoard } from "../src/search";
+import { commentThread, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "../src/render";
+
+const dbSearch = (db: KanbanDb, q: string) => searchBoard(db.tasks(), q, db.latestPlans());
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -326,4 +329,59 @@ describe("commentThread CLI renderer", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+test("searchResults renders tag: rows; taskDetail and taskLine print #tags", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kanban-render-tags-"));
+  const db = new KanbanDb(join(dir, "t.db"));
+  try {
+    const tagged = db.createTask({ title: "polish the header", tags: ["ui", "review-loop"] });
+
+    const results = dbSearch(db, "rev");
+    expect(results.some((r) => r.kind === "tag")).toBe(true);
+    const out = stripAnsi(searchResults(db, "rev", results));
+    expect(out).toContain("tag: review-loop");
+
+    const detail = stripAnsi(taskDetail(db, db.resolveTask(tagged.id)));
+    expect(detail).toContain("tags:    #ui #review-loop");
+
+    const line = stripAnsi(taskLine(db, db.resolveTask(tagged.id)));
+    expect(line).toContain(" #ui #review-loop");
+
+    const untagged = db.createTask({ title: "no tags here" });
+    const plainDetail = stripAnsi(taskDetail(db, db.resolveTask(untagged.id)));
+    expect(plainDetail).not.toContain("tags:");
+    const plainLine = stripAnsi(taskLine(db, db.resolveTask(untagged.id)));
+    expect(plainLine).not.toContain(" #");
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("listLanes filters by tags AND across repeats and mirrors project", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kanban-render-listlanes-"));
+  const db = new KanbanDb(join(dir, "t.db"));
+  try {
+    const ui = db.createTask({ title: "ui only card", tags: ["ui"] });
+    const both = db.createTask({ title: "ui and review-loop card", tags: ["ui", "review-loop"] });
+    const none = db.createTask({ title: "untagged card" });
+
+    const filtered = stripAnsi(listLanes(db, undefined, undefined, ["ui", "review-loop"]));
+    expect(filtered).toContain(both.title);
+    expect(filtered).not.toContain(ui.title);
+    expect(filtered).not.toContain(none.title);
+    expect(filtered).toContain("● Backlog  1");
+
+    const projectOnly = stripAnsi(listLanes(db, undefined, "kanban"));
+    expect(projectOnly).toContain("(empty)"); // no card carries that project
+
+    const single = stripAnsi(listLanes(db, undefined, undefined, ["ui"]));
+    expect(single).toContain(ui.title);
+    expect(single).toContain(both.title);
+    expect(single).not.toContain(none.title);
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

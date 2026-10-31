@@ -110,6 +110,7 @@
       <span class="chip blocked"><CircleSlash size={11} strokeWidth={1.75} /> blocked</span>
     {/if}
     {#if task.project}<span class="chip">{task.project}</span>{/if}
+    {#if task.tags.length > 0}{#each task.tags as tag (tag)}<span class="chip tag">#{tag}</span>{/each}{/if}
     {#if board.workspaces[task.id]}
       {@const ws = board.workspaces[task.id]}
       <span class="chip ws" title={ws.path ?? "branch exists — no worktree checked out"}>
