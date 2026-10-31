@@ -9,7 +9,9 @@ passed plan review parks the card there — a `↩ from <lane>` chip remembers i
 and any human reply (or the approve/reject gate) returns it. Cards nest into an
 **epic → story → subtask** hierarchy; every card moves
 independently. The CLI writes the DB directly (no server needed for agent-side CRUD); the
-server pushes live updates to the web UI over SSE.
+server pushes live updates to the web UI over SSE and raises notifications when a card
+enters Review (browser notification in a background tab; set `KANBAN_OSASCRIPT_NOTIFY=1`
+to also get a macOS notification from the server when no tab is open).
 
 ## Stack
 
