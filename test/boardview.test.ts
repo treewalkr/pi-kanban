@@ -16,6 +16,7 @@ function makeTask(partial: Partial<Task> & { id: string; title: string; laneId: 
   return {
     note: "",
     project: "",
+    tags: [],
     parentId: null,
     previousLane: null,
     workspace: null,

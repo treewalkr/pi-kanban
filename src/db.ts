@@ -32,6 +32,7 @@ export interface Task {
   note: string;
   laneId: string;
   project: string;
+  tags: string[];
   parentId: string | null;
   previousLane: string | null;
   workspace: string | null;
@@ -208,6 +209,7 @@ export interface TaskPatch {
   title?: string;
   note?: string;
   project?: string;
+  tags?: string[]; // full replace; [] clears
   lane?: string; // lane ref: id, id prefix, name prefix, or 1-based ordinal
   parent?: string | null; // task ref to attach under; null detaches
   workspace?: string | null;
@@ -256,6 +258,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   parent_id TEXT REFERENCES tasks (id),
   previous_lane TEXT,
   workspace TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
   priority TEXT NOT NULL DEFAULT 'normal',
   position REAL NOT NULL,
   created_at INTEGER NOT NULL,
@@ -365,6 +368,22 @@ export const NEXT_LANE_PRIORITY = ["review", "implement", "plan", "backlog"] as 
 export const PRIORITIES = ["high", "normal", "low"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
+/** Shared by create/patch: trim, drop empties, dedupe keeping first occurrence and order; throws on limits. */
+export function normalizeTags(input: string[] | undefined): string[] {
+  if (input === undefined) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of input) {
+    const tag = raw.trim();
+    if (!tag || seen.has(tag)) continue;
+    if (tag.length > 48) throw new KanbanError("tags must be at most 48 characters each", "invalid");
+    seen.add(tag);
+    out.push(tag);
+  }
+  if (out.length > 10) throw new KanbanError("a card carries at most 10 tags", "invalid");
+  return out;
+}
+
 /** Lanes where a card no longer blocks its dependents (soft blocking). */
 export const UNBLOCKED_LANES = ["done", "archive"] as const;
 
@@ -392,6 +411,7 @@ interface TaskRow {
   note: string;
   lane_id: string;
   project: string;
+  tags: string;
   parent_id: string | null;
   previous_lane: string | null;
   workspace: string | null;
@@ -431,12 +451,24 @@ interface LaneEventRow {
 }
 
 const rowToLane = (r: LaneRow): Lane => ({ ...r });
+
+/** tasks.tags is one JSON array column; corrupt data parses to [] — never crashes the board. */
+const parseTags = (raw: string): string[] => {
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+};
+
 const rowToTask = (r: TaskRow): Task => ({
   id: r.id,
   title: r.title,
   note: r.note,
   laneId: r.lane_id,
   project: r.project,
+  tags: parseTags(r.tags),
   parentId: r.parent_id,
   previousLane: r.previous_lane ?? null,
   workspace: r.workspace ?? null,
@@ -621,6 +653,7 @@ export class KanbanDb {
     this.migratePriorityColumn();
     this.migratePreviousLaneColumn();
     this.migrateWorkspaceColumn();
+    this.migrateTagsColumn();
     this.db.exec(SCHEMA);
     this.seedLanes();
     this.ensureWaitingLane();
@@ -733,6 +766,16 @@ export class KanbanDb {
     const cols = this.q("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     if (!cols.some((col) => col.name === "workspace"))
       this.db.exec("ALTER TABLE tasks ADD COLUMN workspace TEXT");
+  }
+
+  /** Boards created before tags existed need the column added once; the ALTER's
+   * DEFAULT backfills '[]' on existing rows (migratePriorityColumn pattern). */
+  private migrateTagsColumn(): void {
+    const table = this.q("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'").get();
+    if (!table) return; // fresh db: SCHEMA creates the table with the column
+    const cols = this.q("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!cols.some((col) => col.name === "tags"))
+      this.db.exec("ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'");
   }
 
   // boards created before the archive lane existed need it appended once
@@ -1022,6 +1065,7 @@ export class KanbanDb {
     note?: string;
     lane?: string;
     project?: string;
+    tags?: string[];
     parent?: string | null;
     priority?: string;
     blockedBy?: string[];
@@ -1047,8 +1091,8 @@ export class KanbanDb {
       try {
         this.tx(() => {
           this.q(
-            "INSERT INTO tasks (id, title, note, lane_id, project, parent_id, previous_lane, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          ).run(id, title, input.note ?? "", lane.id, input.project ?? "", parent?.id ?? null, null, priority, position, now, now);
+            "INSERT INTO tasks (id, title, note, lane_id, project, tags, parent_id, previous_lane, priority, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          ).run(id, title, input.note ?? "", lane.id, input.project ?? "", JSON.stringify(normalizeTags(input.tags)), parent?.id ?? null, null, priority, position, now, now);
           this.recordLaneEvent(id, null, lane.id, "create", "user", now);
           if (input.blockedBy !== undefined) {
             this.setBlockedBy(id, input.blockedBy);
@@ -1075,6 +1119,8 @@ export class KanbanDb {
     const title = patch.title?.trim();
     if (patch.title !== undefined && !title) throw new KanbanError("title must not be empty", "invalid");
 
+    const tags = patch.tags !== undefined ? normalizeTags(patch.tags) : task.tags;
+
     if (patch.priority !== undefined && !PRIORITIES.includes(patch.priority as Priority)) {
       throw new KanbanError("priority must be one of high|normal|low", "invalid");
     }
@@ -1098,13 +1144,14 @@ export class KanbanDb {
     const now = Date.now();
     this.q(
       `UPDATE tasks SET
-        title = ?, note = ?, lane_id = ?, project = ?, parent_id = ?, previous_lane = ?, workspace = ?, priority = ?, position = ?, updated_at = ?
+        title = ?, note = ?, lane_id = ?, project = ?, tags = ?, parent_id = ?, previous_lane = ?, workspace = ?, priority = ?, position = ?, updated_at = ?
       WHERE id = ?`,
     ).run(
       title ?? task.title,
       patch.note ?? task.note,
       laneId,
       patch.project ?? task.project,
+      JSON.stringify(tags),
       parentId,
       previousLane,
       workspace,
