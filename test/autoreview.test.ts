@@ -2222,6 +2222,14 @@ describe("auto-plan", () => {
     expect(prompt).toContain("Seam (public interface — why)");
   });
 
+  test("planner prompt teaches the redundancy check and cites where it looked", () => {
+    const task = { id: "abc12", title: "redundant?", laneId: "plan" } as never;
+    const prompt = plannerPrompt(task);
+    expect(prompt).toContain("redundancy check");
+    expect(prompt).toContain("existing implementation");
+    expect(prompt).toContain("cite where you looked");
+  });
+
   test("SKILL.md auto-plan section documents failed-review routing", () => {
     const skillPath = join(import.meta.dir, "..", "skills", "pi-kanban", "SKILL.md");
     const skillContent = readFileSync(skillPath, "utf8");
@@ -2232,6 +2240,16 @@ describe("auto-plan", () => {
     expect(autoPlanText).toContain("any human comment re-runs the");
     expect(autoPlanText).toContain("no re-plan");
     expect(autoPlanText).toContain("re-arms the");
+  });
+
+  test("SKILL.md documents backlog readiness and out-of-scope memory", () => {
+    const skillPath = join(import.meta.dir, "..", "skills", "pi-kanban", "SKILL.md");
+    const skillContent = readFileSync(skillPath, "utf8");
+    expect(skillContent).toContain("planner-ready only when its note states");
+    expect(skillContent).toContain("user-perspective behavior");
+    expect(skillContent).toContain("redundancy check");
+    expect(skillContent).toContain("out of scope: <why>");
+    expect(skillContent).toContain("Delete (`rm`) only noise");
   });
 });
 
