@@ -1782,7 +1782,11 @@ describe("auto-plan", () => {
     await sleep(20);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
+    expect(last.kind).toBe("question");
     expect(last.body).toContain("cap");
+    const parked = db!.resolveTask(card.id);
+    expect(parked.laneId).toBe("waiting");
+    expect(parked.previousLane).toBe("plan");
     w.createTask({ title: "noise" });
     await sleep(150);
     expect(calls.length).toBe(3); // cap comment disarmed the card
@@ -1898,12 +1902,45 @@ describe("auto-plan", () => {
     expect(last.author).toBe(PLAN_REVIEWER_AUTHOR);
     expect(last.body).toContain("cap");
     expect(db!.attachments(card.id, "plan").length).toBe(2);
+    expect(db!.resolveTask(card.id).laneId).toBe("waiting");
 
-    await w.createComment(card.id, { author: "user", body: "give it another look" });
+    const reply = w.comment(card.id, { author: "user", kind: "comment", body: "give it another look" });
+    expect(reply.moved).toBe("returned");
+    expect(reply.task.laneId).toBe("plan");
     await sleep(200);
     expect(calls.length).toBe(4);
     expect(calls[3].job.role).toBe("plan-reviewer");
     expect(db!.attachments(card.id, "plan").length).toBe(2);
+  });
+
+  test("plan-review cap parks from plan; approve from waiting arms the plan-build builder", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = planReady(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    // block 1 → planner
+    await planVerdict(w, card, "block", `${BLOCK} — 1`);
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+    await w.createComment(card.id, { author: PLANNER_AUTHOR, kind: "handoff", body: "plan v2 attached — over to pi-plan-reviewer" });
+    calls[1].finish({ code: 0 });
+    await sleep(20);
+    // block 2 → cap parks the card at the gate
+    await planVerdict(w, card, "block", `${BLOCK} — 2`);
+    calls[2].finish({ code: 0 });
+    await sleep(20);
+
+    const parked = db!.resolveTask(card.id);
+    expect(parked.laneId).toBe("waiting");
+    expect(parked.previousLane).toBe("plan");
+    expect(calls.length).toBe(3);
+
+    await w.approveTask(card.id); // the human gate works on a card parked by the plan-review cap
+    await sleep(200);
+    expect(calls.length).toBe(4);
+    expect(calls[3].job.role).toBe("builder");
+    expect(calls[3].job.mode).toBe("plan");
+    expect(db!.resolveTask(card.id).laneId).toBe("implement");
   });
 
   test("human comment after a pass re-arms the planner (unchanged)", async () => {

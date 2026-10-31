@@ -715,7 +715,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           break;
         }
       }
-      if (decidedBy?.author === PLAN_REVIEWER_AUTHOR && decidedBy.kind === "comment") return "plan-reviewer";
+      if (decidedBy?.author === PLAN_REVIEWER_AUTHOR && (decidedBy.kind === "comment" || decidedBy.kind === "question")) return "plan-reviewer";
       // a plan attached after that deciding event was authored outside the
       // loop (a chat session attaching it at the human's direction): it is
       // fresh and unreviewed — review it, don't re-plan over it
@@ -821,12 +821,12 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         log(`cap reached on ${task.id} — parked in waiting for a human`);
       } else if (role === "plan-capped") {
         // same one-shot disarm: the comment flips the last author, so this fires once
-        db.createComment(task.id, {
+        db.comment(task.id, {
           author: PLAN_REVIEWER_AUTHOR,
-          kind: "comment",
+          kind: "question",
           body: `${KanbanDb.PLAN_REVIEW_CAP}: blocked ${maxPlanBlocks}× since the last human comment — the latest plan waits at the gate with open findings. kanban reject ${task.id} --message <feedback> to re-plan, or comment to re-run the review.`,
         });
-        log(`plan-review cap reached on ${task.id} — leaving it for a human`);
+        log(`plan-review cap reached on ${task.id} — parked in waiting for a human`);
       }
     }
     void drain();
