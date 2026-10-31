@@ -7,6 +7,46 @@
   let note = $state("");
   let failed = $state(false);
 
+  // auto-archive: null days while loading; off mirrors days === 0
+  let days = $state<number | null>(null);
+  let archiveOff = $state(false);
+  let archiveNote = $state("");
+  let archiveFailed = $state(false);
+
+  $effect(() => {
+    void loadAutoArchive();
+  });
+
+  async function loadAutoArchive(): Promise<void> {
+    const res = await api.autoarchive.get();
+    const data = res.data as { days: number } | undefined; // treaty data narrows late — cast like board.refresh()
+    if (res.error || !data) {
+      archiveFailed = true;
+      archiveNote = "cannot reach the API — is it running?";
+      return;
+    }
+    archiveOff = data.days === 0;
+    days = archiveOff ? null : data.days;
+  }
+
+  async function setAutoArchiveDays(n: number): Promise<void> {
+    archiveFailed = false;
+    archiveNote = "";
+    const res = await api.autoarchive.put({ days: n });
+    const data = res.data as { days: number } | undefined;
+    if (res.error || !data) {
+      archiveFailed = true;
+      const value = res.error?.value;
+      archiveNote =
+        typeof value === "object" && value !== null && "error" in value && typeof value.error === "string"
+          ? value.error
+          : "could not save the auto-archive setting";
+      return;
+    }
+    archiveOff = data.days === 0;
+    days = archiveOff ? null : data.days;
+  }
+
   // null while the server is down (restarting) — callers treat that as "keep waiting"
   async function healthBooted(): Promise<number | null> {
     try {
@@ -78,6 +118,35 @@
         <input class="sr-only" type="radio" name="theme" value="light" bind:group={theme.name} onchange={() => setTheme("light")} />
         <span class="seg-label">light</span>
       </label>
+    </div>
+  </section>
+
+  <section class="settings-general-section">
+    <h3 class="settings-general-heading">Auto-archive</h3>
+    <p class="settings-general-description">Done cards move to Archive automatically once they've been done this many days. 0 disables the sweep.</p>
+    <div class="settings-dev-restart">
+      <input
+        class="archive-days"
+        type="number"
+        min="1"
+        max="365"
+        aria-label="auto-archive days"
+        placeholder={archiveOff ? "off" : ""}
+        value={days ?? ""}
+        onchange={(e) => {
+          const n = Number((e.currentTarget as HTMLInputElement).value);
+          if ((e.currentTarget as HTMLInputElement).value !== "" && Number.isInteger(n) && n >= 1 && n <= 365) {
+            void setAutoArchiveDays(n);
+          }
+        }}
+      />
+      <button type="button" class="ghost" aria-label="disable auto-archive" onclick={() => setAutoArchiveDays(0)} disabled={archiveOff}>disable</button>
+      {#if archiveOff}
+        <span class="settings-dev-note">off — done cards stay put</span>
+      {/if}
+      {#if archiveNote}
+        <span class="settings-dev-note" class:err={archiveFailed}>{archiveNote}</span>
+      {/if}
     </div>
   </section>
 

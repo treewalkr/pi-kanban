@@ -77,8 +77,9 @@ test.describe("review-entry notifications", () => {
     // enabling flips the store (permission already granted) and shows the on copy
     await page.getByRole("button", { name: "enable notifications" }).click();
     await expect(page.locator(".settings-dev-note", { hasText: "on — you'll be notified while this tab is in the background" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "disable" })).toBeVisible();
-    await page.getByRole("button", { name: "disable" }).click();
+    // exact: the General section's auto-archive disable button must not match
+    await expect(page.getByRole("button", { name: "disable", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "disable", exact: true }).click();
     await expect(page.getByRole("button", { name: "enable notifications" })).toBeVisible();
   });
 

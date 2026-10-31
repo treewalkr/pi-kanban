@@ -5,7 +5,7 @@
   import IdChip from "./IdChip.svelte";
   import { renderMarkdown } from "./markdown";
   import { CircleSlash, GitBranch } from "@lucide/svelte";
-  import { cycleChip } from "./statsview";
+  import { cycleChip, laneAgeChip } from "./statsview";
   import { canPromoteToPlan, queuedChip, timeAgo } from "./util";
   import { waitingBadge } from "./waiting";
 
@@ -18,6 +18,8 @@
   let parentChip = $derived(!!parent && !board.nestsUnder(task));
   let waiting = $derived(waitingBadge(board.waiting[task.id], !!board.activity[task.id] || !!board.queued[task.id]));
   let canPromote = $derived(canPromoteToPlan(task, board.lanes));
+  let laneName = $derived(board.lanes.find((l) => l.id === task.laneId)?.name ?? task.laneId);
+  let ageChip = $derived(laneAgeChip(board.stats, task, laneName));
 
   function openDetail(e: Event): void {
     e.stopPropagation();
@@ -146,7 +148,11 @@
       {@const chip = cycleChip(board.stats, task)!}
       <span class="cycle-chip" title={chip.title}>⏱ {chip.label}</span>
     {/if}
-    <span class="age" title={new Date(task.updatedAt).toLocaleString()}>{timeAgo(task.updatedAt)}</span>
+    {#if ageChip}
+      <span class="age" title={ageChip.title}>{ageChip.label}</span>
+    {:else}
+      <span class="age" title={new Date(task.updatedAt).toLocaleString()}>{timeAgo(task.updatedAt)}</span>
+    {/if}
   </div>
   {#if open && nested.length > 0}
     <div class="card-children" role="group" aria-label="subtasks of {task.title}">
