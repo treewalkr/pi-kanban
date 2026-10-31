@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Task } from "../src/db";
+import { applyServeEnv, parse } from "../src/cli";
 
 const root = join(import.meta.dir, "..");
 let dir = "";
@@ -1318,4 +1319,40 @@ test("check prints wip-over-limit, JSON carries it, exit stays 0", async () => {
   expect(jsonRes.code).toBe(0);
   const violations = JSON.parse(jsonRes.stdout) as Array<{ kind: string; laneId?: string; limit?: number; count?: number }>;
   expect(violations).toContainEqual({ kind: "wip-over-limit", laneId: "implement", limit: 1, count: 2 });
+});
+
+test("serve: --agents and --auto-review both set KANBAN_AUTO_REVIEW=1", () => {
+  const orig = process.env.KANBAN_AUTO_REVIEW;
+  try {
+    for (const flag of ["--agents", "--auto-review"]) {
+      delete process.env.KANBAN_AUTO_REVIEW;
+      const parsed = parse([flag]);
+      applyServeEnv(parsed.flags);
+      expect(process.env.KANBAN_AUTO_REVIEW).toBe("1");
+    }
+
+    delete process.env.KANBAN_AUTO_REVIEW;
+    const parsedNone = parse([]);
+    applyServeEnv(parsedNone.flags);
+    expect(process.env.KANBAN_AUTO_REVIEW).toBeUndefined();
+  } finally {
+    if (orig !== undefined) process.env.KANBAN_AUTO_REVIEW = orig;
+    else delete process.env.KANBAN_AUTO_REVIEW;
+  }
+});
+
+test("help: serve line shows --agents with --auto-review as deprecated alias", async () => {
+  const res = await cli("help");
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain("kanban serve [--port <n>] [--open] [--agents]");
+  expect(res.stdout).toContain("agents: serve --agents (deprecated alias: --auto-review)");
+  expect(res.stdout).not.toContain("auto-review: serve --auto-review");
+});
+
+test("docs: AGENTS.md and SKILL.md reference --agents", () => {
+  const agentsMd = readFileSync(join(root, "AGENTS.md"), "utf8");
+  const skillMd = readFileSync(join(root, "skills/pi-kanban/SKILL.md"), "utf8");
+  expect(agentsMd).toContain("--agents");
+  expect(skillMd).toContain("--agents");
+  expect(skillMd).not.toContain("--auto-review");
 });

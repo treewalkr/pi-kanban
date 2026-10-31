@@ -52,7 +52,7 @@ For every non-trivial unit of work:
 
 ## Auto-plan loop
 
-With `kanban serve --auto-review`, pi agents also watch the Plan lane: a **planner** writes a
+With `kanban serve --agents`, pi agents also watch the Plan lane: a **planner** writes a
 versioned plan for every card, a **plan reviewer** checks it against the shared checklist, and
 a passing card then parks in **Waiting on you** at the gate. **The human owns the gate** — never run
 `kanban approve`/`reject` as an agent.
@@ -88,7 +88,7 @@ a passing card then parks in **Waiting on you** at the gate. **The human owns th
 
 ## Auto-review loop
 
-When the board runs with `kanban serve --auto-review`, a separate pi reviewer
+When the board runs with `kanban serve --agents`, a separate pi reviewer
 watches the Review lane and code-reviews every card that arrives there — don't
 review your own work in that mode unless asked.
 
@@ -135,7 +135,7 @@ kanban check [--json]                                                 # board-he
 kanban stats [id] [--json]                                           # board summary, or one card's lane times / cycle / gate metrics
 kanban rm <id> [--force]                                              # delete card (a parent needs --force; cascades)
 kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force]  # manage lanes
-kanban serve [--port <n>] [--open] [--auto-review]            # start web UI (default 127.0.0.1:4600); --auto-review: pi plans Plan-lane cards and reviews Review-lane cards
+kanban serve [--port <n>] [--open] [--agents]                 # start web UI (default 127.0.0.1:4600); --agents: pi plans Plan-lane cards and reviews Review-lane cards
 kanban help | version                                                 # CLI help / version
 ```
 
