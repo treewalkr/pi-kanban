@@ -813,12 +813,12 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         enqueue({ task, role, mode: isPlan ? "plan" : "findings", prompt: isPlan ? builderPlanPrompt(task) : builderPrompt(task) });
       } else if (role === "capped") {
         // posting flips the last comment away from the verdict, so this fires once
-        db.createComment(task.id, {
+        db.comment(task.id, {
           author: REVIEWER_AUTHOR,
-          kind: "comment",
+          kind: "question",
           body: `auto-review stopped: block cycles reached the cap of ${maxBlocks} — needs a human. Findings are on the note.`,
         });
-        log(`cap reached on ${task.id} — leaving it for a human`);
+        log(`cap reached on ${task.id} — parked in waiting for a human`);
       } else if (role === "plan-capped") {
         // same one-shot disarm: the comment flips the last author, so this fires once
         db.createComment(task.id, {

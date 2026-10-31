@@ -315,13 +315,44 @@ describe("auto-review", () => {
     const thread = db!.comments(card.id);
     const last = thread.at(-1)!;
     expect(last.author).toBe(REVIEWER_AUTHOR);
-    expect(last.kind).toBe("comment");
+    expect(last.kind).toBe("question");
     expect(last.body).toContain("cap");
+    const parked = w.tasks().find((t) => t.id === card.id)!;
+    expect(parked.laneId).toBe("waiting");
+    expect(parked.previousLane).toBe("implement");
     // the cap comment already disarmed the card — a later write must not repost it
     w.createTask({ title: "noise" });
     await sleep(150);
     expect(db!.comments(card.id).length).toBe(thread.length);
     expect(calls.length).toBe(0);
+  });
+
+  test("block-cap parks in waiting; a human reply re-arms the builder in findings mode", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    for (let i = 1; i <= 3; i++) {
+      await w.handoff(card.id, "implement", {
+        kind: "review",
+        author: REVIEWER_AUTHOR,
+        message: `block ${i}`,
+        findings: ["x"],
+      });
+      if (i < 3) await w.handoff(card.id, "review", { author: BUILDER_AUTHOR, message: "fixed" });
+    }
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(0);
+    expect(w.tasks().find((t) => t.id === card.id)!.laneId).toBe("waiting");
+
+    const reply = w.comment(card.id, { author: "user", kind: "comment", body: "addressed" });
+    expect(reply.moved).toBe("returned");
+    expect(reply.task.laneId).toBe("implement");
+    await sleep(100);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.job.role).toBe("builder");
+    expect(calls[0]!.job.mode).toBe("findings");
+    calls[0]!.finish({ code: 0 });
   });
 
   test("reviewer crash (non-zero exit) posts a failure comment and does not hot-loop", async () => {
