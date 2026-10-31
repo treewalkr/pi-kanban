@@ -699,6 +699,14 @@ test("waiting maps the plan-lane thread's last comment to all five states", () =
   });
   expect(db.waiting(task.id)).toBe("capped");
 
+  // capped: the same cap body as a question comment — the loop parks via db.comment (kind question), and the parked card still badges capped
+  db.createComment(task.id, {
+    author: PLAN_REVIEWER_AUTHOR,
+    kind: "question",
+    body: `plan review cap reached: blocked 2× since the last human comment — the latest plan waits at the gate with open findings. kanban reject ${task.id} --message <feedback> to re-plan, or comment to re-run the review.`,
+  });
+  expect(db.waiting(task.id)).toBe("capped");
+
   // null: block verdict — the planner or cap comment takes the next turn
   db.planReview(task.id, { verdict: "block", message: "vague tests" });
   expect(db.waiting(task.id)).toBeNull();
