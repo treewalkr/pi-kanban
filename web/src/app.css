@@ -2016,6 +2016,163 @@ button:focus-visible {
   color: var(--text-muted);
 }
 
+/* ---------- velocity view ---------- */
+
+.velocity {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+.velocity > .meta {
+  max-width: 980px;
+  margin: 0 auto 10px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.velocity h2 {
+  max-width: 980px;
+  margin: 18px auto 8px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.velocity .empty {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 20px 0;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.tp-chart {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  max-width: 980px;
+  height: 170px;
+  margin: 0 auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-panel);
+}
+
+.tp-bar {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.tp-bar .tp-count {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tp-bar .tp-fill {
+  width: 100%;
+  min-height: 0;
+  border-radius: var(--radius-small) var(--radius-small) 0 0;
+  background: var(--accent);
+  opacity: 0.75;
+  transition: height 0.2s;
+}
+
+.tp-bar .tp-date {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* done > 0 bars keep a visible minimum height */
+.tp-bar:not([data-done="0"]) .tp-fill {
+  min-height: 4px;
+  opacity: 1;
+}
+
+.tp-bar.current .tp-date {
+  color: var(--text);
+}
+
+.tp-bar.current .tp-fill {
+  opacity: 1;
+}
+
+.lane-rows {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-panel);
+}
+
+.lane-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.lane-row + .lane-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.lane-row .lane-name {
+  flex: none;
+  width: 130px;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lane-row .lane-track {
+  flex: 1;
+  height: 10px;
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+  border-radius: var(--radius-small);
+  overflow: hidden;
+}
+
+.lane-row .lane-bar {
+  height: 100%;
+  /* nonzero dwell rounded down to 0% keeps a visible sliver (tp-fill precedent) */
+  min-width: 4px;
+  background: var(--accent);
+  opacity: 0.85;
+  border-radius: var(--radius-small);
+}
+
+.lane-row .lane-ms {
+  flex: none;
+  width: 64px;
+  text-align: right;
+  color: var(--text-muted);
+}
+
+.lane-row .lane-cards {
+  flex: none;
+  width: 70px;
+  text-align: right;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
 /* ---------- composer (pi-web login-composer card) ---------- */
 
 .composer {
