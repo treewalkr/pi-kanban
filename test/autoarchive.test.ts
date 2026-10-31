@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { KanbanDb, KanbanError } from "../src/db";
+import { runAutoArchive, startAutoArchiveSweep } from "../src/autoarchive";
 
 let dir = "";
 let dbFile = "";
@@ -89,6 +90,57 @@ test("autoArchiveDays defaults to 7; setAutoArchiveDays validates 0–365", () =
       expect((e as KanbanError).code).toBe("invalid");
     }
   }
+});
+
+test("runAutoArchive moves due cards to archive with cause auto-archive, actor system", () => {
+  const now = Date.now();
+  db.setAutoArchiveDays(7);
+  const due = doneDaysAgo("done 8d ago", 8, now);
+  const notDue = doneDaysAgo("done 1d ago", 1, now);
+
+  const moved = runAutoArchive(db, now);
+  expect(moved.map((t) => t.id)).toEqual([due.id]);
+  expect(db.resolveTask(due.id).laneId).toBe("archive");
+
+  // the move went through the normal write path: a lane event with the sweep's cause/actor
+  const events = db.laneEvents(due.id);
+  expect(events.at(-1)).toMatchObject({ toLaneId: "archive", cause: "auto-archive", actor: "system" });
+
+  expect(db.resolveTask(notDue.id).laneId).toBe("done"); // untouched
+});
+
+const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("startAutoArchiveSweep sweeps at boot and on interval; stop clears the timer", async () => {
+  const now = Date.now();
+  db.setAutoArchiveDays(7);
+  const atBoot = doneDaysAgo("due before the sweep", 8, now);
+
+  const logs: string[] = [];
+  const sweep = startAutoArchiveSweep({ db, intervalMs: 20, log: (m) => logs.push(m) });
+
+  // the boot sweep is synchronous — archived before we await anything
+  expect(db.resolveTask(atBoot.id).laneId).toBe("archive");
+  expect(logs).toEqual([`archived ${atBoot.id} — ${atBoot.title}`]);
+
+  // a card becoming due mid-flight is swept by the interval tick
+  const midFlight = doneDaysAgo("due mid-flight", 8, now);
+  await settle(80);
+  expect(db.resolveTask(midFlight.id).laneId).toBe("archive");
+
+  // after stop() the interval no longer fires
+  sweep.stop();
+  sweep.stop(); // safe twice
+  const afterStop = doneDaysAgo("due after stop", 8, now);
+  await settle(80);
+  expect(db.resolveTask(afterStop.id).laneId).toBe("done");
+});
+
+test("runAutoArchive with days=0 is a no-op", () => {
+  const t = doneDaysAgo("done forever", 90, Date.now());
+  db.setAutoArchiveDays(0);
+  expect(runAutoArchive(db)).toEqual([]);
+  expect(db.resolveTask(t.id).laneId).toBe("done");
 });
 
 test("dueForAutoArchive falls back to updated_at when no done event exists", () => {
