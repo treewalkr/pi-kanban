@@ -433,7 +433,7 @@ export function seed(): void {
   board.projectFilter = "";
   board.editing = null;
   board.editMode = false;
-  board.archiveOpen = false;
+  board.collapsedLanes = new Set(["archive"]);
   board.dragging = null;
   board.dropHint = null;
   board.expanded = new Set([epic.id]); // nested children visible out of the box

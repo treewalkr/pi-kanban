@@ -47,6 +47,32 @@ describe("board lane grid (app.css)", () => {
     expect(laneGroupRule!.style.width).toBe("auto");
     expect(laneGroupRule!.style.maxHeight).toBe("none");
   });
+
+  test("base layout keeps the 44px vertical collapsed strip", () => {
+    const dom = getDom();
+    const sheet = dom.window.document.styleSheets[0];
+    const rules = Array.from(sheet.cssRules) as CSSStyleRule[];
+    const collapsedRule = rules.find((r) => r.selectorText === ".lane.collapsed");
+    expect(collapsedRule).toBeDefined();
+    expect(collapsedRule!.style.width).toBe("44px");
+  });
+
+  test("narrow grid flattens collapsed lanes into horizontal strips", () => {
+    const dom = getDom();
+    const media = findMediaRule(dom, "(max-width: 1024px)");
+    expect(media).toBeDefined();
+
+    const innerRules = Array.from(media!.cssRules) as CSSStyleRule[];
+    const collapsedRule = innerRules.find((r) => r.selectorText === ".lane.collapsed");
+    expect(collapsedRule).toBeDefined();
+    expect(collapsedRule!.style.flexDirection).toBe("row");
+    expect(collapsedRule!.style.minHeight).toBe("36px");
+    expect(collapsedRule!.style.width).toBe("auto");
+
+    const nameRule = innerRules.find((r) => r.selectorText === ".lane.collapsed .collapsed-name");
+    expect(nameRule).toBeDefined();
+    expect(nameRule!.style.writingMode).toBe("horizontal-tb");
+  });
 });
 
 describe("sidebar drawer clamp (app.css)", () => {

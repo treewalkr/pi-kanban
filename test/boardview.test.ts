@@ -620,3 +620,85 @@ test("matches(): text filter string includes tags", () => {
   board.search = "zzz";
   expect(board.visibleTasks("backlog").length).toBe(0);
 });
+
+describe("boardview per-lane collapsed state", () => {
+  test("setLaneCollapsed adds, removes, and persists to kanban-collapsed-lanes", () => {
+    const storage = mockStorage();
+    try {
+      board.collapsedLanes = new Set(["archive"]);
+      board.setLaneCollapsed("backlog", true);
+      expect(board.collapsedLanes).toEqual(new Set(["archive", "backlog"]));
+      expect(storage.get("kanban-collapsed-lanes")).toBe(JSON.stringify(["archive", "backlog"]));
+
+      board.setLaneCollapsed("archive", false);
+      expect(board.collapsedLanes).toEqual(new Set(["backlog"]));
+      expect(storage.get("kanban-collapsed-lanes")).toBe(JSON.stringify(["backlog"]));
+    } finally {
+      board.collapsedLanes = new Set(["archive"]);
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  test("toggleLaneCollapsed flips membership without mutating the old set", () => {
+    const storage = mockStorage();
+    try {
+      board.collapsedLanes = new Set(["archive"]);
+      const original = board.collapsedLanes;
+      board.toggleLaneCollapsed("backlog");
+      expect(original).toEqual(new Set(["archive"]));
+      expect(board.collapsedLanes).toEqual(new Set(["archive", "backlog"]));
+
+      board.toggleLaneCollapsed("backlog");
+      expect(board.collapsedLanes).toEqual(new Set(["archive"]));
+    } finally {
+      board.collapsedLanes = new Set(["archive"]);
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  test("refresh prunes collapsed ids for lanes that no longer exist", async () => {
+    const storage = mockStorage();
+    const originalFetch = globalThis.fetch;
+    const task = makeTask({ id: "t1", title: "card", laneId: "backlog" });
+    globalThis.fetch = stubBoardFetch(task) as typeof fetch;
+    try {
+      board.collapsedLanes = new Set(["ghost", "backlog"]);
+      await board.refresh();
+      expect(board.collapsedLanes).toEqual(new Set(["backlog"]));
+      expect(storage.get("kanban-collapsed-lanes")).toBe(JSON.stringify(["backlog"]));
+    } finally {
+      board.collapsedLanes = new Set(["archive"]);
+      board.tasks = [];
+      globalThis.fetch = originalFetch;
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  test("laneSearchHit tracks search matches per lane", () => {
+    const task = makeTask({ id: "t1", title: "fix bug", laneId: "backlog" });
+    board.tasks = [task];
+    board.search = "fix";
+    expect(board.laneSearchHit("backlog")).toBe(true);
+    expect(board.laneSearchHit("done")).toBe(false);
+
+    board.search = "";
+    expect(board.laneSearchHit("backlog")).toBe(false);
+    expect(board.laneSearchHit("done")).toBe(false);
+  });
+
+  test("jumpTo expands the collapsed target lane", () => {
+    const storage = mockStorage();
+    const taskInDone = makeTask({ id: "t1", title: "done task", laneId: "done" });
+    board.tasks = [taskInDone];
+    try {
+      board.collapsedLanes = new Set(["done", "archive"]);
+      board.jumpTo(taskInDone);
+      expect(board.collapsedLanes).toEqual(new Set(["archive"]));
+    } finally {
+      board.collapsedLanes = new Set(["archive"]);
+      board.tasks = [];
+      delete (globalThis as any).localStorage;
+    }
+  });
+});
+

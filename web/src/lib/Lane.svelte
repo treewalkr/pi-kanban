@@ -23,7 +23,7 @@
     board.dropHint && board.dropHint.laneId === lane.id ? board.dropHint.index : -1,
   );
   let isArchive = $derived(lane.id === "archive");
-  let collapsed = $derived(isArchive && !board.archiveOpen && !board.archiveSearchHit);
+  let collapsed = $derived(board.collapsedLanes.has(lane.id) && !board.laneSearchHit(lane.id));
 
   function hintIndex(e: DragEvent): number {
     if (!el) return 0;
@@ -91,7 +91,7 @@
       if (id) board.moveTask(id, lane.id);
     }}
   >
-    <button class="collapsed-head" title="expand {lane.name}" onclick={() => (board.archiveOpen = true)}>
+    <button class="collapsed-head" title="expand {lane.name}" onclick={() => board.setLaneCollapsed(lane.id, false)}>
       <span class="lane-dot"></span>
       <span class="collapsed-name">{lane.name}</span>
       <span class="count" class:over={lane.wipLimit !== null && count > lane.wipLimit}>
@@ -159,9 +159,7 @@
         <span class="lane-dwell" title="average time per card in this lane">{laneDwellLabel(board.stats, lane.id)}</span>
       {/if}
       <span class="lane-tools">
-        {#if isArchive}
-          <button title="collapse lane" onclick={() => (board.archiveOpen = false)}>»</button>
-        {/if}
+        <button title="collapse lane" aria-label="collapse {lane.name}" onclick={() => board.setLaneCollapsed(lane.id, true)}>«</button>
         {#if index > 0}
           <button title="move lane left" onclick={() => board.moveLane(lane.id, index - 1)}>‹</button>
         {/if}
