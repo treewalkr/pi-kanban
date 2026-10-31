@@ -671,6 +671,49 @@ describe("auto-review", () => {
     expect(body).toContain("append one dated line to `REVIEW.md`");
   });
 
+  test("GLOSSARY.md defines core board vocabulary without implementation details", () => {
+    const body = readFileSync(fileURLToPath(new URL("../GLOSSARY.md", import.meta.url)), "utf8");
+    expect(body).toContain("## Language");
+    for (const term of [
+      "**Card**:",
+      "**Lane**:",
+      "**Project**:",
+      "**Thread**:",
+      "**Comment kind**:",
+      "**Plan**:",
+      "**Brief**:",
+      "**Gate**:",
+      "**Planner**",
+      "**Plan reviewer**",
+      "**Builder**",
+      "**Reviewer**",
+    ]) {
+      expect(body).toContain(term);
+    }
+    expect(body).toContain("_Avoid_:");
+    expect(body).not.toContain("src/db.ts");
+    expect(body).not.toContain("SQLite");
+    expect(body).not.toContain("Elysia");
+    expect(body).not.toContain("Svelte");
+  });
+
+  test("docs/adr documents the ADR format and records the first gate ADR", () => {
+    const readme = readFileSync(fileURLToPath(new URL("../docs/adr/README.md", import.meta.url)), "utf8");
+    expect(readme).toContain("0001-slug.md");
+    expect(readme).toContain("Hard to reverse");
+    expect(readme).toContain("Surprising without context");
+    expect(readme).toContain("The result of a real trade-off");
+
+    const adr1 = readFileSync(
+      fileURLToPath(new URL("../docs/adr/0001-agents-never-run-the-gate.md", import.meta.url)),
+      "utf8",
+    );
+    expect(adr1).toContain("# Agents never run the gate");
+    expect(adr1).toContain("Waiting on you");
+    expect(adr1).toContain("approve");
+    expect(adr1).toContain("reject");
+  });
+
   test("agentFlags: reviewer defaults to thinking max, builder to nothing", () => {
     withAgentEnv({}, () => {
       expect(agentFlags("reviewer", null)).toEqual(["--thinking", "max"]);
