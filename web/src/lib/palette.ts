@@ -69,22 +69,21 @@ export function paletteItems(input: PaletteInput): PaletteItem[] {
   const laneCount = (laneId: string) => tasks.filter((t) => t.laneId === laneId).length;
 
   const projectItems = (blank: boolean): PaletteItem[] =>
-    ["", ...projects].map((name) => {
-      const label = projectLabel(name);
-      const score = blank
-        ? 0
-        : matchScore(label, q, 95, 75);
-      return score === null
-        ? null
-        : {
-            kind: "project" as const,
-            key: `project:${name}`,
-            label,
-            detail: name === projectFilter ? "current" : "switch",
-            score,
-            action: { type: "project" as const, name },
-          };
-    }).filter((i): i is PaletteItem => i !== null);
+    ["", ...projects]
+      .map((name): PaletteItem | null => {
+        const label = projectLabel(name);
+        const score = blank ? 0 : matchScore(label, q, 95, 75);
+        if (score === null) return null;
+        return {
+          kind: "project",
+          key: `project:${name}`,
+          label,
+          detail: name === projectFilter ? "current" : "switch",
+          score,
+          action: { type: "project", name },
+        };
+      })
+      .filter((i): i is PaletteItem => i !== null);
 
   const laneItems = (blank: boolean): PaletteItem[] => {
     const out: PaletteItem[] = [];
@@ -113,14 +112,15 @@ export function paletteItems(input: PaletteInput): PaletteItem[] {
       for (const c of candidates) {
         const score = blank ? 0 : matchScore(c.label, q, 90, 70);
         if (score === null) continue;
+        const a = c.action;
+        let key: string;
+        if (a.type === "lane-go") key = `lane:go:${a.laneId}`;
+        else if (a.type === "lane-move") key = `lane:move:${a.laneId}:${a.dir}`;
+        else if (a.type === "archive-toggle") key = `lane:archive:${a.open}`;
+        else continue; // jump/project never appear in lane candidates
         out.push({
           kind: "lane",
-          key:
-            c.action.type === "lane-go"
-              ? `lane:go:${lane.id}`
-              : c.action.type === "lane-move"
-                ? `lane:move:${lane.id}:${c.action.dir}`
-                : `lane:archive:${c.action.open}`,
+          key,
           label: c.label,
           detail: c.detail,
           score,

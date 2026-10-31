@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Attachment, Lane, Task } from "../src/db";
-import { laneCrumb, PALETTE_MAX, paletteItems, type PaletteInput } from "../web/src/lib/palette";
+import { laneCrumb, PALETTE_MAX, paletteItems, type PaletteInput, type PaletteItem } from "../web/src/lib/palette";
 
 function task(partial: Partial<Task> & { id: string; title: string }): Task {
   return {
@@ -179,14 +181,15 @@ describe("palette model", () => {
 
   test("lane move items exist only where the lane can move", () => {
     const items = paletteItems(input({ query: "" }));
-    const moves = items.filter((i) => i.action.type === "lane-move");
-    // first lane: move-right only; last lane: move-left only
-    expect(moves.filter((m) => m.action.laneId === "waiting").map((m) => m.action.dir)).toEqual([1]);
-    expect(moves.filter((m) => m.action.laneId === "archive").map((m) => m.action.dir)).toEqual([-1]);
-    expect(moves.filter((m) => m.action.type === "lane-move" && m.action.laneId === "backlog").map((m) => m.action)).toEqual([
-      { type: "lane-move", laneId: "backlog", dir: -1 },
-      { type: "lane-move", laneId: "backlog", dir: 1 },
-    ]);
+    const dirOf = (laneId: string) =>
+      items
+        .filter((i): i is PaletteItem & { action: { type: "lane-move"; laneId: string; dir: -1 | 1 } } =>
+          i.action.type === "lane-move" && i.action.laneId === laneId)
+        .map((i) => i.action.dir);
+    // first lane: move-right only; last lane: move-left only; middle lane: both
+    expect(dirOf("waiting")).toEqual([1]);
+    expect(dirOf("archive")).toEqual([-1]);
+    expect(dirOf("backlog")).toEqual([-1, 1]);
   });
 
   test("archive toggle only on the archive lane, label flips with archiveOpen", () => {
@@ -225,5 +228,58 @@ describe("laneCrumb", () => {
     const inDoing = task({ id: "r1", title: "root", laneId: "doing" });
     expect(laneCrumb([inDoing], lanes, "r1")).toBe("Doing");
     expect(laneCrumb([inDoing], lanes, "nope")).toBe("");
+  });
+});
+
+describe("palette wiring (AC1)", () => {
+  const read = (rel: string) =>
+    readFileSync(join(import.meta.dir, "..", "web", "src", rel), "utf-8");
+
+  test("SearchBox rebinds ⌘K to palette.open and keeps / on the input", () => {
+    const src = read("lib/SearchBox.svelte");
+
+    // the board.editing guard stays first
+    const guardIdx = src.indexOf("if (board.editing) return;");
+    const inputGuardIdx = src.indexOf('t.tagName === "INPUT"');
+    const modkIdx = src.indexOf('e.key.toLowerCase() === "k"');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(inputGuardIdx).toBeGreaterThan(guardIdx);
+    expect(modkIdx).toBeGreaterThan(inputGuardIdx);
+
+    // ⌘K toggles the palette, never focuses the input; skipped over files/agents overlays
+    const modkBlock = src.slice(modkIdx, src.indexOf("if (e.key === \"/\")"));
+    expect(modkBlock).toContain("if (files.preview || agents.open) return;");
+    expect(modkBlock).toContain("e.preventDefault();");
+    expect(modkBlock).toContain("palette.open = !palette.open;");
+    expect(modkBlock).not.toContain("input?.focus()");
+
+    // the / branch still focuses the search input
+    const slashBlock = src.slice(src.indexOf('if (e.key === "/")'));
+    expect(slashBlock).toContain("input?.focus();");
+    expect(slashBlock).toContain("input?.select();");
+
+    // crumb logic delegates to laneCrumb — one implementation
+    expect(src).not.toContain("function crumb(");
+    expect(src).toContain("laneCrumb(board.tasks, board.lanes, r.task.id)");
+    expect(src).toContain('import { laneCrumb } from "./palette";');
+  });
+
+  test("App mounts Palette on palette.open and lanes expose data-lane", () => {
+    const app = read("App.svelte");
+    expect(app).toContain('import Palette from "./lib/CommandPalette.svelte";');
+    expect(app).toContain("import { palette } from");
+    expect(app).toContain("{#if palette.open}<Palette />{/if}");
+    // mounted alongside the other overlays, before the error bar
+    const paletteIdx = app.indexOf("{#if palette.open}<Palette />{/if}");
+    const agentsIdx = app.indexOf("{#if agents.open}");
+    const errorIdx = app.indexOf('{#if board.error}');
+    expect(agentsIdx).toBeGreaterThan(-1);
+    expect(paletteIdx).toBeGreaterThan(agentsIdx);
+    expect(errorIdx).toBeGreaterThan(paletteIdx);
+
+    const lane = read("lib/Lane.svelte");
+    const sections = lane.match(/<section[\s\S]*?>/g) ?? [];
+    expect(sections.length).toBe(2); // collapsed + expanded variants
+    for (const s of sections) expect(s).toContain("data-lane={lane.id}");
   });
 });
