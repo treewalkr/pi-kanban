@@ -63,7 +63,13 @@ test("/events streams an initial sync, then a change on API mutations", async ()
 
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
-  const readChunk = async () => decoder.decode((await reader.read()).value);
+  // semantic `event: lane` frames interleave with `event: change` on the same stream
+  const readChunk = async () => {
+    for (;;) {
+      const chunk = decoder.decode((await reader.read()).value);
+      if (!chunk.startsWith("event: lane")) return chunk;
+    }
+  };
 
   expect(await readChunk()).toContain("event: change"); // fresh subscriber syncs immediately
 
@@ -224,7 +230,13 @@ test("/board carries waiting; comment writes flip the state and notify /events",
   // the SSE change bus fires on comment writes, so live boards see the flip
   const events = await app.handle(new Request("http://localhost/events"));
   const reader = events.body!.getReader();
-  const readChunk = async () => new TextDecoder().decode((await reader.read()).value);
+  // semantic `event: lane` frames interleave with `event: change` on the same stream
+  const readChunk = async () => {
+    for (;;) {
+      const chunk = new TextDecoder().decode((await reader.read()).value);
+      if (!chunk.startsWith("event: lane")) return chunk;
+    }
+  };
   expect(await readChunk()).toContain("event: change"); // fresh subscriber syncs immediately
 
   await app.handle(
