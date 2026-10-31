@@ -105,7 +105,19 @@ export interface GateResult {
 /** Fast checks run before a reviewer session is spent; ok=false means red tests. */
 export type GateFn = (cwd: string, timeoutMs: number) => Promise<GateResult>;
 
-export const defaultGate: GateFn = async (cwd, timeoutMs) => {
+// gate runs are serialized process-wide: two cards entering Review together used to run two
+// full suites concurrently, and their repro.sh port-pin tests raced each other onto 4615 —
+// the loser hung to its timeout and parked its card on a flake (zfe3f, 2026-11-01)
+let gateChain: Promise<unknown> = Promise.resolve();
+
+export const defaultGate: GateFn = (cwd, timeoutMs) => {
+  const run = () => gateRun(cwd, timeoutMs);
+  const next = gateChain.then(run, run);
+  gateChain = next.catch(() => {});
+  return next;
+};
+
+const gateRun = async (cwd: string, timeoutMs: number): Promise<GateResult> => {
   // per-test timeout raised from bun's 5s default: spawn-heavy tests (cli.ts subprocesses,
   // repro server boots) legitimately exceed it under full-suite parallel load and park cards
   // on flakes — 30s keeps genuinely red tests failing fast while tolerating load
