@@ -22,6 +22,7 @@ Eden Treaty · `bun:sqlite` (WAL). UI icons from [Lucide](https://lucide.dev/ico
 ## Install
 
 ```bash
+git clone https://github.com/treewalkr/pi-kanban && cd pi-kanban
 bun install
 bun run build          # web/dist once (skip while CLI-only)
 ./scripts/install.sh   # `kanban` into ~/.bun/bin + installs the pi skill
