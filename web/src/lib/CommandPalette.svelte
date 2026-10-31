@@ -75,7 +75,12 @@
   }
 
   function onKeydown(e: KeyboardEvent): void {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      // ⌘K must toggle the palette closed even while its own input is focused —
+      // SearchBox's window handler early-returns on INPUT targets
+      e.preventDefault();
+      close();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const dir = e.key === "ArrowDown" ? 1 : -1;
       selected = items.length ? (selected + dir + items.length) % items.length : 0;

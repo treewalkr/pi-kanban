@@ -20,7 +20,7 @@ async function openPalette(page: import("@playwright/test").Page) {
   await expect(page.locator(DIALOG)).toBeVisible();
 }
 
-test("AC1: ⌘K opens the palette, Escape closes, ⌘K reopens", async ({ page }) => {
+test("AC1: ⌘K opens the palette, Escape closes, ⌘K toggles closed and reopens", async ({ page }) => {
   await page.goto("/");
   await page.waitForSelector("main.board");
   await page.waitForSelector("[data-card]");
@@ -32,6 +32,15 @@ test("AC1: ⌘K opens the palette, Escape closes, ⌘K reopens", async ({ page }
   await expect(page.locator(DIALOG)).toBeHidden();
 
   await openPalette(page); // ⌘K toggles it open again
+  await expect(page.locator("input.palette-input")).toBeFocused();
+
+  // ⌘K while the palette is open toggles it closed, even mid-query with the
+  // autofocused input owning the event (SearchBox's window handler skips INPUTs)
+  await page.keyboard.type("x");
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.locator(DIALOG)).toBeHidden();
+
+  await openPalette(page);
   await expect(page.locator("input.palette-input")).toBeFocused();
 });
 

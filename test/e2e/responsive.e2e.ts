@@ -111,7 +111,8 @@ test("AC2: tap a card opens the detail dialog", async ({ page }) => {
     expect(box!.y + box!.height).toBeLessThanOrEqual(667 + 1);
   }
 
-  const card = page.locator("[data-card]").first();
+  // target by title: blockers.e2e seeds another backlog card and created_at decides .first()
+  const card = page.locator("[data-card]", { hasText: "Mobile task 1" });
   await card.scrollIntoViewIfNeeded();
   await card.tap();
 
@@ -126,7 +127,7 @@ test("AC3: visible controls meet the 24px minimum and text stays legible", async
   await page.waitForSelector("[data-card]");
 
   // Open detail dialog
-  const card = page.locator("[data-card]").first();
+  const card = page.locator("[data-card]", { hasText: "Mobile task 1" });
   await card.tap();
   await page.waitForSelector(".editor.detail");
 

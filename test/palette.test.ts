@@ -264,6 +264,19 @@ describe("palette wiring (AC1)", () => {
     expect(src).toContain('import { laneCrumb } from "./palette";');
   });
 
+  test("CommandPalette's input onKeydown closes on ⌘K — the window handler skips INPUT targets", () => {
+    const src = read("lib/CommandPalette.svelte");
+
+    const fnIdx = src.indexOf("function onKeydown");
+    const modkIdx = src.indexOf('e.key.toLowerCase() === "k"', fnIdx);
+    expect(fnIdx).toBeGreaterThan(-1);
+    expect(modkIdx).toBeGreaterThan(-1);
+    // first branch: preventDefault (stops the browser's ⌘K default) + close
+    const modkBlock = src.slice(modkIdx, src.indexOf('e.key === "ArrowDown"', fnIdx));
+    expect(modkBlock).toContain("e.preventDefault();");
+    expect(modkBlock).toContain("close();");
+  });
+
   test("App mounts Palette on palette.open and lanes expose data-lane", () => {
     const app = read("App.svelte");
     expect(app).toContain('import Palette from "./lib/CommandPalette.svelte";');
