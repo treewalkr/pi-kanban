@@ -127,3 +127,24 @@ test("matches plan text below note matches; title matches suppress the plan row"
   // without plans passed (legacy call sites) the note and title rows still surface
   expect(searchBoard(tasks, "runbook")).toHaveLength(2);
 });
+
+test("tag matches: substring on tags ranks between checklist and note; one row per card; skipped when title matched", () => {
+  const tagged = task({ id: "tg1", title: "polish the header", tags: ["ui", "review-loop"] });
+  const noteHit = task({ id: "tg2", title: "unrelated card", note: "talks about the ui a lot", tags: [] });
+  const checklistHit = task({ id: "tg3", title: "unrelated too", note: "- [ ] fix the ui overflow", tags: [] });
+  const titleHit = task({ id: "tg4", title: "ui cleanup", tags: ["ui"] });
+
+  const results = searchBoard([tagged, noteHit, checklistHit, titleHit], "ui");
+
+  const tagRows = results.filter((r) => r.kind === "tag");
+  expect(tagRows).toEqual([{ kind: "tag", task: tagged, text: "ui", score: 45 }]);
+
+  // tag (45) outranks a note hit (40), underranks a checklist hit (50)
+  const noteRow = results.find((r) => r.kind === "note")!;
+  const checklistRow = results.find((r) => r.kind === "checklist")!;
+  expect(tagRows[0]!.score).toBeGreaterThan(noteRow.score);
+  expect(tagRows[0]!.score).toBeLessThan(checklistRow.score);
+
+  // the title-matching card yields no tag row
+  expect(results.filter((r) => r.task.id === "tg4").map((r) => r.kind)).toEqual(["title"]);
+});

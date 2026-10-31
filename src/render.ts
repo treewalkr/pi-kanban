@@ -168,11 +168,13 @@ export function searchResults(db: KanbanDb, query: string, results: SearchResult
     const text =
       r.kind === "checklist"
         ? `${c.dim(r.checked ? "[x]" : "[ ]")} ${truncate(r.text, max - 4)}`
-        : r.kind === "note"
-          ? `${c.dim("note:")} ${truncate(r.text, max - 6)}`
-          : r.kind === "plan"
-            ? `${c.dim("plan:")} ${truncate(r.text, max - 6)}`
-            : truncate(r.text, max);
+        : r.kind === "tag"
+          ? `${c.dim("tag:")} ${truncate(r.text, max - 5)}`
+          : r.kind === "note"
+            ? `${c.dim("note:")} ${truncate(r.text, max - 6)}`
+            : r.kind === "plan"
+              ? `${c.dim("plan:")} ${truncate(r.text, max - 6)}`
+              : truncate(r.text, max);
     const arrow = c.hex(laneColor(lanes.indexOf(lane!)), `→ ${lane?.name ?? r.task.laneId}`);
     out.push(`  ${c.dim(r.task.id)}  ${text}${chip}  ${arrow}`);
   }

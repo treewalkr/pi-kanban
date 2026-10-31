@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Comment } from "../src/db";
-import { commentThread, listLanes, statsBoard, statsCard, taskDetail } from "../src/render";
+import { searchBoard } from "../src/search";
+import { commentThread, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "../src/render";
+
+const dbSearch = (db: KanbanDb, q: string) => searchBoard(db.tasks(), q, db.latestPlans());
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -326,4 +329,20 @@ describe("commentThread CLI renderer", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+test("searchResults renders tag: rows; taskDetail and taskLine print #tags", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kanban-render-tags-"));
+  const db = new KanbanDb(join(dir, "t.db"));
+  try {
+    const tagged = db.createTask({ title: "polish the header", tags: ["ui", "review-loop"] });
+
+    const results = dbSearch(db, "rev");
+    expect(results.some((r) => r.kind === "tag")).toBe(true);
+    const out = stripAnsi(searchResults(db, "rev", results));
+    expect(out).toContain("tag: review-loop");
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
