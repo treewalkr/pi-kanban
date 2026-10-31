@@ -87,6 +87,18 @@
     if (await board.addLink(me.id, t)) linkTarget = "";
   }
 
+  // GitHub pr/issue links: paste a url or gh:o/r#n, unlink with the ✕
+  let ghLinks = $derived(board.ghLinks[me.id] ?? []);
+  let ghTarget = $state("");
+  function ghState(url: string): string {
+    return board.ghStatuses[url]?.state ?? "…";
+  }
+  async function addGhLink() {
+    const t = ghTarget.trim();
+    if (!t) return;
+    if (await board.addGhLink(me.id, t)) ghTarget = "";
+  }
+
   // add-blocker picker: local query inside the modal (never board.search — that
   // drives the header SearchBox and would filter the board behind the dialog)
   let blockerQuery = $state("");
@@ -406,6 +418,22 @@
         <span class="dep-add">
           <input placeholder="link by id…" bind:value={linkTarget} onkeydown={(e) => e.key === "Enter" && addLink()} />
           <button class="dep-add-btn" onclick={addLink}>link</button>
+        </span>
+      </div>
+      <div class="dep-row">
+        <span class="dep-k">github</span>
+        {#each ghLinks as gl (gl.id)}
+          <a
+            class="dep-chip gh-link"
+            href={gl.url}
+            target="_blank"
+            rel="noreferrer"
+            title="{gl.url} — {ghState(gl.url)}">⇈ {gl.repo}#{gl.number} <span class="gh-state">({ghState(gl.url)})</span></a>
+          <button class="dep-x" title="unlink {gl.repo}#{gl.number}" onclick={() => board.removeGhLink(me.id, gl.id)}>✕</button>
+        {/each}
+        <span class="dep-add">
+          <input placeholder="github pr/issue url…" bind:value={ghTarget} onkeydown={(e) => e.key === "Enter" && addGhLink()} />
+          <button class="dep-add-btn" onclick={addGhLink}>link</button>
         </span>
       </div>
     </div>

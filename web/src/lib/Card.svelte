@@ -6,6 +6,7 @@
   import { renderMarkdown } from "./markdown";
   import { CircleSlash, GitBranch } from "@lucide/svelte";
   import { cycleChip, laneAgeChip } from "./statsview";
+  import { ghChip } from "./ghview";
   import { canPromoteToPlan, queuedChip, timeAgo } from "./util";
   import { waitingBadge } from "./waiting";
 
@@ -119,6 +120,16 @@
         <GitBranch size={11} strokeWidth={1.75} /> {ws.branch}
       </span>
     {/if}
+    {#each board.ghLinks[task.id] ?? [] as link (link.id)}
+      {@const chip = ghChip(link, board.ghStatuses[link.url] ?? null)}
+      <a
+        class={chip.className}
+        href={link.url}
+        title={chip.title}
+        target="_blank"
+        rel="noreferrer"
+        onclick={(e) => e.stopPropagation()}>{chip.label}</a>
+    {/each}
     {#if board.activity[task.id]}
       <span class="chip working" title="pi agent working — open the card for live output">
         ◌ {board.activity[task.id].role === "reviewer"

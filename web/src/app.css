@@ -2803,6 +2803,33 @@ button:focus-visible {
   border-color: color-mix(in srgb, #58a6ff 40%, var(--border));
 }
 
+/* GitHub pr/issue chips — GitHub's open-green / merged-purple / closed-red;
+   pending (unsynced or unrecognized state) stays dim. */
+.chip.gh-pending {
+  color: var(--text-dim, #8b949e);
+}
+
+.chip.gh-open {
+  color: #3fb950;
+}
+
+.chip.gh-merged {
+  color: #8957e5;
+}
+
+.chip.gh-closed {
+  color: #f85149;
+}
+
+/* detail-dialog gh rows: the link chip keeps the dep-chip look but is an anchor */
+a.dep-chip.gh-link {
+  text-decoration: none;
+}
+
+a.dep-chip.gh-link .gh-state {
+  color: var(--text-muted);
+}
+
 .chip.tag {
   color: #bc8cff;
   border-color: color-mix(in srgb, #bc8cff 40%, var(--border));

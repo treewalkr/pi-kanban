@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { Attachment, BoardStatsPayload, CardWorkspace, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
+import type { Attachment, BoardStatsPayload, CardWorkspace, GhLink, GhStatus, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
 import type { AgentSessionInfo, QueuedJobInfo } from "../../../src/autoreview";
 import { searchBoard } from "../../../src/search";
 import { initialProject, parseProjectHash, projectHash } from "./viewhash";
@@ -103,6 +103,10 @@ class BoardStore {
   blockedBy = $state<Record<string, string[]>>({});
   /** Sparse card-id → linked card ids, both directions (board payload). */
   links = $state<Record<string, string[]>>({});
+  /** GitHub pr/issue links per card id (board payload, sparse). */
+  ghLinks = $state<Record<string, GhLink[]>>({});
+  /** Cached live GitHub state per url (from /gh/statuses; pending when absent). */
+  ghStatuses = $state<Record<string, GhStatus>>({});
   /** Live implementation location of a card, keyed by task id (sparse). */
   workspaces = $state<Record<string, CardWorkspace>>({});
   stats = $state<BoardStatsPayload | null>(null);
@@ -424,13 +428,18 @@ class BoardStore {
   }
 
   async refresh(): Promise<void> {
-    const [boardRes, statsRes] = await Promise.all([api.board.get(), api.stats.get()]);
+    const [boardRes, statsRes, ghRes] = await Promise.all([api.board.get(), api.stats.get(), api.gh.statuses.get()]);
     if (boardRes.error) {
       this.fail(boardRes.error);
       return;
     }
     if (!statsRes.error && statsRes.data) {
       this.stats = statsRes.data as BoardStatsPayload;
+    }
+    if (!ghRes.error && ghRes.data) {
+      const statuses: Record<string, GhStatus> = {};
+      for (const s of ghRes.data.statuses) statuses[s.url] = s;
+      this.ghStatuses = statuses;
     }
     this.error = "";
     this.lanes = boardRes.data.lanes;
@@ -439,6 +448,7 @@ class BoardStore {
     this.waiting = boardRes.data.waiting ?? {}; // guards the dev-restart window against a pre-change API payload
     this.blockedBy = boardRes.data.blockedBy ?? {};
     this.links = boardRes.data.links ?? {};
+    this.ghLinks = boardRes.data.ghLinks ?? {};
     this.workspaces = boardRes.data.workspaces ?? {};
     this.loading = false;
     const laneIds = new Set(this.lanes.map((l) => l.id));
@@ -496,6 +506,23 @@ class BoardStore {
 
   async removeLink(id: string, targetId: string): Promise<void> {
     const { error } = await api.tasks({ id }).links({ targetId }).delete();
+    if (error) return this.fail(error);
+    await this.refresh();
+  }
+
+  /** Attach a GitHub pr/issue ref to a card; false carries the toast. */
+  async addGhLink(id: string, ref: string): Promise<boolean> {
+    const { error } = await api.tasks({ id }).gh.post({ ref });
+    if (error) {
+      this.fail(error);
+      return false;
+    }
+    await this.refresh();
+    return true;
+  }
+
+  async removeGhLink(id: string, linkId: string): Promise<void> {
+    const { error } = await api.tasks({ id }).gh({ linkId }).delete();
     if (error) return this.fail(error);
     await this.refresh();
   }
