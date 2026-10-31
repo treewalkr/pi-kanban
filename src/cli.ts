@@ -38,7 +38,8 @@ usage:
                           [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>…]
                           [--clear-note] [--clear-parent] [--clear-blocked-by] [--clear-tags]
   kanban done <id>
-  kanban archive <id>                        (undo: mv <id> <lane>)
+  kanban archive <id>                        (undo: kanban undo, or mv <id> <lane>)
+  kanban undo [id]                           (revert the last lane move on the board, or on one card)
   kanban check [--json]                     (board-health lint: done parents w/ active children, children behind parent, planless build cards, lanes over WIP limit; advisory, exit 0)
   kanban stats [id]                     (board summary, or one card's lane times / cycle / gate metrics)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
@@ -686,6 +687,19 @@ async function main(): Promise<number> {
         const moved = db.moveTask(task.id, laneById(db, "archive"), undefined, { cause: "archive" });
         if (json) jsonOut(moved);
         else out(taskLine(db, moved));
+        return 0;
+      }
+
+      case "undo": {
+        if (positional.length > 1) {
+          throw new KanbanError("usage: kanban undo [id] [--json]", "invalid");
+        }
+        const result = db.undoTask(positional[0]);
+        if (json) jsonOut(result);
+        else {
+          out(taskLine(db, result.task));
+          if (result.task.laneId === "done") warnActiveChildren(db, result.task);
+        }
         return 0;
       }
 
