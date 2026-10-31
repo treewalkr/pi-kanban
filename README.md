@@ -43,7 +43,7 @@ kanban elaborate <id>               # retrofit/retry elaboration on any card
 kanban ls · search <query> · show <id> · brief <id>
 kanban next                         # lane → priority → oldest; skips blocked, counts waiting
 kanban link <id> <other> · unlink <id> <other>
-kanban mv <id> <lane> · edit <id> … · done <id> · archive <id> · rm <id> --force
+kanban mv <id> <lane> · edit <id> … · done <id> · archive <id> · undo [id] · rm <id> --force
 kanban lane ls | add | rename | rm
 kanban attach <id> <plan-file>      # versioned plan attach — re-attaching versions it
 kanban comment <id> <text…> [--kind comment|review|handoff|question] · comments <id>

@@ -46,7 +46,7 @@ For every non-trivial unit of work:
   note that the builder works through.
 - **After acceptance**: `mv done` (or `done <id>`).
 - **When a finished card is worth keeping but Done is getting crowded**:
-  `archive <id>`. Undo with `mv <id> <lane>`.
+  `archive <id>`. Undo with `kanban undo` (or `mv <id> <lane>`).
 - **If work is abandoned or superseded**: delete the card (`rm`). Never leave
   stale cards behind — the board must reflect reality.
 
@@ -131,6 +131,7 @@ kanban mv <id> --next | --prev                                        # advance 
 kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--tag <tag>]… [--lane <ref>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--clear-blocked-by] [--clear-tags] [--clear-note] [--clear-parent]
 kanban done <id>                                                      # shortcut → Done
 kanban archive <id>                                                   # shortcut → Archive (undo: mv <id> <lane>)
+kanban undo [id] [--json]                                             # revert the last lane move (board-wide, or for one card)
 kanban check [--json]                                                 # board-health lint: done parents w/ active children, children behind parent, planless build cards (advisory, exit 0)
 kanban stats [id] [--json]                                           # board summary, or one card's lane times / cycle / gate metrics
 kanban rm <id> [--force]                                              # delete card (a parent needs --force; cascades)
