@@ -7,11 +7,17 @@ import { parseSkillFrontmatter } from "../src/skills";
 const root = join(import.meta.dir, "..");
 
 /** Directories that are personal and must never be tracked in the published tree. */
-const PERSONAL_DIRS = [/^contribution-graph\//, /^\.zcode\//, /^\.playwright-cli\//, /^docs\//];
+const PERSONAL_DIRS = [/^contribution-graph\//, /^\.zcode\//, /^\.playwright-cli\//];
+/** Tracked product docs under the otherwise-personal docs/ (uhqnr's ADR home, GLOSSARY.md). */
+const PUBLISHED_DOCS = [/^docs\/adr\//, /^docs\/GLOSSARY\.md$/];
 
 test("no personal files are tracked in the published tree", () => {
   const files = execSync("git ls-files", { cwd: root, encoding: "utf8" }).split("\n");
-  const offenders = files.filter((file) => PERSONAL_DIRS.some((re) => re.test(file)));
+  const offenders = files.filter(
+    (file) =>
+      PERSONAL_DIRS.some((re) => re.test(file)) ||
+      (/^docs\//.test(file) && !PUBLISHED_DOCS.some((re) => re.test(file))),
+  );
   expect(offenders).toEqual([]);
 });
 
