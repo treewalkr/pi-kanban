@@ -1623,3 +1623,97 @@ test("tags: pre-tags database migrates with tags defaulting to []", () => {
   expect(reopened.updateTask(a.id, { tags: ["x"] }).tags).toEqual(["x"]);
   reopened.close();
 });
+
+test("undoTask reverts the latest board move, walks multi-step history, and restores stats", () => {
+  const a = db.createTask({ title: "card a" });
+  const b = db.createTask({ title: "card b" });
+  db.moveTask(a.id, "plan");
+  db.moveTask(a.id, "implement");
+  db.updateTask(b.id, { lane: "done" }, { cause: "edit" });
+
+  // First undoTask() reverts b from done to backlog
+  const res1 = db.undoTask();
+  expect(res1.task.id).toBe(b.id);
+  expect(res1.task.laneId).toBe("backlog");
+  expect(res1.event.fromLaneId).toBe("backlog");
+  expect(res1.event.toLaneId).toBe("done");
+  expect(res1.event.cause).toBe("edit");
+  expect(db.laneEvents(b.id).filter((e) => e.toLaneId === "done")).toHaveLength(0);
+  expect(db.cardStats(b.id).reachedDone).toBe(false);
+
+  // Second undoTask() reverts a from implement to plan
+  const res2 = db.undoTask();
+  expect(res2.task.id).toBe(a.id);
+  expect(res2.task.laneId).toBe("plan");
+  expect(res2.event.fromLaneId).toBe("plan");
+  expect(res2.event.toLaneId).toBe("implement");
+
+  // Third undoTask() reverts a from plan to backlog
+  const res3 = db.undoTask();
+  expect(res3.task.id).toBe(a.id);
+  expect(res3.task.laneId).toBe("backlog");
+  expect(res3.event.fromLaneId).toBe("backlog");
+  expect(res3.event.toLaneId).toBe("plan");
+
+  // Only creation events remain
+  expect(db.laneEvents(a.id)).toHaveLength(1);
+  expect(db.laneEvents(b.id)).toHaveLength(1);
+});
+
+test("undoTask(taskRef) scopes to the target card and restores waiting previousLane", () => {
+  const a = db.createTask({ title: "card a", lane: "plan" });
+  const b = db.createTask({ title: "card b" });
+  db.attach(a.id, "plan", "# plan\n\n- [ ] do it");
+  db.planReview(a.id, { verdict: "pass", message: "ok" });
+  expect(db.resolveTask(a.id).laneId).toBe("waiting");
+  expect(db.resolveTask(a.id).previousLane).toBe("plan");
+
+  // Drag a to done (clearing previous_lane), then move b to review
+  db.updateTask(a.id, { lane: "done" });
+  expect(db.resolveTask(a.id).previousLane).toBeNull();
+  db.moveTask(b.id, "review");
+
+  // Calling db.undoTask(a.id.slice(0, 4)) leaves b in review, returns a to waiting with previousLane === "plan"
+  const res1 = db.undoTask(a.id.slice(0, 4));
+  expect(res1.task.id).toBe(a.id);
+  expect(res1.task.laneId).toBe("waiting");
+  expect(res1.task.previousLane).toBe("plan");
+  expect(db.resolveTask(b.id).laneId).toBe("review");
+
+  // Subsequent db.undoTask(a.id) returns a from waiting to plan with previousLane === null
+  const res2 = db.undoTask(a.id);
+  expect(res2.task.id).toBe(a.id);
+  expect(res2.task.laneId).toBe("plan");
+  expect(res2.task.previousLane).toBeNull();
+});
+
+test("undoTask refuses when only creation/backfill events exist, when from-lane was deleted, or on bad task ref", () => {
+  const card = db.createTask({ title: "card" });
+  expect(() => db.undoTask()).toThrow(new KanbanError("nothing to undo", "conflict"));
+  expect(() => db.undoTask(card.id)).toThrow(
+    new KanbanError(`nothing to undo for task '${card.id}'`, "conflict"),
+  );
+
+  // Seeded cause = "backfill" rows are ignored and also throw "nothing to undo"
+  const raw = new Database(join(dir, "t.db"));
+  raw.run(
+    "INSERT INTO lane_events (id, task_id, from_lane_id, to_lane_id, cause, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ["evt-bf", card.id, "backlog", "plan", "backfill", "system", Date.now()],
+  );
+  expect(() => db.undoTask()).toThrow(new KanbanError("nothing to undo", "conflict"));
+  expect(() => db.undoTask(card.id)).toThrow(
+    new KanbanError(`nothing to undo for task '${card.id}'`, "conflict"),
+  );
+
+  // If a card is created in custom lane spike, moved to backlog, and spike is deleted via db.deleteLane("spike")
+  const spikeLane = db.createLane({ name: "spike" });
+  const spikeCard = db.createTask({ title: "spike card", lane: spikeLane.id });
+  db.moveTask(spikeCard.id, "backlog");
+  db.deleteLane(spikeLane.id);
+  expect(() => db.undoTask(spikeCard.id)).toThrow(
+    new KanbanError(`cannot undo: lane '${spikeLane.id}' no longer exists`, "conflict"),
+  );
+
+  // Unknown task ref throws
+  expect(() => db.undoTask("zzzz")).toThrow(new KanbanError("no task matching 'zzzz'", "not-found"));
+});

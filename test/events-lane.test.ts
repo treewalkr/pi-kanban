@@ -188,3 +188,35 @@ test("osascript seam fires once per review entry only when opted in with no subs
     expect(calls).toEqual([["kanban", notificationCopy("x".repeat(80) + "…", task.id)]]);
   }
 });
+
+test("undoing a move clamps the SSE rowid cursor so the next move still streams event: lane", async () => {
+  const task = db.createTask({ title: "undone-card" });
+  const app = createApp(db);
+  const { reader, read } = await subscribe(app);
+
+  expect(await read()).toBe("event: change\ndata: {}");
+
+  // move card to plan (consumes event: lane + event: change)
+  await patch(app, task.id, { lane: "plan" });
+  const lane1 = await read();
+  expect(lane1).toContain("event: lane");
+  expect(lane1).toContain('"toLaneId":"plan"');
+  expect(await read()).toBe("event: change\ndata: {}");
+
+  // call db.undoTask() from a CLI-like connection (consumes event: change, no event: lane)
+  const cli = new KanbanDb(join(dir, "t.db"));
+  cli.undoTask();
+  cli.close();
+
+  const changeAfterUndo = await read(1500);
+  expect(changeAfterUndo).toBe("event: change\ndata: {}");
+
+  // move card to review (reuses the popped rowid)
+  await patch(app, task.id, { lane: "review" });
+  const lane2 = await read();
+  expect(lane2).toContain("event: lane");
+  expect(lane2).toContain('"toLaneId":"review"');
+  expect(await read()).toBe("event: change\ndata: {}");
+
+  await reader.cancel();
+});

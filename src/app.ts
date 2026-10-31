@@ -54,8 +54,12 @@ function createChangeBus(
       scheduled = setTimeout(() => {
         scheduled = null;
         try {
+          const head = joinCursor();
           const laneEvents = takeLaneEvents();
-          for (const sub of subs) sub.cb(laneEvents.filter((e) => e.rowid > sub.since));
+          for (const sub of subs) {
+            if (sub.since > head) sub.since = head;
+            sub.cb(laneEvents.filter((e) => e.rowid > sub.since));
+          }
           onFlush?.(laneEvents, subs.size);
         } catch {
           // a flush scheduled just before teardown (db closed) has nothing to deliver
@@ -102,6 +106,8 @@ export const createApp = (
   const bus = createChangeBus(
     () => db.maxLaneEventRowid(), // join mark: anything already in the table is history, even if not yet flushed
     () => {
+      const max = db.maxLaneEventRowid();
+      if (laneCursor.rowid > max) laneCursor.rowid = max;
       const entries = db.laneEventsAfter(laneCursor.rowid);
       if (entries.length > 0) laneCursor.rowid = entries[entries.length - 1].rowid;
       return entries.filter((e) => e.cardTitle !== null); // deleted cards carry no payload

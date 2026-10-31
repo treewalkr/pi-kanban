@@ -139,6 +139,11 @@ export interface LaneEventFeedEntry extends LaneEvent {
   cardTitle: string;
 }
 
+export interface UndoResult {
+  task: Task;
+  event: LaneEvent;
+}
+
 export interface SessionStats {
   count: number;
   totalMs: number;
@@ -1198,6 +1203,67 @@ export class KanbanDb {
 
   moveTask(prefix: string, laneRef: string, index?: number, meta?: { cause?: LaneEventCause; actor?: string }): Task {
     return this.updateTask(prefix, { lane: laneRef, index }, { cause: "mv", ...meta });
+  }
+
+  /**
+   * Revert the most recent live lane move (`from_lane_id IS NOT NULL AND cause != 'backfill'`)
+   * across the board, or on `taskRef` when given. Pops the undone `lane_events` row and
+   * moves the card back to `from_lane_id` atomically.
+   */
+  undoTask(taskRef?: string): UndoResult {
+    const targetId = taskRef !== undefined ? this.resolveTask(taskRef).id : undefined;
+    return this.tx((): UndoResult => {
+      const row = (
+        targetId !== undefined
+          ? this.q(
+              `SELECT * FROM lane_events
+               WHERE task_id = ? AND from_lane_id IS NOT NULL AND cause != 'backfill'
+               ORDER BY created_at DESC, rowid DESC
+               LIMIT 1`,
+            ).get(targetId)
+          : this.q(
+              `SELECT le.* FROM lane_events le
+               JOIN tasks t ON t.id = le.task_id
+               WHERE le.from_lane_id IS NOT NULL AND le.cause != 'backfill'
+               ORDER BY le.created_at DESC, le.rowid DESC
+               LIMIT 1`,
+            ).get()
+      ) as LaneEventRow | null;
+
+      if (!row || !row.from_lane_id) {
+        throw new KanbanError(
+          targetId !== undefined ? `nothing to undo for task '${targetId}'` : "nothing to undo",
+          "conflict",
+        );
+      }
+
+      const fromLane = this.lanes().find((l) => l.id === row.from_lane_id);
+      if (!fromLane) {
+        throw new KanbanError(`cannot undo: lane '${row.from_lane_id}' no longer exists`, "conflict");
+      }
+
+      this.q("DELETE FROM lane_events WHERE id = ?").run(row.id);
+
+      let previousLane: string | null = null;
+      if (fromLane.id === WAITING_LANE_ID) {
+        const prev = this.q(
+          "SELECT * FROM lane_events WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        ).get(row.task_id) as LaneEventRow | null;
+        previousLane = prev && prev.to_lane_id === WAITING_LANE_ID ? (prev.from_lane_id ?? null) : null;
+      }
+
+      const position = this.insertPosition(fromLane.id, undefined, row.task_id);
+      const now = Date.now();
+      this.q(
+        "UPDATE tasks SET lane_id = ?, previous_lane = ?, position = ?, updated_at = ? WHERE id = ?",
+      ).run(fromLane.id, previousLane, position, now, row.task_id);
+      this.renormalizeIfTight(fromLane.id);
+
+      return {
+        task: this.resolveTask(row.task_id),
+        event: rowToLaneEvent(row),
+      };
+    });
   }
 
   deleteTask(prefix: string, force = false): Task {
