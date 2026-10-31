@@ -526,10 +526,28 @@ export function deathReason(result: SpawnResult, secs: number, sessionLog: strin
   return `ended without a verdict after ${dur}`;
 }
 
-export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, log, emit, track }) => {
+/** What one headless `pi --mode json` child needs; shared by the loop and the lane-worker runner. */
+export interface SpawnPiInput {
+  cwd: string;
+  sessionId: string;
+  prompt: string;
+  /** pi flags between --session-id and the prompt (agentFlags / workerArgs). */
+  args: string[];
+  timeoutMs: number;
+  stallMs: number;
+  log: (message: string) => void;
+  /** Streams one formatted output line from the running session. */
+  emit: (line: string) => void;
+  /** Registers the child's kill handle so shutdown can terminate in-flight sessions; returns an untrack cleanup function. */
+  track: (kill: () => void) => () => void;
+}
+
+/** The one spawn implementation: kill/timeout/stall timers, JSONL streaming, stderr tail. */
+export function spawnPi(input: SpawnPiInput): Promise<SpawnResult> {
+  const { cwd, sessionId, prompt, args, timeoutMs, stallMs, log, emit, track } = input;
   const proc = Bun.spawn({
     // json mode streams JSONL events while the session runs (--print waits for the end)
-    cmd: ["pi", "--mode", "json", "--session-id", job.sessionId ?? sessionIdFor(job), ...agentFlags(job.role, config, log), job.prompt],
+    cmd: ["pi", "--mode", "json", "--session-id", sessionId, ...args, prompt],
     cwd,
     env: process.env,
     stdin: "ignore",
@@ -595,10 +613,10 @@ export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, lo
   return proc.exited.finally(untrack).then(async (code) => {
     clearTimers();
     const tail = (await stderr).trim();
-    if (stalled) log(`${job.role} ${job.task.id}: stalled — no output for ${durationFor(stallMs / 1000)}, killed`);
-    else if (timedOut) log(`${job.role} ${job.task.id}: timed out after ${Math.round(timeoutMs / 60_000)} min, killed`);
+    if (stalled) log(`stalled — no output for ${durationFor(stallMs / 1000)}, killed`);
+    else if (timedOut) log(`timed out after ${Math.round(timeoutMs / 60_000)} min, killed`);
     else if (code !== 0) {
-      if (tail) log(`${job.role} ${job.task.id}: exited ${code}, stderr tail:\n${tail.slice(-1500)}`);
+      if (tail) log(`exited ${code}, stderr tail:\n${tail.slice(-1500)}`);
     }
     return {
       code: (timedOut || stalled) ? 1 : (code ?? 1),
@@ -608,7 +626,21 @@ export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, lo
       stderrTail: tail ? tail.slice(-1500) : undefined,
     };
   });
-};
+}
+
+export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, log, emit, track }) =>
+  // the loop's log lines stay job-prefixed ("reviewer <id>: stalled — …"); spawnPi logs bare
+  spawnPi({
+    cwd,
+    sessionId: job.sessionId ?? sessionIdFor(job),
+    prompt: job.prompt,
+    args: agentFlags(job.role, config, log),
+    timeoutMs,
+    stallMs,
+    log: (message) => log(`${job.role} ${job.task.id}: ${message}`),
+    emit,
+    track,
+  });
 
 export const LEASE_TTL_MS = 60_000;
 
