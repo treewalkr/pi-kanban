@@ -714,6 +714,23 @@ describe("auto-review", () => {
     expect(adr1).toContain("reject");
   });
 
+  test("all agent prompts reference GLOSSARY.md and planner challenges fuzzy terms", () => {
+    const task = { id: "abc12", title: "t", laneId: "plan" } as never;
+    for (const prompt of [
+      plannerPrompt(task),
+      planReviewerPrompt(task),
+      builderPlanPrompt(task),
+      builderPrompt(task),
+      reviewerPrompt(task),
+    ]) {
+      expect(prompt).toContain("Read GLOSSARY.md if present and use its vocabulary");
+      expect(prompt).toContain("update it inline when a term crystallizes");
+    }
+    expect(plannerPrompt(task)).toContain(
+      "challenge fuzzy terms against the glossary instead of inventing synonyms",
+    );
+  });
+
   test("agentFlags: reviewer defaults to thinking max, builder to nothing", () => {
     withAgentEnv({}, () => {
       expect(agentFlags("reviewer", null)).toEqual(["--thinking", "max"]);
