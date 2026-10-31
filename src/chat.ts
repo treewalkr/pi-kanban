@@ -231,8 +231,10 @@ interface HandleOpts {
   sessionId: string;
   session: AgentSession;
   sessionManager: import("@earendil-works/pi-coding-agent").SessionManager;
-  task: Task;
-  laneName: string;
+  /** The appended system prompt this handle's session was created with. */
+  appendSystemPrompt: string;
+  /** The first prompt's context (card note or board overview), computed at send time. */
+  firstSeed: () => string;
   idleTimeoutMs: number;
   now: () => number;
   log: (message: string) => void;
@@ -246,8 +248,8 @@ class ChatHandleImpl implements ChatHandle {
   readonly sessionId: string;
   private readonly session: AgentSession;
   private readonly sessionManager: import("@earendil-works/pi-coding-agent").SessionManager;
-  private readonly task: Task;
-  private readonly laneName: string;
+  private readonly appendSystemPrompt: string;
+  private readonly firstSeed: () => string;
   private readonly idleTimeoutMs: number;
   private readonly now: () => number;
   private readonly log: (message: string) => void;
@@ -264,8 +266,8 @@ class ChatHandleImpl implements ChatHandle {
     this.sessionId = opts.sessionId;
     this.session = opts.session;
     this.sessionManager = opts.sessionManager;
-    this.task = opts.task;
-    this.laneName = opts.laneName;
+    this.appendSystemPrompt = opts.appendSystemPrompt;
+    this.firstSeed = opts.firstSeed;
     this.idleTimeoutMs = opts.idleTimeoutMs;
     this.now = opts.now;
     this.log = opts.log;
@@ -320,7 +322,7 @@ class ChatHandleImpl implements ChatHandle {
         if (this.session.isStreaming && !command.streamingBehavior) {
           throw new KanbanError("chat is streaming — send steer or followUp", "conflict");
         }
-        const seed = hasUserMessage(this.sessionManager) ? "" : `${chatSeed(this.task, this.laneName)}\n\n`;
+        const seed = hasUserMessage(this.sessionManager) ? "" : `${this.firstSeed()}\n\n`;
         // Decision 7 (the rpc-mode contract): the send resolves when the SDK's
         // preflight callback fires — synchronous validation, auth, and queueing all
         // happen before it — not when the whole LLM + tool loop finishes. Run output
@@ -470,29 +472,26 @@ export class ChatManager {
     this.now = opts.now ?? (() => Date.now());
   }
 
-  private async buildHandle(task: Task): Promise<ChatHandleImpl> {
-    const sessionId = CHAT_SESSION_ID_PREFIX + task.id;
-    const append = chatSystemAppend(task);
-    const laneName = this.db.lanes().find((l) => l.id === task.laneId)?.name ?? task.laneId;
+  private async buildHandle(cardId: string, sessionId: string, appendSystemPrompt: string, firstSeed: () => string): Promise<ChatHandleImpl> {
     const existingPath = SessionManager.findById(this.cwd, sessionId, this.sessionDir);
     const sessionManager = existingPath
       ? SessionManager.open(existingPath, this.sessionDir, this.cwd)
       : SessionManager.create(this.cwd, this.sessionDir, { id: sessionId });
-    this.log(`${task.id} ${existingPath ? "resumed" : "created"}`);
-    const session = await this.createSession({ cwd: this.cwd, sessionManager, appendSystemPrompt: append });
+    this.log(`${cardId} ${existingPath ? "resumed" : "created"}`);
+    const session = await this.createSession({ cwd: this.cwd, sessionManager, appendSystemPrompt });
     return new ChatHandleImpl({
       cwd: this.cwd,
-      cardId: task.id,
+      cardId,
       sessionId,
       session,
       sessionManager,
-      task,
-      laneName,
+      appendSystemPrompt,
+      firstSeed,
       idleTimeoutMs: this.idleTimeoutMs,
       now: this.now,
       log: this.log,
       onDisposed: (handle) => {
-        if (this.handles.get(task.id) === handle) this.handles.delete(task.id);
+        if (this.handles.get(cardId) === handle) this.handles.delete(cardId);
       },
     });
   }
@@ -504,7 +503,13 @@ export class ChatManager {
     if (alive) return alive;
     const pending = this.inflight.get(task.id);
     if (pending) return pending;
-    const creation = this.buildHandle(task).then((handle) => {
+    const laneName = this.db.lanes().find((l) => l.id === task.laneId)?.name ?? task.laneId;
+    const creation = this.buildHandle(
+      task.id,
+      CHAT_SESSION_ID_PREFIX + task.id,
+      chatSystemAppend(task),
+      () => chatSeed(task, laneName),
+    ).then((handle) => {
       this.handles.set(task.id, handle);
       if (!this.shutdownRegistered) {
         this.shutdownRegistered = true;
