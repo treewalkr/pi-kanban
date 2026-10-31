@@ -857,13 +857,13 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         inFlight.delete(job.task.id);
         if (stopped) return;
         if (!res.ok) {
-          db.createComment(job.task.id, {
+          db.comment(job.task.id, {
             author: REVIEWER_AUTHOR,
-            kind: "comment",
+            kind: "question",
             body: `pre-review gate: \`bun test\` failed — no reviewer session spawned.\n\n\`\`\`\n${res.output}\n\`\`\`\nFix the tests, then comment on this card to re-trigger review.`,
           });
           log(`reviewer ${job.task.id}: gate red — no session spawned`);
-          return; // the gate comment makes pi-reviewer the last author, disarming the card
+          return; // the question parks the card in waiting — the lane change disarms it (roleFor ignores waiting)
         }
       }
       if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {

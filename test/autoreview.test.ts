@@ -2247,10 +2247,14 @@ describe("pre-spawn gate", () => {
     expect(comments.length).toBe(2);
     const last = comments[comments.length - 1]!;
     expect(last.author).toBe(REVIEWER_AUTHOR);
-    expect(last.kind).toBe("comment");
+    expect(last.kind).toBe("question");
     expect(last.body).toContain("pre-review gate");
     expect(last.body).toContain("expected 1, got 2");
     expect(logs.some((l) => l.includes("gate red — no session spawned"))).toBe(true);
+    const parked = w.tasks().find((t) => t.id === card.id)!;
+    expect(parked.laneId).toBe("waiting");
+    expect(parked.previousLane).toBe("review");
+    expect(w.waiting(card.id)).toBe("question");
 
     w.createTask({ title: "noise" });
     await sleep(150);
@@ -2268,8 +2272,11 @@ describe("pre-spawn gate", () => {
 
     expect(calls.length).toBe(0);
     expect(w.comments(card.id).filter((c) => c.body.startsWith("pre-review gate:")).length).toBe(1);
+    expect(w.tasks().find((t) => t.id === card.id)!.laneId).toBe("waiting");
 
-    w.createComment(card.id, { author: "user", kind: "comment", body: "re-arm" });
+    const reply = w.comment(card.id, { author: "user", kind: "comment", body: "re-arm" });
+    expect(reply.moved).toBe("returned");
+    expect(reply.task.laneId).toBe("review");
     await sleep(100);
 
     const gateComments = w.comments(card.id).filter((c) => c.body.startsWith("pre-review gate:"));
@@ -2278,10 +2285,35 @@ describe("pre-spawn gate", () => {
       expect(c.author).toBe(REVIEWER_AUTHOR);
     }
     expect(calls.length).toBe(0);
+    expect(w.tasks().find((t) => t.id === card.id)!.laneId).toBe("waiting");
 
     w.createTask({ title: "noise" });
     await sleep(150);
     expect(w.comments(card.id).filter((c) => c.body.startsWith("pre-review gate:")).length).toBe(2);
+  });
+
+  test("gate-red parks the card; a human reply with a green gate spawns the reviewer", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    let gateRed = true;
+    const flipGate: GateFn = async () => (gateRed ? { ok: false, output: "1 fail" } : { ok: true, output: "" });
+    start(spawnFn, dbFile, { gate: flipGate });
+    await sleep(100);
+
+    expect(calls.length).toBe(0);
+    expect(w.tasks().find((t) => t.id === card.id)!.laneId).toBe("waiting");
+    expect(w.tasks().find((t) => t.id === card.id)!.previousLane).toBe("review");
+
+    gateRed = false;
+    const reply = w.comment(card.id, { author: "user", kind: "comment", body: "tests fixed" });
+    expect(reply.moved).toBe("returned");
+    expect(reply.task.laneId).toBe("review");
+    await sleep(100);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.job.role).toBe("reviewer");
+    calls[0]!.finish({ code: 0 });
   });
 
   test("green gate: the reviewer session spawns exactly as before", async () => {
