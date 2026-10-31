@@ -17,8 +17,10 @@ async function repro(env: Record<string, string>): Promise<ReproResult> {
     stdout: "pipe",
     stderr: "pipe",
     stdin: "ignore",
-    // a regression must fail loudly (exit 143), never hang the suite
-    signal: AbortSignal.timeout(30_000),
+    // a regression must fail loudly (exit 143), never hang the suite. 85s stays under
+    // the pin test's 90s budget: under the pre-review gate the suite shares CPU with
+    // live builder sessions and the boot+TTL-reap path can take well over 30s
+    signal: AbortSignal.timeout(85_000),
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -48,7 +50,7 @@ describe("repro.sh REPRO_PORT guard", () => {
     expect(r.stdout).toContain("repro board → http://127.0.0.1:4615");
     expect(r.stderr).not.toContain("REPRO_PORT must be");
     expect(r.code).toBe(0);
-  }, 30_000); // boots a real server + waits out the TTL reap — 5s default flakes under full-suite load
+  }, 90_000); // boots a real server + waits out the TTL reap — starved under gate-load (builders share CPU), 30s proved too tight
 
   test("no REPRO_PORT still scans 4611-4620", async () => {
     const r = await repro({ REPRO_PORT: "", REPRO_TTL: "2" }); // empty ⇒ scan
