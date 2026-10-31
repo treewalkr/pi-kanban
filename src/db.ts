@@ -131,6 +131,12 @@ export interface LaneEvent {
   createdAt: number;
 }
 
+/** A lane event as delivered on the SSE feed: cursor rowid plus the card's title (null when the card was deleted). */
+export interface LaneEventFeedEntry extends LaneEvent {
+  rowid: number;
+  cardTitle: string;
+}
+
 export interface SessionStats {
   count: number;
   totalMs: number;
@@ -1716,6 +1722,23 @@ export class KanbanDb {
     return (
       this.q("SELECT * FROM lane_events ORDER BY created_at, rowid").all() as LaneEventRow[]
     ).map(rowToLaneEvent);
+  }
+
+  /** Highest lane_events rowid — the SSE feed cursor's boot value (0 on an empty table). */
+  maxLaneEventRowid(): number {
+    const row = this.q("SELECT COALESCE(MAX(rowid), 0) AS max FROM lane_events").get() as { max: number };
+    return row.max;
+  }
+
+  /** Lane events inserted after `afterRowid`, ascending by rowid, joined with the card title (null title = deleted card). */
+  laneEventsAfter(afterRowid: number): LaneEventFeedEntry[] {
+    return this.q(
+      `SELECT le.rowid AS rowid, le.id AS id, le.task_id AS taskId, le.from_lane_id AS fromLaneId,
+              le.to_lane_id AS toLaneId, le.cause AS cause, le.actor AS actor, le.created_at AS createdAt,
+              t.title AS cardTitle
+       FROM lane_events le LEFT JOIN tasks t ON t.id = le.task_id
+       WHERE le.rowid > ? ORDER BY le.rowid ASC`,
+    ).all(afterRowid) as LaneEventFeedEntry[];
   }
 
   cardStats(taskRef: string, now: number = Date.now()): CardStats {
