@@ -358,7 +358,7 @@ export const createApp = (
     )
     .get(
       "/tasks/:id/files/:name/diff",
-      ({ params, query, status }): CardFileDiff | unknown => {
+      ({ params, query, status }): CardFileDiff => {
         try {
           return cardFileDiff(db, params.id, params.name, query.from, query.to);
         } catch (e) {

@@ -7,6 +7,7 @@
   import IdChip from "./IdChip.svelte";
   import { copyText } from "./copy";
   import { renderMarkdown, toggleTaskLine } from "./markdown";
+  import { collapseDiff, parseUnifiedDiff } from "./fileview";
   import { canPromoteToPlan, laneColor, roleAuthor, timeAgo } from "./util";
   import { canResume } from "./waiting";
 
@@ -179,6 +180,19 @@
     return want === undefined ? latest : (versionsByKind[kind]?.find((v) => v.version === want) ?? latest);
   }
 
+  // per-file diff view: picked version vs its predecessor, fetched only while toggled on
+  let showDiff = $state<Record<string, boolean>>({});
+  let diffPatch = $state<Record<string, string | null>>({});
+
+  async function loadDiff(kind: string): Promise<void> {
+    const picked = pickedVersion[kind] ?? cardFiles.find((f) => f.kind === kind)?.version ?? 1;
+    if (picked <= 1) return;
+    const res = await api.tasks({ id: task.id }).files({ name: kind }).diff.get({
+      query: { from: picked - 1, to: picked },
+    });
+    diffPatch[kind] = res.error ? null : res.data.patch;
+  }
+
   const isMarkdown = (kind: string): boolean => kind === "plan" || kind.endsWith(".md");
   let otherFiles = $derived(cardFiles.filter((f) => f.kind !== "plan"));
 
@@ -318,11 +332,25 @@
                   class="version-pick"
                   aria-label="plan version"
                   onclick={(e) => e.stopPropagation()}
-                  onchange={(e) => (pickedVersion["plan"] = Number((e.target as HTMLSelectElement).value))}>
+                  onchange={(e) => {
+                    pickedVersion["plan"] = Number((e.target as HTMLSelectElement).value);
+                    if (showDiff["plan"]) void loadDiff("plan");
+                  }}>
                   {#each versionsByKind["plan"].slice().reverse() as v (v.version)}
                     <option value={v.version} selected={pickedVersion["plan"] === v.version}>v{v.version}</option>
                   {/each}
                 </select>
+                <button
+                  class="diff-toggle"
+                  class:on={showDiff["plan"]}
+                  disabled={pickedVersion["plan"] === 1}
+                  title={pickedVersion["plan"] === 1 ? "v1 is the first version" : "diff against the previous version"}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    showDiff["plan"] = !showDiff["plan"];
+                    if (showDiff["plan"]) void loadDiff("plan");
+                  }}>diff</button
+                >
               {:else}v{plan.version}{/if} · {timeAgo(shownVersion("plan", plan).createdAt)}{#if plan.source} · <button
                 class="plan-path"
                 class:copied={pathCopied}
@@ -331,7 +359,34 @@
               >{/if}
             </span>
           </summary>
-          <div class="detail-note md">{@html renderMarkdown(shownVersion("plan", plan).content)}</div>
+          {#if showDiff["plan"] && diffPatch["plan"] !== null}
+            {#if diffPatch["plan"] === ""}
+              <p class="diff-empty">no changes</p>
+            {:else}
+              {@const segments = collapseDiff(parseUnifiedDiff(diffPatch["plan"]!), 3)}
+              <div class="card-diff">
+                {#each segments as seg}
+                  {#if seg.kind === "gap"}
+                    <div class="viewer-diff-gap">⋯ {seg.count} unchanged lines</div>
+                  {:else}
+                    {#each seg.lines as dLine}
+                      <div class="viewer-diff-line {dLine.kind}">
+                        <span class="viewer-line-num">
+                          {dLine.kind === "del" ? (dLine.oldNo ?? "") : (dLine.newNo ?? "")}
+                        </span>
+                        <span class="viewer-diff-prefix">
+                          {dLine.kind === "add" ? "+" : dLine.kind === "del" ? "−" : " "}
+                        </span>
+                        <span class="viewer-line-code">{dLine.text}</span>
+                      </div>
+                    {/each}
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+          {:else}
+            <div class="detail-note md">{@html renderMarkdown(shownVersion("plan", plan).content)}</div>
+          {/if}
         </details>
       {/if}
       {#if otherFiles.length > 0}
@@ -351,15 +406,54 @@
                       class="version-pick"
                       aria-label={`${f.kind} version`}
                       onclick={(e) => e.stopPropagation()}
-                      onchange={(e) => (pickedVersion[f.kind] = Number((e.target as HTMLSelectElement).value))}>
+                      onchange={(e) => {
+                        pickedVersion[f.kind] = Number((e.target as HTMLSelectElement).value);
+                        if (showDiff[f.kind]) void loadDiff(f.kind);
+                      }}>
                       {#each versionsByKind[f.kind].slice().reverse() as v (v.version)}
                         <option value={v.version} selected={pickedVersion[f.kind] === v.version}>v{v.version}</option>
                       {/each}
                     </select>
+                    <button
+                      class="diff-toggle"
+                      class:on={showDiff[f.kind]}
+                      disabled={pickedVersion[f.kind] === 1}
+                      title={pickedVersion[f.kind] === 1 ? "v1 is the first version" : "diff against the previous version"}
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        showDiff[f.kind] = !showDiff[f.kind];
+                        if (showDiff[f.kind]) void loadDiff(f.kind);
+                      }}>diff</button
+                    >
                   {:else}v{shown.version}{/if} · {timeAgo(shown.createdAt)}
                 </span>
               </summary>
-              {#if isMarkdown(f.kind)}
+              {#if showDiff[f.kind] && diffPatch[f.kind] !== null}
+                {#if diffPatch[f.kind] === ""}
+                  <p class="diff-empty">no changes</p>
+                {:else}
+                  {@const segments = collapseDiff(parseUnifiedDiff(diffPatch[f.kind]!), 3)}
+                  <div class="card-diff">
+                    {#each segments as seg}
+                      {#if seg.kind === "gap"}
+                        <div class="viewer-diff-gap">⋯ {seg.count} unchanged lines</div>
+                      {:else}
+                        {#each seg.lines as dLine}
+                          <div class="viewer-diff-line {dLine.kind}">
+                            <span class="viewer-line-num">
+                              {dLine.kind === "del" ? (dLine.oldNo ?? "") : (dLine.newNo ?? "")}
+                            </span>
+                            <span class="viewer-diff-prefix">
+                              {dLine.kind === "add" ? "+" : dLine.kind === "del" ? "−" : " "}
+                            </span>
+                            <span class="viewer-line-code">{dLine.text}</span>
+                          </div>
+                        {/each}
+                      {/if}
+                    {/each}
+                  </div>
+                {/if}
+              {:else if isMarkdown(f.kind)}
                 <div class="detail-note md">{@html renderMarkdown(shown.content)}</div>
               {:else}
                 <pre class="file-raw">{shown.content}</pre>
