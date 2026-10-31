@@ -4,6 +4,7 @@ import { app } from "./app";
 import { startAutoArchiveSweep } from "./autoarchive";
 import { startAutoReview } from "./autoreview";
 import { KanbanDb, defaultDbPath } from "./db";
+import { startGhSync } from "./gh";
 import { registerShutdown, runShutdown } from "./shutdown";
 import "./dev-reload"; // watch marker: rewritten by POST /restart to trigger a bun --watch reload
 
@@ -93,7 +94,7 @@ function envMs(name: string): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: () => void; stopAutoArchive: () => void }> {
+export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: () => void; stopAutoArchive: () => void; stopGhSync: () => void }> {
   const port = opts.port ?? Number(process.env.PORT ?? 4600);
 
   // single-server guard: SO_REUSEPORT would stack N silent listeners on one
@@ -184,6 +185,19 @@ export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: ()
     registerShutdown(stopAutoArchive);
   }
 
+  // GitHub pr/issue sync: badge cache + merged-pr auto-advance, on its own db
+  // connection (autoreview pattern) so the API, CLI, and sync never share one.
+  // KANBAN_GH_SYNC_MS=0 disables all gh spawning in this process (the e2e seam);
+  // unset or malformed falls back to the 60s default.
+  let stopGhSync: () => void = () => {};
+  const ghRaw = process.env.KANBAN_GH_SYNC_MS?.trim();
+  const ghMs = !ghRaw ? 60_000 : /^\d+$/.test(ghRaw) ? Number(ghRaw) : 60_000;
+  if (ghMs > 0) {
+    const ghHandle = startGhSync({ db: new KanbanDb(defaultDbPath()), intervalMs: ghMs });
+    stopGhSync = () => ghHandle.stop();
+    registerShutdown(stopGhSync);
+  }
+
   // graceful signals: terminate agent children, release leases, then exit —
   // a killed server must not leave orphans writing to the board
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
@@ -195,7 +209,7 @@ export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: ()
     });
   }
 
-  return { stopAutoReview, stopAutoArchive };
+  return { stopAutoReview, stopAutoArchive, stopGhSync };
 }
 
 if (import.meta.main) {

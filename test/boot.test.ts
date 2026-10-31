@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { app } from "../src/app";
 import { boot, type IncumbentHealth } from "../src/index";
 import { consumeShareToken, mintShareToken } from "../src/restart";
+import type { Task } from "../src/db";
+
+const root = join(import.meta.dir, "..");
 
 // ---- seams ------------------------------------------------------------------
 
@@ -34,8 +37,9 @@ describe("boot() occupied-port guard (seams per plan AC3)", () => {
   const SCRUB_VARS = ["KANBAN_SHARE_PORT", "KANBAN_SHARE_TOKEN", "KANBAN_SHARE_FORCE", "KANBAN_AUTO_REVIEW"] as const;
   // auto-archive defaults ON, so scrubbing is not enough: boot tests must force
   // KANBAN_AUTO_ARCHIVE=0 or an ungated sweep would open defaultDbPath() — the
-  // production board — from inside bun test
-  const FORCED_VARS = ["KANBAN_AUTO_ARCHIVE"] as const;
+  // production board — from inside bun test. Same story for the gh sync loop,
+  // which would open the worktree's data dir and spawn a real `gh` every pass.
+  const FORCED_VARS = ["KANBAN_AUTO_ARCHIVE", "KANBAN_GH_SYNC_MS"] as const;
   let savedEnv: Record<string, string | undefined> = {};
   beforeEach(() => {
     savedEnv = Object.fromEntries([...SCRUB_VARS, ...FORCED_VARS].map((k) => [k, process.env[k]]));
@@ -133,3 +137,96 @@ function emptyDist(): string {
   Bun.write(join(dir, "index.html"), "<!doctype html><title>t</title>");
   return dir;
 }
+
+describe("gh sync loop hosted by boot (plan AC3 wiring)", () => {
+  // hermetic: temp db, stub gh that appends its args to a marker file and fails —
+  // the sync never needs real gh, and a failure pass writes nothing
+  let dir = "";
+  let dbFile = "";
+  let marker = "";
+  let stub = "";
+  let saved: Record<string, string | undefined> = {};
+  /** Stop fns from the current boot — drained before afterEach rmSync'd the db. */
+  let stops: Array<() => void> = [];
+
+  const bootHermetic = (): Promise<{ stopAutoReview: () => void; stopAutoArchive: () => void; stopGhSync: () => void }> =>
+    boot({ port: 0, probePort: probeFree, checkHealth: health(null), autoReview: false, autoArchive: false, dist: emptyDist() });
+
+  const teardown = (): void => {
+    app.stop();
+    for (const stop of stops) stop();
+    stops = [];
+  };
+
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "kanban-boot-gh-")));
+    dbFile = join(dir, "t.db");
+    marker = join(dir, "gh-calls.log");
+    stub = join(dir, "fake-gh");
+    Bun.write(stub, `#!/bin/sh\necho "$*" >> "${marker}"\nexit 1\n`);
+    chmodSync(stub, 0o755);
+    saved = {
+      KANBAN_DB: process.env.KANBAN_DB,
+      KANBAN_GH_BIN: process.env.KANBAN_GH_BIN,
+      KANBAN_GH_SYNC_MS: process.env.KANBAN_GH_SYNC_MS,
+      // the 4600 server's ambient env must never leak in: an agent loop or a
+      // share flag here would spawn pi sessions / bind-share from bun test
+      KANBAN_AUTO_REVIEW: process.env.KANBAN_AUTO_REVIEW,
+      KANBAN_SHARE_PORT: process.env.KANBAN_SHARE_PORT,
+      KANBAN_SHARE_TOKEN: process.env.KANBAN_SHARE_TOKEN,
+      KANBAN_SHARE_FORCE: process.env.KANBAN_SHARE_FORCE,
+    };
+    delete process.env.KANBAN_AUTO_REVIEW;
+    delete process.env.KANBAN_SHARE_PORT;
+    delete process.env.KANBAN_SHARE_TOKEN;
+    delete process.env.KANBAN_SHARE_FORCE;
+    process.env.KANBAN_DB = dbFile;
+    process.env.KANBAN_GH_BIN = stub;
+  });
+
+  afterEach(() => {
+    teardown();
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("KANBAN_GH_SYNC_MS=0 skips the loop — the stub gh is never spawned", async () => {
+    process.env.KANBAN_GH_SYNC_MS = "0";
+    const handle = await bootHermetic();
+    stops.push(handle.stopAutoReview, handle.stopAutoArchive, handle.stopGhSync);
+    expect(typeof handle.stopGhSync).toBe("function");
+    await new Promise((r) => setTimeout(r, 150));
+    expect(existsSync(marker)).toBe(false); // zero gh spawns
+  });
+
+  test("default ms boots the loop, syncs once, and stops cleanly", async () => {
+    delete process.env.KANBAN_GH_SYNC_MS;
+    const add = Bun.spawnSync(["bun", join(root, "src/cli.ts"), "add", "boot gh card", "--json"], {
+      cwd: root,
+      env: { ...process.env, KANBAN_GH_SYNC_MS: "0", NO_COLOR: "1" },
+      stdout: "pipe",
+    });
+    const id = (JSON.parse(new TextDecoder().decode(add.stdout)) as Task).id;
+    const attach = Bun.spawnSync(["bun", join(root, "src/cli.ts"), "attach", id, "https://github.com/o/r/pull/12"], {
+      cwd: root,
+      env: { ...process.env, KANBAN_GH_SYNC_MS: "0", NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(attach.exitCode).toBe(0);
+    expect(new TextDecoder().decode(attach.stderr)).toBe("");
+
+    const dist = emptyDist();
+    const handle = await bootHermetic();
+    stops.push(handle.stopAutoReview, handle.stopAutoArchive, handle.stopGhSync);
+    // the immediate pass hits the stub (which exits 1 — a failed fetch writes
+    // nothing); the marker file is the proof the loop ran
+    for (let i = 0; i < 100 && !existsSync(marker); i++) await new Promise((r) => setTimeout(r, 20));
+    expect(existsSync(marker)).toBe(true);
+    expect(await readFileSync(marker, "utf8")).toContain("pr view");
+    rmSync(dist, { recursive: true, force: true });
+  });
+});
