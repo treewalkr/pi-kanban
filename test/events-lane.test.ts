@@ -7,16 +7,24 @@ import { KanbanDb } from "../src/db";
 
 let dir = "";
 let db: KanbanDb;
+let savedNotifyEnv: string | undefined;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "kanban-events-lane-"));
   db = new KanbanDb(join(dir, "t.db"));
+  savedNotifyEnv = process.env.KANBAN_OSASCRIPT_NOTIFY;
+  delete process.env.KANBAN_OSASCRIPT_NOTIFY;
 });
 
 afterEach(() => {
+  if (savedNotifyEnv === undefined) delete process.env.KANBAN_OSASCRIPT_NOTIFY;
+  else process.env.KANBAN_OSASCRIPT_NOTIFY = savedNotifyEnv;
   db.close();
   rmSync(dir, { recursive: true, force: true });
 });
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const notificationCopy = (title: string, taskId: string) => `${title} · ${taskId} entered Review`;
 
 /** A raw Response body has no client-side SSE parsing — split the stream into SSE messages ourselves. */
 function sseParser() {
@@ -121,4 +129,62 @@ test("CLI-side writes (separate connection) stream lane events", async () => {
   expect(payload.toLaneId).toBe("review");
   expect(payload.cause).toBe("mv");
   await reader.cancel();
+});
+
+test("osascript seam fires once per review entry only when opted in with no subscribers", async () => {
+  // (a) opted in, no SSE subscriber → exactly one call with the exact copy
+  process.env.KANBAN_OSASCRIPT_NOTIFY = "1";
+  {
+    const calls: Array<[string, string]> = [];
+    const task = db.createTask({ title: "attention" });
+    const app = createApp(db, { notify: (t, b) => calls.push([t, b]) });
+    await patch(app, task.id, { lane: "review" });
+    await sleep(400); // flush coalesces at 100 ms
+    expect(calls).toEqual([["kanban", notificationCopy("attention", task.id)]]);
+  }
+
+  // (b) same env but an open /events subscriber → no call
+  {
+    const calls: Array<[string, string]> = [];
+    const task = db.createTask({ title: "watched" });
+    const app = createApp(db, { notify: (t, b) => calls.push([t, b]) });
+    const { reader } = await subscribe(app);
+    await patch(app, task.id, { lane: "review" });
+    await sleep(400);
+    expect(calls).toEqual([]);
+    await reader.cancel();
+  }
+
+  // (c) env unset, no subscriber → no call
+  delete process.env.KANBAN_OSASCRIPT_NOTIFY;
+  {
+    const calls: Array<[string, string]> = [];
+    const task = db.createTask({ title: "quiet" });
+    const app = createApp(db, { notify: (t, b) => calls.push([t, b]) });
+    await patch(app, task.id, { lane: "review" });
+    await sleep(400);
+    expect(calls).toEqual([]);
+  }
+
+  // (d) env set, no subscriber, but the move lands in "done" → no call
+  process.env.KANBAN_OSASCRIPT_NOTIFY = "1";
+  {
+    const calls: Array<[string, string]> = [];
+    const task = db.createTask({ title: "finished" });
+    const app = createApp(db, { notify: (t, b) => calls.push([t, b]) });
+    await patch(app, task.id, { lane: "done" });
+    await sleep(400);
+    expect(calls).toEqual([]);
+  }
+
+  // (e) long titles truncate to 80 chars + ellipsis
+  {
+    const calls: Array<[string, string]> = [];
+    const longTitle = "x".repeat(120);
+    const task = db.createTask({ title: longTitle });
+    const app = createApp(db, { notify: (t, b) => calls.push([t, b]) });
+    await patch(app, task.id, { lane: "review" });
+    await sleep(400);
+    expect(calls).toEqual([["kanban", notificationCopy("x".repeat(80) + "…", task.id)]]);
+  }
 });

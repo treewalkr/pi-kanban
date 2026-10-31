@@ -65,6 +65,27 @@ function createChangeBus(
   };
 }
 
+/** Card title for notification copy: 80 chars max, `…` marks truncation. */
+function truncateForNotification(title: string): string {
+  return title.length > 80 ? title.slice(0, 80) + "…" : title;
+}
+
+/**
+ * macOS-only fallback for when no board tab is open. JSON.stringify escapes `"` and
+ * `\\`, which AppleScript honors — card titles cannot break out of the string literal.
+ */
+function defaultNotify(title: string, body: string): void {
+  if (process.platform !== "darwin") return;
+  try {
+    Bun.spawn(
+      ["osascript", "-e", `display notification ${JSON.stringify(body)} with title ${JSON.stringify(title)}`],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+  } catch (err) {
+    console.warn("[notify] osascript failed:", err);
+  }
+}
+
 export const createApp = (
   db: KanbanDb,
   opts: {
@@ -72,8 +93,11 @@ export const createApp = (
     onServeRestart?: () => Promise<void>;
     sessions?: () => number;
     filesRoot?: string;
+    notify?: (title: string, body: string) => void; // test seam for the osascript fallback
   } = {}, // test seams for /restart and /files
 ) => {
+  const notify = opts.notify ?? defaultNotify;
+  const osascriptNotify = process.env.KANBAN_OSASCRIPT_NOTIFY === "1"; // opt-in, read once
   const laneCursor = { rowid: db.maxLaneEventRowid() }; // boot at the tail — history never replays
   const bus = createChangeBus(
     () => db.maxLaneEventRowid(), // join mark: anything already in the table is history, even if not yet flushed
@@ -81,6 +105,15 @@ export const createApp = (
       const entries = db.laneEventsAfter(laneCursor.rowid);
       if (entries.length > 0) laneCursor.rowid = entries[entries.length - 1].rowid;
       return entries.filter((e) => e.cardTitle !== null); // deleted cards carry no payload
+    },
+    // server-side fallback for when no board tab is open: announce review entries locally
+    (laneEvents, subscribers) => {
+      if (!osascriptNotify || subscribers > 0) return;
+      for (const e of laneEvents) {
+        if (e.toLaneId === "review" && e.cardTitle !== null) {
+          notify("kanban", `${truncateForNotification(e.cardTitle)} · ${e.taskId} entered Review`);
+        }
+      }
     },
   );
   const booted = Date.now(); // lets clients tell an old server from a restarted one
