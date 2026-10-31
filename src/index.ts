@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { app } from "./app";
+import { startAutoArchiveSweep } from "./autoarchive";
 import { startAutoReview } from "./autoreview";
 import { KanbanDb, defaultDbPath } from "./db";
 import { registerShutdown, runShutdown } from "./shutdown";
@@ -39,6 +40,8 @@ export interface BootOptions {
   /** Skip the occupied-port guard — used by the self-respawn restart flow. */
   sharePort?: boolean;
   autoReview?: boolean;
+  /** Done-lane auto-archive sweep; default on, KANBAN_AUTO_ARCHIVE=0 opts out (tests must). */
+  autoArchive?: boolean;
   /** Overrides the dist directory (tests point this at a temp dir). */
   dist?: string;
   /** Test seam for the TCP probe (default: portInUse). */
@@ -90,7 +93,7 @@ function envMs(name: string): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: () => void }> {
+export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: () => void; stopAutoArchive: () => void }> {
   const port = opts.port ?? Number(process.env.PORT ?? 4600);
 
   // single-server guard: SO_REUSEPORT would stack N silent listeners on one
@@ -167,6 +170,20 @@ export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: ()
     registerShutdown(stopAutoReview);
   }
 
+  // board hygiene, not agent work — defaults on (0 disables via the setting);
+  // KANBAN_AUTO_ARCHIVE=0 is the process-level opt-out boot tests rely on
+  let stopAutoArchive: () => void = () => {};
+  if (opts.autoArchive ?? process.env.KANBAN_AUTO_ARCHIVE !== "0") {
+    const sweepIntervalMs = envMs("KANBAN_AUTO_ARCHIVE_INTERVAL_MS");
+    const sweep = startAutoArchiveSweep({
+      db: new KanbanDb(defaultDbPath()),
+      log: (message) => console.log(`[autoarchive] ${message}`),
+      ...(sweepIntervalMs !== undefined ? { intervalMs: sweepIntervalMs } : {}),
+    });
+    stopAutoArchive = sweep.stop;
+    registerShutdown(stopAutoArchive);
+  }
+
   // graceful signals: terminate agent children, release leases, then exit —
   // a killed server must not leave orphans writing to the board
   for (const sig of ["SIGTERM", "SIGINT"] as const) {
@@ -178,7 +195,7 @@ export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: ()
     });
   }
 
-  return { stopAutoReview };
+  return { stopAutoReview, stopAutoArchive };
 }
 
 if (import.meta.main) {

@@ -32,10 +32,15 @@ describe("boot() occupied-port guard (seams per plan AC3)", () => {
   // which would start a real agent loop against the production DB from inside
   // bun test — the 10/30 exit-143 session deaths)
   const SCRUB_VARS = ["KANBAN_SHARE_PORT", "KANBAN_SHARE_TOKEN", "KANBAN_SHARE_FORCE", "KANBAN_AUTO_REVIEW"] as const;
+  // auto-archive defaults ON, so scrubbing is not enough: boot tests must force
+  // KANBAN_AUTO_ARCHIVE=0 or an ungated sweep would open defaultDbPath() — the
+  // production board — from inside bun test
+  const FORCED_VARS = ["KANBAN_AUTO_ARCHIVE"] as const;
   let savedEnv: Record<string, string | undefined> = {};
   beforeEach(() => {
-    savedEnv = Object.fromEntries(SCRUB_VARS.map((k) => [k, process.env[k]]));
+    savedEnv = Object.fromEntries([...SCRUB_VARS, ...FORCED_VARS].map((k) => [k, process.env[k]]));
     for (const k of SCRUB_VARS) delete process.env[k];
+    for (const k of FORCED_VARS) process.env[k] = "0";
   });
   afterEach(() => {
     for (const [k, v] of Object.entries(savedEnv)) {
@@ -78,7 +83,7 @@ describe("boot() occupied-port guard (seams per plan AC3)", () => {
   test("free port binds (first accept test — app stopped after)", async () => {
     const dist = emptyDist();
     try {
-      await boot({ port: 0, probePort: probeFree, checkHealth: health(null), dist });
+      await boot({ port: 0, probePort: probeFree, checkHealth: health(null), autoArchive: false, dist });
       const port = app.server!.port;
       expect(port).toBeGreaterThan(0);
       // real request through the bound socket — same stack production uses
@@ -95,7 +100,7 @@ describe("boot() occupied-port guard (seams per plan AC3)", () => {
   test("respawn race: occupant dies between probe and health check → bind anyway", async () => {
     const dist = emptyDist();
     try {
-      await boot({ port: 0, sharePort: true, probePort: probeOccupied, checkHealth: health(null), dist });
+      await boot({ port: 0, sharePort: true, probePort: probeOccupied, checkHealth: health(null), autoArchive: false, dist });
       expect(app.server!.port).toBeGreaterThan(0);
     } finally {
       app.stop();
@@ -111,6 +116,7 @@ describe("boot() occupied-port guard (seams per plan AC3)", () => {
         sharePort: true,
         probePort: probeOccupied,
         checkHealth: health({ ok: true, share: "granted" }),
+        autoArchive: false,
         dist,
       });
       expect(app.server!.port).toBeGreaterThan(0);
