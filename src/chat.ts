@@ -499,11 +499,11 @@ export class ChatManager {
 
   /** Resolve task → get-or-create one alive handle per card (concurrent gets share one creation). */
   async get(cardId: string): Promise<ChatHandle> {
-    const alive = this.handles.get(cardId);
+    const task = this.db.resolveTask(cardId); // 404 for unknown/ambiguous ids, before any map lookup
+    const alive = this.handles.get(task.id);
     if (alive) return alive;
-    const pending = this.inflight.get(cardId);
+    const pending = this.inflight.get(task.id);
     if (pending) return pending;
-    const task = this.db.resolveTask(cardId); // 404 for unknown/ambiguous ids
     const creation = this.buildHandle(task).then((handle) => {
       this.handles.set(task.id, handle);
       if (!this.shutdownRegistered) {
@@ -512,8 +512,8 @@ export class ChatManager {
       }
       return handle;
     });
-    creation.finally(() => this.inflight.delete(cardId)).catch(() => {});
-    this.inflight.set(cardId, creation);
+    creation.finally(() => this.inflight.delete(task.id)).catch(() => {});
+    this.inflight.set(task.id, creation);
     return creation;
   }
 

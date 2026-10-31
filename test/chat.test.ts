@@ -173,6 +173,17 @@ test("prompt resolves on the preflight callback instead of awaiting the run", as
   await manager.disposeAll();
 });
 
+test("get keys handles by the resolved task id: a unique prefix reuses the live handle", async () => {
+  const card = db.createTask({ title: "prefix-me" });
+  const { factory } = factorySpy([]);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+  const full = await manager.get(card.id);
+  const viaPrefix = await manager.get(card.id.slice(0, 4)); // unique prefix of the id
+  expect(viaPrefix).toBe(full);
+  expect(manager.sessionCount()).toBe(1);
+  await manager.disposeAll();
+});
+
 test("idle expiry disposes; a streaming session never idles out", async () => {
   let now = 1_000_000;
   const idleOne = db.createTask({ title: "idle-one" });
