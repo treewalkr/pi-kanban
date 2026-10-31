@@ -31,10 +31,15 @@ Numbered, each with its target files and the commit it ends in. Small, ordered,
 each leaving the suite green.
 
 ### Test plan
-A table mapping every acceptance criterion to at least one test:
+A table mapping every acceptance criterion to at least one test. Every entry
+names its seam: the public interface the test lives at (CLI command or flag
+with its observable output, HTTP route with its response shape, exported
+function or module API, or a db.ts query function) plus a short why — prefer
+the highest seam that can observe the behavior, and never name an internal
+helper. `N/A — reason` is allowed only when no public seam observes it:
 
-| AC | Type (unit / integration / e2e) | File | Test name | Asserts | Command |
-|----|------|------|-----------|---------|---------|
+| AC | Type (unit / integration / e2e) | Seam (public interface — why) | File | Test name | Asserts | Command |
+|----|------|------|------|-----------|---------|---------|
 
 Then the full-suite command(s) that must be green before handoff.
 
@@ -79,6 +84,7 @@ Block the plan if any of these hold:
 - A template section is missing, empty, or `N/A` without a reason.
 - An acceptance criterion has no test in the test plan.
 - A test entry is vague ("add tests for X") instead of naming file, test, assertion, and command.
+- A test entry names no seam, a vague seam ("unit tests" with no interface), or an internal helper instead of a public interface — or its seam is `N/A` without a reason.
 - An interface or contract is left loose where two builders would diverge (path, signature, schema, route, flag, error message).
 - A cited path, function, or API does not exist in the repo, or the plan contradicts AGENTS.md.
 - A step has no target file, or steps are out of order (a step depends on a later one).

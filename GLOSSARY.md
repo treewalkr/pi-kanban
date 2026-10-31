@@ -28,6 +28,12 @@ _Avoid_: Message type, event type, note type
 A versioned implementation contract attached to a card in the `Plan` lane that two builders can follow to produce the same behavior.
 _Avoid_: Spec, design doc, PRD, blueprint
 
+**Seam**:
+The public interface a test lives at — CLI surface, HTTP route, exported
+function, or query function — named in the plan before the test is written;
+internal helpers are never seams.
+_Avoid_: Touchpoint, integration point, test surface
+
 **Brief**:
 The complete pickup view of a card combining its note, latest plan, attached file inventory, and full thread in one read.
 _Avoid_: Summary, context dump, dossier

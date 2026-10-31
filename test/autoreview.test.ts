@@ -681,6 +681,7 @@ describe("auto-review", () => {
       "**Thread**:",
       "**Comment kind**:",
       "**Plan**:",
+      "**Seam**:",
       "**Brief**:",
       "**Gate**:",
       "**Planner**",
@@ -2204,6 +2205,13 @@ describe("auto-plan", () => {
     expect(headings).toEqual([...PLAN_SECTIONS]);
     expect(PLAN_TEMPLATE).toContain("## Review checklist");
     expect(PLAN_TEMPLATE).toContain("N/A — reason");
+    // xjwxd — every test entry lives at a named public seam
+    expect(templatePart).toContain(
+      "| AC | Type (unit / integration / e2e) | Seam (public interface — why) | File | Test name | Asserts | Command |",
+    );
+    expect(templatePart).toContain("highest seam that can observe the behavior");
+    expect(templatePart).toContain("`N/A — reason` is allowed only when no public seam");
+    expect(PLAN_TEMPLATE.split(/^## Review checklist$/m)[1]!).toContain("names no seam");
   });
 
   test("plannerPrompt embeds the template and makes the planner self-check against the checklist", () => {
@@ -2211,6 +2219,7 @@ describe("auto-plan", () => {
     expect(prompt).toContain(PLAN_TEMPLATE.trim());
     for (const section of PLAN_SECTIONS) expect(prompt).toContain(`### ${section}`);
     expect(prompt).toContain("Review checklist");
+    expect(prompt).toContain("Seam (public interface — why)");
   });
 
   test("SKILL.md auto-plan section documents failed-review routing", () => {
