@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { BoardStatsPayload, Task } from "../src/db";
-import { cycleChip, laneDwellLabel } from "../web/src/lib/statsview";
+import type { BoardStatsPayload, Lane, Task } from "../src/db";
+import { cycleChip, laneCycleRows, laneDwellLabel, throughputBars } from "../web/src/lib/statsview";
 
 function task(partial: Partial<Task> & { id: string; title: string }): Task {
   return {
@@ -94,4 +94,57 @@ test("laneDwellLabel + cycleChip derive labels and stay null-safe", () => {
   // Missing card in stats returns null
   const tUnknown = task({ id: "t3", title: "Unknown" });
   expect(cycleChip(payload, tUnknown)).toBeNull();
+});
+
+function statsPayload(throughput: { weekStart: number; done: number }[], laneDwell: BoardStatsPayload["board"]["laneDwell"]): BoardStatsPayload {
+  return {
+    board: { wip: 0, throughput, laneDwell, projects: [], cycleAvgMs: null },
+    cards: {},
+    generatedAt: Date.now(),
+  };
+}
+
+function lane(id: string, name = id): Lane {
+  return { id, name, description: "", position: 0, fixed: 0, wipLimit: null };
+}
+
+test("throughputBars normalizes heights and empty-safes", () => {
+  // null stats -> []
+  expect(throughputBars(null)).toEqual([]);
+
+  // [3,5,0,2,0,0,0,0] weeks -> 8 bars in payload order, heights normalized to max (5)
+  const weeks = [3, 5, 0, 2, 0, 0, 0, 0].map((done, i) => ({ weekStart: i, done }));
+  const bars = throughputBars(statsPayload(weeks, {}));
+  expect(bars).toHaveLength(8);
+  expect(bars.map((b) => b.done)).toEqual([3, 5, 0, 2, 0, 0, 0, 0]);
+  expect(bars.map((b) => b.heightPct)).toEqual([60, 100, 0, 40, 0, 0, 0, 0]);
+
+  // all-zero window -> 8 flat bars
+  const zeroWeeks = Array.from({ length: 8 }, (_, i) => ({ weekStart: i, done: 0 }));
+  const flat = throughputBars(statsPayload(zeroWeeks, {}));
+  expect(flat).toHaveLength(8);
+  expect(flat.every((b) => b.heightPct === 0 && b.done === 0)).toBe(true);
+});
+
+test("laneCycleRows orders by board lanes and normalizes widths", () => {
+  expect(laneCycleRows(null, [])).toEqual([]);
+
+  // laneDwell keyed out of lane order; `plan` and `done` never visited
+  const payload = statsPayload(
+    [],
+    {
+      implement: { avgMs: 300_000, cards: 4 },
+      backlog: { avgMs: 150_000, cards: 6 },
+    },
+  );
+  const lanes = [lane("backlog"), lane("plan"), lane("implement"), lane("done")];
+
+  const rows = laneCycleRows(payload, lanes);
+  // backlog first (board order, not key order), unvisited lanes dropped
+  expect(rows.map((r) => r.laneId)).toEqual(["backlog", "implement"]);
+  expect(rows[0]).toMatchObject({ name: "backlog", avgMs: 150_000, cards: 6, widthPct: 50 });
+  expect(rows[1]).toMatchObject({ name: "implement", avgMs: 300_000, cards: 4, widthPct: 100 });
+
+  // lane present in dwell but absent from `lanes` is dropped
+  expect(laneCycleRows(payload, [lane("plan")])).toEqual([]);
 });
