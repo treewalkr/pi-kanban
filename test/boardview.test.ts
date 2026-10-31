@@ -356,6 +356,168 @@ test("board.elaborate POSTs to /tasks/:id/elaborate then polls activity and refr
 
 
 
+test("board.addBlocker PATCHes the full new set, refreshes, and flips isBlocked", async () => {
+  const originalFetch = globalThis.fetch;
+  const subject = makeTask({ id: "t-sub", title: "subject card", laneId: "backlog" });
+  const existing = makeTask({ id: "t-old", title: "existing blocker", laneId: "backlog" });
+  const added = makeTask({ id: "t-new", title: "new blocker", laneId: "plan" });
+  let capturedUrl: string | undefined;
+  let capturedInit: RequestInit | undefined;
+
+  try {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (method === "PATCH") {
+        capturedUrl = url;
+        capturedInit = init;
+        return new Response(JSON.stringify(subject), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (new URL(url).pathname === "/board") {
+        return new Response(
+          JSON.stringify({
+            lanes: [makeLane("backlog", "Backlog"), makeLane("plan", "Plan")],
+            tasks: [subject, existing, added],
+            plans: {},
+            waiting: {},
+            blockedBy: { "t-sub": ["t-old", "t-new"] },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    }) as typeof fetch;
+
+    board.lanes = [makeLane("backlog", "Backlog"), makeLane("plan", "Plan")];
+    board.tasks = [subject, existing, added];
+    board.blockedBy = { "t-sub": ["t-old"] };
+    board.error = "";
+
+    const err = await board.addBlocker("t-sub", "t-new");
+
+    expect(err).toBeNull();
+    expect(new URL(capturedUrl!).pathname).toBe("/tasks/t-sub");
+    expect(capturedInit?.method).toBe("PATCH");
+    expect(JSON.parse(capturedInit?.body as string)).toEqual({ blockedBy: ["t-old", "t-new"] });
+
+    // the refreshed board payload lands: the edge exists and the card is blocked
+    expect(board.blockedBy["t-sub"]).toEqual(["t-old", "t-new"]);
+    expect(board.isBlocked("t-sub")).toBe(true);
+    expect(board.error).toBe("");
+  } finally {
+    globalThis.fetch = originalFetch;
+    board.lanes = [];
+    board.tasks = [];
+    board.blockedBy = {};
+  }
+});
+
+test("board.removeBlocker PATCHes the remaining set and clears the blocked state", async () => {
+  const originalFetch = globalThis.fetch;
+  const subject = makeTask({ id: "t-sub", title: "subject card", laneId: "backlog" });
+  const blocker = makeTask({ id: "t-blk", title: "the blocker", laneId: "backlog" });
+  const other = makeTask({ id: "t-oth", title: "stays", laneId: "done" });
+  let capturedInit: RequestInit | undefined;
+
+  try {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (method === "PATCH") {
+        capturedInit = init;
+        return new Response(JSON.stringify(subject), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (new URL(url).pathname === "/board") {
+        return new Response(
+          JSON.stringify({
+            lanes: [makeLane("backlog", "Backlog"), makeLane("done", "Done")],
+            tasks: [subject, blocker, other],
+            plans: {},
+            waiting: {},
+            blockedBy: { "t-sub": ["t-oth"] },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    }) as typeof fetch;
+
+    board.lanes = [makeLane("backlog", "Backlog"), makeLane("done", "Done")];
+    board.tasks = [subject, blocker, other];
+    board.blockedBy = { "t-sub": ["t-blk", "t-oth"] };
+    expect(board.isBlocked("t-sub")).toBe(true); // t-blk is outside done/archive
+
+    const err = await board.removeBlocker("t-sub", "t-blk");
+
+    expect(err).toBeNull();
+    expect(JSON.parse(capturedInit?.body as string)).toEqual({ blockedBy: ["t-oth"] });
+
+    // remaining edge points at a done card, so the card is no longer blocked
+    expect(board.blockedBy["t-sub"]).toEqual(["t-oth"]);
+    expect(board.isBlocked("t-sub")).toBe(false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    board.lanes = [];
+    board.tasks = [];
+    board.blockedBy = {};
+  }
+});
+
+test("blocker mutations return the 409/404 message inline, never board.error", async () => {
+  const originalFetch = globalThis.fetch;
+  const subject = makeTask({ id: "t-sub", title: "subject card", laneId: "backlog" });
+  const cycleMsg = "dependency cycle detected: card 't-sub' cannot be blocked by 't-dep'";
+  let patchCalls = 0;
+  let boardCalls = 0;
+
+  try {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (method === "PATCH") {
+        patchCalls++;
+        return new Response(JSON.stringify({ error: cycleMsg, code: "conflict" }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (new URL(url).pathname === "/board") {
+        boardCalls++;
+        return new Response(JSON.stringify({ lanes: [], tasks: [subject], plans: {}, waiting: {}, blockedBy: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    }) as typeof fetch;
+
+    board.tasks = [subject];
+    board.blockedBy = {};
+    board.error = "";
+
+    // 409 cycle: message comes back for inline rendering; the global bar stays empty
+    expect(await board.addBlocker("t-sub", "t-dep")).toBe(cycleMsg);
+    expect(board.error).toBe("");
+    expect(boardCalls).toBe(0); // a failed write refreshes nothing
+
+    // 409 on remove too: the edge is present locally, so the PATCH goes out and fails
+    board.blockedBy = { "t-sub": ["t-dep"] };
+    expect(await board.removeBlocker("t-sub", "t-dep")).toBe(cycleMsg);
+
+    // no-op add (already a blocker) and no-op remove (absent) never PATCH
+    const callsAfterFirst = patchCalls;
+    expect(await board.addBlocker("t-sub", "t-dep")).toBeNull();
+    board.blockedBy = {};
+    expect(await board.removeBlocker("t-sub", "t-dep")).toBeNull();
+    expect(patchCalls).toBe(callsAfterFirst);
+  } finally {
+    globalThis.fetch = originalFetch;
+    board.tasks = [];
+    board.blockedBy = {};
+    board.error = "";
+  }
+});
+
 test("tags derived: distinct, sorted, from all cards", () => {
   board.tasks = [
     makeTask({ id: "t1", title: "a", laneId: "backlog", tags: ["ui", "review-loop"] }),

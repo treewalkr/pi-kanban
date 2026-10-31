@@ -457,6 +457,36 @@ class BoardStore {
     await this.refresh();
   }
 
+  /** Append one blocker (full-set replace PATCH). Returns null on success, the
+   *  API error message (409 cycle/self, 404 unknown ref) on failure — inline
+   *  surfacing, not board.error. No-op returning null when already a blocker. */
+  async addBlocker(id: string, blockerId: string): Promise<string | null> {
+    const current = this.blockedBy[id] ?? [];
+    if (current.includes(blockerId)) return null;
+    const { error } = await api.tasks({ id }).patch({ blockedBy: [...current, blockerId] });
+    if (error) {
+      const value = error.value as { error?: string } | undefined;
+      return value?.error ?? "request failed";
+    }
+    await this.refresh();
+    return null;
+  }
+
+  /** Remove one blocker edge (full-set replace PATCH, remaining ids). Returns
+   *  null on success, the error message on failure. No-op returning null when
+   *  absent. */
+  async removeBlocker(id: string, blockerId: string): Promise<string | null> {
+    const current = this.blockedBy[id] ?? [];
+    if (!current.includes(blockerId)) return null;
+    const { error } = await api.tasks({ id }).patch({ blockedBy: current.filter((b) => b !== blockerId) });
+    if (error) {
+      const value = error.value as { error?: string } | undefined;
+      return value?.error ?? "request failed";
+    }
+    await this.refresh();
+    return null;
+  }
+
   async moveTask(id: string, laneId: string, index?: number): Promise<void> {
     await this.updateTask(id, { lane: laneId, index });
   }

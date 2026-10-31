@@ -2642,7 +2642,7 @@ button:focus-visible {
   filter: saturate(0.7);
 }
 
-/* dependency chips on the card detail (read-only; edges are edited via the CLI) */
+/* dependency chips on the card detail (blocker edges managed here; links too) */
 .detail-deps {
   display: flex;
   flex-direction: column;
@@ -2757,6 +2757,72 @@ button:focus-visible {
 .dep-add-btn:hover {
   color: var(--text);
   background: var(--bg-hover);
+}
+
+/* the add-blocker picker: input + absolute dropdown anchored below it */
+.blocker-add {
+  position: relative;
+}
+
+.dep-picker-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 260px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 20;
+}
+
+.dep-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dep-option.active,
+.dep-option[aria-selected="true"] {
+  background: var(--bg-hover);
+}
+
+.dep-option .id {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.dep-option .t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dep-option .crumb {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.dep-error {
+  color: var(--error);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 /* the editor's priority seg: radios stay in the a11y tree but out of sight */
