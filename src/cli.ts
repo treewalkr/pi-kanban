@@ -2,8 +2,9 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
-import { c, commentLine, commentThread, fileSize, laneList, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
+import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
 import { searchBoard } from "./search";
+import { cardFileDiff } from "./diff";
 
 const VERSION = "0.6.0";
 
@@ -22,6 +23,7 @@ usage:
   kanban attach <id> <file> [--as <name>]   (default name: plan; re-attach versions; show prints the latest)
   kanban files <id> [--json]                  (card files: name · vN · size · source)
   kanban cat <id> <name> [--v <n>]            (print a file's content, latest or a given version)
+  kanban diff <id> <name> [--from <n>] [--to <n>]  (unified diff between versions; default: the latest pair)
   kanban ws <id> <branch>                    (record/clear where the card's implementation lives)
   kanban comment <id> <text…> [--author <name>] [--kind <comment|review|handoff|question>]
   kanban comments <id>
@@ -65,7 +67,7 @@ interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v"]);
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to"]);
 const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
@@ -454,6 +456,30 @@ async function main(): Promise<number> {
             "not-found",
           );
         out(pick.content); // raw content, pipeable
+        return 0;
+      }
+
+      case "diff": {
+        const [idRef, name] = positional;
+        if (!idRef || !name)
+          throw new KanbanError("usage: kanban diff <id> <name> [--from <n>] [--to <n>]", "invalid");
+        const parseFlag = (key: string): number | undefined => {
+          const raw = str(flags, key);
+          if (raw === undefined) return undefined;
+          if (!/^\d+$/.test(raw))
+            throw new KanbanError(`--${key} must be a positive integer (got '${raw}')`, "invalid");
+          return Number(raw);
+        };
+        const d = cardFileDiff(db, idRef, name, parseFlag("from"), parseFlag("to"));
+        if (json) jsonOut(d);
+        else if (d.patch === "")
+          out(`${c.bold(d.name)} ${c.dim(`v${d.from.version} → v${d.to.version} — no changes`)}`);
+        else {
+          out(
+            `${c.bold(d.name)} ${c.dim(`v${d.from.version} → v${d.to.version}`)}${d.to.source ? c.dim(` · ${d.to.source}`) : ""}`,
+          );
+          out(colorizePatch(d.patch));
+        }
         return 0;
       }
 

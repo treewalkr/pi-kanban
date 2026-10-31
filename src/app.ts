@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type Lane, type Task, type WorkerPool } from "./db";
+import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
@@ -354,6 +355,23 @@ export const createApp = (
         }
       },
       { params: t.Object({ id: t.String(), name: t.String() }) },
+    )
+    .get(
+      "/tasks/:id/files/:name/diff",
+      ({ params, query, status }): CardFileDiff => {
+        try {
+          return cardFileDiff(db, params.id, params.name, query.from, query.to);
+        } catch (e) {
+          return fail<CardFileDiff>(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String(), name: t.String() }),
+        query: t.Object({
+          from: t.Optional(t.Numeric({ minimum: 1 })),
+          to: t.Optional(t.Numeric({ minimum: 1 })),
+        }),
+      },
     )
     .get(
       "/tasks/:id/comments",

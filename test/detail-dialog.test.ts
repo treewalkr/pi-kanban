@@ -114,3 +114,35 @@ describe("card files section (plan pinned + named files, per-file version picker
     expect(rule!.style.overflowX).toBe("auto");
   });
 });
+
+describe("card file diff view (toggle + patch render)", () => {
+  test("diff toggle and patch rendering wired", () => {
+    expect(taskDetailSource).toContain("api.tasks({ id: task.id }).files({ name: kind }).diff.get(");
+    expect(taskDetailSource).toContain("parseUnifiedDiff(");
+    expect(taskDetailSource).toContain("collapseDiff(");
+    expect(taskDetailSource).toContain('class="card-diff"');
+    expect(taskDetailSource).toContain('class="diff-empty"');
+
+    // a toggle per surface: plan section + every named card file, each keeping its section open
+    const toggles = taskDetailSource.match(/class="diff-toggle"/g) ?? [];
+    expect(toggles.length).toBeGreaterThanOrEqual(2);
+    const toggleStops = taskDetailSource.match(
+      /class="diff-toggle"[\s\S]*?onclick=\{\(e\) => \{\s*e\.stopPropagation\(\);/g,
+    ) ?? [];
+    expect(toggleStops.length).toBe(toggles.length);
+  });
+
+  test("diff toggle styled; diff lines reuse viewer-diff-line (app.css)", () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><head><style>${appCss}</style></head><body></body></html>`);
+    const rules = Array.from(dom.window.document.styleSheets[0].cssRules);
+    const toggle = rules.find(
+      (r) => "selectorText" in r && (r as CSSStyleRule).selectorText === ".diff-toggle",
+    ) as CSSStyleRule | undefined;
+    expect(toggle).toBeDefined();
+
+    const diffLine = rules.find(
+      (r) => "selectorText" in r && (r as CSSStyleRule).selectorText === ".viewer-diff-line",
+    ) as CSSStyleRule | undefined;
+    expect(diffLine).toBeDefined(); // global reuse sanity: card-diff rides the viewer classes
+  });
+});

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Comment } from "../src/db";
 import { searchBoard } from "../src/search";
-import { commentThread, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "../src/render";
+import { commentThread, colorizePatch, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "../src/render";
 
 const dbSearch = (db: KanbanDb, q: string) => searchBoard(db.tasks(), q, db.latestPlans());
 
@@ -323,7 +323,7 @@ describe("commentThread CLI renderer", () => {
       const withFilesOut = stripAnsi(taskDetail(db, card));
       expect(withFilesOut).toContain("files:");
       expect(withFilesOut).toContain("design v1 · 23b · design.md");
-      expect(withFilesOut).toContain("(kanban cat <id> <name> prints one)");
+      expect(withFilesOut).toContain("(kanban cat <id> <name> prints one · kanban diff <id> <name> compares versions)");
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });
@@ -384,4 +384,22 @@ test("listLanes filters by tags AND across repeats and mirrors project", () => {
     db.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("colorizePatch", () => {
+  const patch = "diff --git a/v1 b/v2\nindex 111..222 100644\n--- a/v1\n+++ b/v2\n@@ -1,3 +1,3 @@\n context\n-gone\n+added\n";
+
+  test("colorizePatch passes raw text through without color; prefixes colored with it", () => {
+    const raw = colorizePatch(patch, false);
+    expect(raw).toBe(patch.replace(/\n$/, ""));
+    expect(raw).not.toContain("\x1b[");
+
+    const colorized = colorizePatch(patch, true);
+    expect(colorized).toContain("\x1b[32m+added\x1b[0m");
+    expect(colorized).toContain("\x1b[31m-gone\x1b[0m");
+    expect(colorized).toContain("\x1b[38;2;57;197;207m@@");
+    expect(colorized).toContain("\x1b[2mdiff --git a/v1 b/v2\x1b[0m");
+    expect(colorized).toContain("\x1b[2m--- a/v1\x1b[0m");
+    expect(colorized).toContain("\n context\n");
+  });
 });

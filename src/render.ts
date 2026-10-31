@@ -26,6 +26,23 @@ export function laneColor(index: number): string {
   return LANE_COLORS[index % LANE_COLORS.length];
 }
 
+/** Colorize a unified patch by line prefix (+/-/@@/headers); raw pass-through when color is off. */
+export function colorizePatch(patch: string, color = enabled): string {
+  const lines = patch.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const wrap = (code: string, line: string) => (color ? `\x1b[${code}m${line}\x1b[0m` : line);
+  return lines
+    .map((line) => {
+      if (line.startsWith("diff --git") || line.startsWith("---") || line.startsWith("+++") || line.startsWith("index"))
+        return wrap("2", line);
+      if (line.startsWith("+")) return wrap("32", line);
+      if (line.startsWith("-")) return wrap("31", line);
+      if (line.startsWith("@@")) return wrap("38;2;57;197;207", line); // #39c5cf, same as c.hex
+      return line;
+    })
+    .join("\n");
+}
+
 function truncate(s: string, max: number): string {
   const lines = s.split("\n")[0] ?? "";
   return lines.length > max ? `${lines.slice(0, max - 1)}…` : lines;
@@ -245,7 +262,7 @@ export function taskDetail(db: KanbanDb, task: Task): string {
     for (const f of files) {
       out.push(`  ${f.kind} ${c.dim(`v${f.version} · ${fileSize(f.content.length)}${f.source ? ` · ${f.source}` : ""}`)}`);
     }
-    out.push(c.dim("  (kanban cat <id> <name> prints one)"));
+    out.push(c.dim("  (kanban cat <id> <name> prints one · kanban diff <id> <name> compares versions)"));
   }
   const sessions = db.attachments(task.id, "session");
   if (sessions.length > 0) {

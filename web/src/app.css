@@ -3280,6 +3280,46 @@ button:focus-visible {
   cursor: pointer;
 }
 
+/* per-file diff toggle: picked version vs its predecessor (stopPropagation keeps the section open) */
+.diff-toggle {
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.diff-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.diff-toggle.on {
+  color: var(--bg);
+  background: #39c5cf;
+  border-color: #39c5cf;
+}
+
+.diff-toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* collapsed patch view inside a card-file section — reuses the viewer-diff-* line classes */
+.card-diff {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+}
+
+.diff-empty {
+  margin: 4px 0;
+  color: var(--text-dim);
+}
+
 /* raw (non-markdown) card file content: scrollbar, not wrap */
 .card-file .file-raw {
   margin: 0;
