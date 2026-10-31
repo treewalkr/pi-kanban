@@ -1340,3 +1340,11 @@ test("serve: --agents and --auto-review both set KANBAN_AUTO_REVIEW=1", () => {
     else delete process.env.KANBAN_AUTO_REVIEW;
   }
 });
+
+test("help: serve line shows --agents with --auto-review as deprecated alias", async () => {
+  const res = await cli("help");
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain("kanban serve [--port <n>] [--open] [--agents]");
+  expect(res.stdout).toContain("agents: serve --agents (deprecated alias: --auto-review)");
+  expect(res.stdout).not.toContain("auto-review: serve --auto-review");
+});

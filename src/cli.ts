@@ -43,7 +43,7 @@ usage:
   kanban stats [id]                     (board summary, or one card's lane times / cycle / gate metrics)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
   kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force] | limit <ref> <n|off>
-  kanban serve [--port <n>] [--open] [--auto-review]
+  kanban serve [--port <n>] [--open] [--agents]
   kanban stop [--port <n>]                     (SIGTERM the kanban server; graceful — traces in-flight agents)
   kanban help | version
 
@@ -54,13 +54,14 @@ hierarchy: --parent nests a card (epic → story → subtask, max depth 3).
 threads: comment/handoff/review append to the card thread; brief prints full pickup context.
 waiting: kind-question comments and plan-review passes park the card in the fixed first lane
 "Waiting on you"; any human reply returns it, and the plan gate (approve/reject) works on cards parked from Plan.
-auto-review: serve --auto-review spawns a pi reviewer for cards in Review (thinking max; block → pi-builder works the findings, max 3 cycles; agents configurable in the web ui → ≡).
-auto-plan: the same flag runs a pi planner for cards in Plan — it writes the plan from the shared
-template, asks open questions (kind question) when an answer would change the plan, then hands off
-to a pi plan-reviewer that checks the plan against the template checklist (max 2 block rounds per
-human comment); a passing review parks the card in "Waiting on you", where the human gate is
-kanban approve (arms a plan-build pi-builder) or kanban reject --message (re-plans with the feedback);
-the same loop elaborates newly added cards on request (add --elaborate / the ✨ composer toggle).`;
+agents: serve --agents (deprecated alias: --auto-review) runs the pi agent loop — a reviewer for cards
+in Review (thinking max; block → pi-builder works the findings, max 3 cycles), a planner for cards in
+Plan — it writes the plan from the shared template, asks open questions (kind question) when an answer
+would change the plan, then hands off to a pi plan-reviewer that checks the plan against the template
+checklist (max 2 block rounds per human comment); a passing review parks the card in "Waiting on you",
+where the human gate is kanban approve (arms a plan-build pi-builder) or kanban reject --message
+(re-plans with the feedback); the same loop elaborates newly added cards on request
+(add --elaborate / the ✨ composer toggle). Agents configurable in the web ui → ≡.`;
 
 export interface Parsed {
   flags: Record<string, string | true | string[]>;
@@ -271,7 +272,7 @@ async function main(): Promise<number> {
         else {
           out(taskLine(db, task));
           if (flags["elaborate"]) {
-            out(c.dim("✨ elaboration queued — the auto-agent loop (kanban serve --auto-review) will expand the note"));
+            out(c.dim("✨ elaboration queued — the auto-agent loop (kanban serve --agents) will expand the note"));
           }
         }
         return 0;
@@ -408,7 +409,7 @@ async function main(): Promise<number> {
         db.queueElaboration(task.id);
         if (json) jsonOut(task);
         else {
-          out(`${c.green("✓")} elaboration queued for ${c.dim(task.id)} — runs on the auto-agent loop (kanban serve --auto-review)`);
+          out(`${c.green("✓")} elaboration queued for ${c.dim(task.id)} — runs on the auto-agent loop (kanban serve --agents)`);
         }
         return 0;
       }
