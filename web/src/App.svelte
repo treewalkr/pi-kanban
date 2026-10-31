@@ -200,6 +200,22 @@
         >
           ☉ {board.waitingCount} waiting
         </button>
+        {#if board.tags.length > 0}
+          {#each board.tags as tag (tag)}
+            <button
+              class="tag"
+              class:active={board.tagFilter.includes(tag)}
+              title="filter tag (AND)"
+              onclick={() => {
+                board.tagFilter = board.tagFilter.includes(tag)
+                  ? board.tagFilter.filter((t) => t !== tag)
+                  : [...board.tagFilter, tag];
+              }}
+            >
+              #{tag}
+            </button>
+          {/each}
+        {/if}
       </div>
       <div class="meta">{board.activeCount} tasks</div>
       <button

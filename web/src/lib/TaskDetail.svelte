@@ -246,6 +246,7 @@
       <span class="lane-dot"></span>
       <span class="detail-lane">{laneName}</span>
       {#if me.project}<span class="chip">{me.project}</span>{/if}
+      {#if me.tags.length > 0}{#each me.tags as tag (tag)}<span class="chip tag">#{tag}</span>{/each}{/if}
       {#if board.workspaces[me.id]}
         {@const ws = board.workspaces[me.id]}
         <span class="chip ws" title={ws.path ?? "branch exists — no worktree checked out"}>

@@ -2620,6 +2620,17 @@ button:focus-visible {
   border-color: color-mix(in srgb, #58a6ff 40%, var(--border));
 }
 
+.chip.tag {
+  color: #bc8cff;
+  border-color: color-mix(in srgb, #bc8cff 40%, var(--border));
+}
+
+/* header tag filter chips — same hue as card tag chips, active state via .chips button.active */
+.chips button.tag {
+  color: #bc8cff;
+  border-color: color-mix(in srgb, #bc8cff 35%, var(--border));
+}
+
 .card.blocked {
   opacity: 0.65;
   filter: saturate(0.7);

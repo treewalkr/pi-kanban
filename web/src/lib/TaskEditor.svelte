@@ -9,6 +9,7 @@
   let title = $state(source.title);
   let note = $state(source.note);
   let project = $state(source.project);
+  let tagsText = $state(source.tags.join(" "));
   let laneId = $state(source.laneId);
   let parentId = $state(source.parentId ?? "");
   let priority = $state<Task["priority"]>(source.priority);
@@ -36,6 +37,7 @@
       title: title.trim(),
       note,
       project: project.trim(),
+      tags: tagsText.split(/[\s,]+/).filter(Boolean),
       lane: laneId,
       parent: parentId || null,
       priority,
@@ -103,6 +105,13 @@
         <input list="editor-projects" bind:value={project} placeholder="optional tag" />
         <datalist id="editor-projects">
           {#each board.projects as p (p)}<option value={p}></option>{/each}
+        </datalist>
+      </label>
+      <label>
+        tags
+        <input list="editor-tags" bind:value={tagsText} placeholder="space separated" />
+        <datalist id="editor-tags">
+          {#each board.tags as t (t)}<option value={t}></option>{/each}
         </datalist>
       </label>
       <label>
