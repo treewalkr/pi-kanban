@@ -106,7 +106,10 @@ export interface GateResult {
 export type GateFn = (cwd: string, timeoutMs: number) => Promise<GateResult>;
 
 export const defaultGate: GateFn = async (cwd, timeoutMs) => {
-  const proc = Bun.spawn({ cmd: ["bun", "test"], cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  // per-test timeout raised from bun's 5s default: spawn-heavy tests (cli.ts subprocesses,
+  // repro server boots) legitimately exceed it under full-suite parallel load and park cards
+  // on flakes — 30s keeps genuinely red tests failing fast while tolerating load
+  const proc = Bun.spawn({ cmd: ["bun", "test", "--timeout", "30000"], cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
