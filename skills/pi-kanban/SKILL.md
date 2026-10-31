@@ -118,7 +118,9 @@ kanban next [--project <tag>] [--json]                           # what's next: 
 kanban search <query…> [--project <tag>] [--tag <tag>]… [--json]                     # ranked matches: titles, checklist lines, tags, notes, plans
 kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers, from-lane
 kanban link <id> <other> · unlink <id> <other>                        # relate / unrelate two cards (undirected; visible from both)
-kanban attach <id> <file> [--as <name>]                               # attach/version a card file (default name: plan); show prints the latest
+kanban attach <id> <file|gh-ref> [--as <name>]                        # attach/version a card file (default name: plan), or link a GitHub pr/issue: <pr-url|issue-url|gh:owner/repo#n> (--as is files-only); show prints the latest
+kanban gh unlink <id> <ref>                                           # remove a GitHub link (ref: url, gh:owner/repo#n, or #n)
+kanban import gh:<owner>/<repo> [--limit <n>]                         # seed Backlog from the repo's open GitHub issues (url-deduped, limit ≤ 200)
 kanban files <id>                                                     # card files: name · vN · size · source
 kanban cat <id> <name> [--v <n>]                                      # print a file's content (latest, or a given version)
 kanban diff <id> <name> [--from <n>] [--to <n>]                      # unified diff between two versions (default: latest pair)
