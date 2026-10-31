@@ -5,6 +5,7 @@
   import { eventsUrl } from "./api";
   import LaneView from "./lib/Lane.svelte";
   import ListView from "./lib/ListView.svelte";
+  import VelocityView from "./lib/VelocityView.svelte";
   import TaskDetail from "./lib/TaskDetail.svelte";
   import TaskEditor from "./lib/TaskEditor.svelte";
   import FilePreview from "./lib/FilePreview.svelte";
@@ -180,6 +181,13 @@
           title="hierarchy — parents and subtasks together"
           onclick={() => (board.view = "list")}>list</button
         >
+        <button
+          class:active={board.view === "velocity"}
+          role="tab"
+          aria-selected={board.view === "velocity"}
+          title="velocity — throughput per week and cycle time per lane"
+          onclick={() => (board.view = "velocity")}>velocity</button
+        >
       </div>
       <SearchBox />
       <div class="chips">
@@ -251,6 +259,8 @@
       <div class="state">loading board…</div>
     {:else if board.view === "list"}
       <ListView />
+    {:else if board.view === "velocity"}
+      <VelocityView />
     {:else}
       <main class="board" bind:this={boardEl}>
         {#each board.visibleLanes as { lane, index } (lane.id)}

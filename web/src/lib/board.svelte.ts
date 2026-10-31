@@ -70,9 +70,10 @@ function loadWaitingOnly(): boolean {
   }
 }
 
-function loadView(): "board" | "list" {
+function loadView(): "board" | "list" | "velocity" {
   try {
-    return localStorage.getItem("kanban-view") === "list" ? "list" : "board";
+    const v = localStorage.getItem("kanban-view");
+    return v === "list" || v === "velocity" ? v : "board";
   } catch {
     return "board";
   }
@@ -187,14 +188,14 @@ class BoardStore {
     }
   }
 
-  #view = $state<"board" | "list">(loadView());
+  #view = $state<"board" | "list" | "velocity">(loadView());
 
-  /** Active lens over the same data: lanes (board) or hierarchy (list). Persists as kanban-view. */
-  get view(): "board" | "list" {
+  /** Active lens over the same data: lanes (board), hierarchy (list), or velocity metrics. Persists as kanban-view. */
+  get view(): "board" | "list" | "velocity" {
     return this.#view;
   }
 
-  set view(v: "board" | "list") {
+  set view(v: "board" | "list" | "velocity") {
     this.#view = v;
     try {
       localStorage.setItem("kanban-view", v);
