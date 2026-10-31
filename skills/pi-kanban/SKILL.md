@@ -2,6 +2,8 @@
 name: pi-kanban
 description: Track and manage task state on the Kanban board (Waiting on you → Backlog → Plan → Test + Implement → Review → Done → Archive) using the kanban CLI. Use when starting, planning, or finishing a unit of work; when the user mentions tasks, the board, kanban, backlog, "what's next", or moving work forward; and to review what's in flight.
 ---
+> Requires the kanban CLI — install it from this repo:
+> https://github.com/treewalkr/pi-kanban (`git clone https://github.com/treewalkr/pi-kanban && cd pi-kanban && ./scripts/install.sh`)
 
 # Kanban board
 
