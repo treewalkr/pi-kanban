@@ -1362,7 +1362,8 @@ test("serve: --agents and --auto-review both set KANBAN_AUTO_REVIEW=1", () => {
       delete process.env.KANBAN_AUTO_REVIEW;
       const parsed = parse([flag]);
       applyServeEnv(parsed.flags);
-      expect(process.env.KANBAN_AUTO_REVIEW).toBe("1");
+      const set = process.env.KANBAN_AUTO_REVIEW as string | undefined; // bun-types types unknown env reads as undefined-only
+      expect(set).toBe("1");
     }
 
     delete process.env.KANBAN_AUTO_REVIEW;
