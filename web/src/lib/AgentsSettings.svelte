@@ -82,7 +82,7 @@
 
   <section class="settings-general-section">
     <h3 class="settings-general-heading">Role</h3>
-    <p class="settings-general-description">Used by serve --auto-review: the planner writes plans for cards in Plan, the plan reviewer checks them against the template checklist before the human gate, the reviewer checks cards in Review, the builder works blocked findings or builds approved plans. Switching stashes unsaved edits.</p>
+    <p class="settings-general-description">Used by serve --agents: the planner writes plans for cards in Plan, the plan reviewer checks them against the template checklist before the human gate, the reviewer checks cards in Review, the builder works blocked findings or builds approved plans. Switching stashes unsaved edits.</p>
     <div class="seg">
       <button type="button" class="seg-option" class:on={role === "planner"} aria-pressed={role === "planner"} onclick={() => switchRole("planner")}>
         <span class="seg-label">planner</span>

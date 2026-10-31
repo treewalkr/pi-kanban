@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Task } from "../src/db";
@@ -1347,4 +1347,12 @@ test("help: serve line shows --agents with --auto-review as deprecated alias", a
   expect(res.stdout).toContain("kanban serve [--port <n>] [--open] [--agents]");
   expect(res.stdout).toContain("agents: serve --agents (deprecated alias: --auto-review)");
   expect(res.stdout).not.toContain("auto-review: serve --auto-review");
+});
+
+test("docs: AGENTS.md and SKILL.md reference --agents", () => {
+  const agentsMd = readFileSync(join(root, "AGENTS.md"), "utf8");
+  const skillMd = readFileSync(join(root, "skills/pi-kanban/SKILL.md"), "utf8");
+  expect(agentsMd).toContain("--agents");
+  expect(skillMd).toContain("--agents");
+  expect(skillMd).not.toContain("--auto-review");
 });
