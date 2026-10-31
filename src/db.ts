@@ -484,7 +484,11 @@ const rowToLaneEvent = (r: LaneEventRow): LaneEvent => ({
  * or nothing is owed.
  */
 export function waitingFromLastComment(last: Pick<Comment, "author" | "kind" | "body">): WaitingState | null {
-  if (last.kind === "question") return "question";
+  if (last.kind === "question") {
+    // a parked plan-review cap still badges as capped — its body carries the gate guidance
+    if (last.author === PLAN_REVIEWER_AUTHOR && last.body.startsWith(KanbanDb.PLAN_REVIEW_CAP)) return "capped";
+    return "question";
+  }
   if (last.kind === "comment" && last.body.startsWith(KanbanDb.SESSION_DIED_PREFIX)) return "dead";
   if (last.author !== PLAN_REVIEWER_AUTHOR) return null;
   if (last.kind === "review" && last.body.startsWith(KanbanDb.PLAN_REVIEW_PASS)) return "gate";

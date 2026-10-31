@@ -715,7 +715,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           break;
         }
       }
-      if (decidedBy?.author === PLAN_REVIEWER_AUTHOR && decidedBy.kind === "comment") return "plan-reviewer";
+      if (decidedBy?.author === PLAN_REVIEWER_AUTHOR && (decidedBy.kind === "comment" || decidedBy.kind === "question")) return "plan-reviewer";
       // a plan attached after that deciding event was authored outside the
       // loop (a chat session attaching it at the human's direction): it is
       // fresh and unreviewed — review it, don't re-plan over it
@@ -813,20 +813,20 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         enqueue({ task, role, mode: isPlan ? "plan" : "findings", prompt: isPlan ? builderPlanPrompt(task) : builderPrompt(task) });
       } else if (role === "capped") {
         // posting flips the last comment away from the verdict, so this fires once
-        db.createComment(task.id, {
+        db.comment(task.id, {
           author: REVIEWER_AUTHOR,
-          kind: "comment",
+          kind: "question",
           body: `auto-review stopped: block cycles reached the cap of ${maxBlocks} — needs a human. Findings are on the note.`,
         });
-        log(`cap reached on ${task.id} — leaving it for a human`);
+        log(`cap reached on ${task.id} — parked in waiting for a human`);
       } else if (role === "plan-capped") {
         // same one-shot disarm: the comment flips the last author, so this fires once
-        db.createComment(task.id, {
+        db.comment(task.id, {
           author: PLAN_REVIEWER_AUTHOR,
-          kind: "comment",
+          kind: "question",
           body: `${KanbanDb.PLAN_REVIEW_CAP}: blocked ${maxPlanBlocks}× since the last human comment — the latest plan waits at the gate with open findings. kanban reject ${task.id} --message <feedback> to re-plan, or comment to re-run the review.`,
         });
-        log(`plan-review cap reached on ${task.id} — leaving it for a human`);
+        log(`plan-review cap reached on ${task.id} — parked in waiting for a human`);
       }
     }
     void drain();
@@ -857,13 +857,13 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         inFlight.delete(job.task.id);
         if (stopped) return;
         if (!res.ok) {
-          db.createComment(job.task.id, {
+          db.comment(job.task.id, {
             author: REVIEWER_AUTHOR,
-            kind: "comment",
+            kind: "question",
             body: `pre-review gate: \`bun test\` failed — no reviewer session spawned.\n\n\`\`\`\n${res.output}\n\`\`\`\nFix the tests, then comment on this card to re-trigger review.`,
           });
           log(`reviewer ${job.task.id}: gate red — no session spawned`);
-          return; // the gate comment makes pi-reviewer the last author, disarming the card
+          return; // the question parks the card in waiting — the lane change disarms it (roleFor ignores waiting)
         }
       }
       if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {

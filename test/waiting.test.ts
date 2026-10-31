@@ -165,3 +165,26 @@ test("park/return edge rules", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("loop-authored questions never return a parked card", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kanban-waiting-test-"));
+  const db = new KanbanDb(join(dir, "t.db"));
+  try {
+    // the auto-review loop parks guardrail stops as pi-* questions; only a human
+    // reply may return the card (db.comment's isHuman check — a pi-* comment is
+    // never isHuman, so the return branch can't fire)
+    const card = db.createTask({ title: "loop-parked", lane: "implement" });
+    const park = db.comment(card.id, { kind: "question", author: "pi-reviewer", body: "cap reached" });
+    expect(park.moved).toBe("parked");
+    expect(park.task.laneId).toBe("waiting");
+    expect(park.task.previousLane).toBe("implement");
+
+    const loopQ = db.comment(card.id, { kind: "question", author: "pi-reviewer", body: "follow-up question" });
+    expect(loopQ.moved).toBeNull();
+    expect(loopQ.task.laneId).toBe("waiting");
+    expect(loopQ.task.previousLane).toBe("implement");
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
