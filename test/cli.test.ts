@@ -1459,3 +1459,40 @@ test("kanban undo: board-wide, card-scoped, --json, WIP warning, and error exits
   expect(helpRes.code).toBe(0);
   expect(helpRes.stdout).toContain("kanban undo [id]");
 });
+
+test("worker run queues a run; unknown lane prints the charter error; worker ls renders the row", async () => {
+  const run = await cli("worker", "run", "backlog", "--focus", "groom stale cards", "--author", "pi-manager", "--json");
+  expect(run.code).toBe(0);
+  const row = JSON.parse(run.stdout) as { id: string; laneId: string; status: string; focus: string; requestedBy: string; log?: string };
+  expect(row).toMatchObject({ laneId: "backlog", status: "queued", focus: "groom stale cards", requestedBy: "pi-manager" });
+  expect("log" in row).toBe(false);
+
+  const db = new KanbanDb(dbFile);
+  expect(db.laneWorker(row.id)).toMatchObject({ laneId: "backlog", status: "queued" });
+  db.close();
+
+  const noCharter = await cli("worker", "run", "done");
+  expect(noCharter.code).toBe(1);
+  expect(noCharter.stderr).toContain(
+    "no worker charter for lane 'done' — charter lanes: waiting, backlog, plan, implement, review",
+  );
+
+  const queued = await cli("worker", "run", "backlog");
+  expect(queued.code).toBe(0);
+  expect(queued.stdout).toContain(`queued lane worker `);
+  expect(queued.stdout).toContain("for backlog — drained by serve --agents (watch with kanban worker ls)");
+
+  const listed = await cli("worker", "ls");
+  expect(listed.code).toBe(0);
+  expect(listed.stdout).toContain("backlog");
+  expect(listed.stdout).toContain("queued");
+  expect(listed.stdout).toContain("groom stale cards");
+
+  const listedJson = await cli("worker", "ls", "--json");
+  const rows = JSON.parse(listedJson.stdout) as Array<{ id: string; log?: string }>;
+  expect(rows).toHaveLength(2);
+  expect(rows[0]!.log).toBeUndefined();
+
+  const filtered = await cli("worker", "ls", "--lane", "review");
+  expect(filtered.stdout).not.toContain("groom stale cards");
+});

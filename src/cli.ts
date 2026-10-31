@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
+import { charterError, charterFor } from "./lane-workers";
 import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
 import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
 import { searchBoard } from "./search";
@@ -47,6 +48,8 @@ usage:
   kanban stats [id]                     (board summary, or one card's lane times / cycle / gate metrics)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
   kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force] | limit <ref> <n|off>
+  kanban worker run <lane> [--focus <text>] [--author <name>]   (queue a lane worker run; drained by serve --agents)
+  kanban worker ls [--lane <ref>] [--json]     (lane worker runs: id · lane · status · age · summary)
   kanban serve [--port <n>] [--open] [--agents]
   kanban stop [--port <n>]                     (SIGTERM the kanban server; graceful — traces in-flight agents)
   kanban help | version
@@ -72,7 +75,7 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit"]);
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "focus"]);
 const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
@@ -183,6 +186,17 @@ function listenerPids(port: number): number[] {
     .split("\n")
     .map((l) => Number(l.trim()))
     .filter((n) => Number.isInteger(n) && n > 0);
+}
+
+/** Compact age for worker-ls rows: 42s · 8m · 3h · 5d. */
+function ageShort(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
 }
 
 async function main(): Promise<number> {
@@ -900,6 +914,53 @@ async function main(): Promise<number> {
           default:
             throw new KanbanError(`unknown lane subcommand '${sub}' (ls | add | rename | rm | limit)`, "invalid");
         }
+      }
+
+      case "worker": {
+        const [sub, ...subRest] = positional;
+        if (sub === "run") {
+          const ref = subRest[0] ?? "";
+          if (!ref) throw new KanbanError("usage: kanban worker run <lane> [--focus <text>] [--author <name>]", "invalid");
+          const lane = db.resolveLane(ref);
+          if (charterFor(lane.id) === null) throw new KanbanError(charterError(lane.id), "invalid");
+          const run = db.queueLaneWorker({ laneId: lane.id, focus: str(flags, "focus"), requestedBy: str(flags, "author") ?? "user" });
+          if (json) {
+            const { log: _log, ...row } = run;
+            jsonOut(row);
+          } else {
+            out(`queued lane worker ${run.id} for ${lane.id} — drained by serve --agents (watch with kanban worker ls)`);
+          }
+          return 0;
+        }
+        if (sub === "ls") {
+          const laneRef = str(flags, "lane");
+          const laneId = laneRef ? db.resolveLane(laneRef).id : undefined;
+          const rows = db.laneWorkers({ limit: 50, ...(laneId ? { laneId } : {}) });
+          if (json) {
+            jsonOut(
+              rows.map((r) => ({
+                ...r,
+                ...(r.log !== undefined ? { log: r.log.split("\n").slice(-20).join("\n") } : {}),
+              })),
+            );
+            return 0;
+          }
+          if (rows.length === 0) {
+            out("no lane worker runs — dispatch one with kanban worker run <lane>");
+            return 0;
+          }
+          const now = Date.now();
+          for (const r of rows) {
+            const age = ageShort(now - r.createdAt);
+            const summaryLine = (r.summary ?? "").split("\n")[0] ?? "";
+            out(
+              `${r.id}  ${r.laneId.padEnd(10)}  ${r.status.padEnd(7)}  ${age.padStart(5)}  ${summaryLine.slice(0, 60)}` +
+                (r.focus ? `  [${r.focus.slice(0, 40)}]` : ""),
+            );
+          }
+          return 0;
+        }
+        throw new KanbanError(`unknown worker subcommand '${sub}' (run | ls)`, "invalid");
       }
 
       default:
