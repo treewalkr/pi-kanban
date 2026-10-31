@@ -39,10 +39,10 @@ usage:
                           [--clear-note] [--clear-parent] [--clear-blocked-by] [--clear-tags]
   kanban done <id>
   kanban archive <id>                        (undo: mv <id> <lane>)
-  kanban check [--json]                     (board-health lint: done parents w/ active children, children behind parent, planless build cards; advisory, exit 0)
+  kanban check [--json]                     (board-health lint: done parents w/ active children, children behind parent, planless build cards, lanes over WIP limit; advisory, exit 0)
   kanban stats [id]                     (board summary, or one card's lane times / cycle / gate metrics)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
-  kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force]
+  kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force] | limit <ref> <n|off>
   kanban serve [--port <n>] [--open] [--auto-review]
   kanban stop [--port <n>]                     (SIGTERM the kanban server; graceful — traces in-flight agents)
   kanban help | version
@@ -698,6 +698,8 @@ async function main(): Promise<number> {
             line = `⚠ ${v.cardId} in ${v.cardLaneId} behind parent ${v.parentId} (${v.parentLaneId})`;
           } else if (v.kind === "missing-plan") {
             line = `⚠ ${v.cardId} in ${v.laneId} with no attached plan`;
+          } else if (v.kind === "wip-over-limit") {
+            line = `⚠ ${v.laneId} over WIP limit: ${v.count}/${v.limit}`;
           }
           out(c.hex("#d29922", line));
         }
@@ -754,6 +756,19 @@ async function main(): Promise<number> {
             else out(`${lane.id}  ${lane.name}  renamed`);
             return 0;
           }
+          case "limit": {
+            const ref = subRest[0] ?? "";
+            const raw = subRest[1] ?? "";
+            if (!ref || !raw) throw new KanbanError("usage: kanban lane limit <ref> <n|off>", "invalid");
+            const n = raw === "off" ? null : Number(raw);
+            if (n !== null && (!Number.isInteger(n) || n < 1 || n > 999)) {
+              throw new KanbanError("wip limit must be an integer from 1 to 999 (or 'off' to clear)", "invalid");
+            }
+            const lane = db.updateLane(ref, { wipLimit: n });
+            if (json) jsonOut(lane);
+            else out(n === null ? `${lane.id}  wip limit cleared` : `${lane.id}  wip limit ${n}`);
+            return 0;
+          }
           case "rm": {
             const lane = db.deleteLane(subRest[0] ?? "", !!flags.force);
             if (json) jsonOut({ ok: true, removed: lane });
@@ -761,7 +776,7 @@ async function main(): Promise<number> {
             return 0;
           }
           default:
-            throw new KanbanError(`unknown lane subcommand '${sub}' (ls | add | rename | rm)`, "invalid");
+            throw new KanbanError(`unknown lane subcommand '${sub}' (ls | add | rename | rm | limit)`, "invalid");
         }
       }
 

@@ -502,6 +502,10 @@ class BoardStore {
     await this.updateLane(id, { name });
   }
 
+  async setLaneLimit(id: string, wipLimit: number | null): Promise<void> {
+    await this.updateLane(id, { wipLimit });
+  }
+
   async moveLane(id: string, index: number): Promise<void> {
     await this.updateLane(id, { index });
   }

@@ -24,6 +24,8 @@ export interface Lane {
   description: string;
   position: number;
   fixed: number;
+  /** Max cards this lane may hold (advisory warn); null = unlimited. */
+  wipLimit: number | null;
 }
 
 export interface Task {
@@ -222,6 +224,7 @@ export interface LanePatch {
   name?: string;
   description?: string;
   index?: number; // 0-based position among lanes
+  wipLimit?: number | null; // integer 1–999 sets, null clears, undefined leaves
 }
 
 export type KanbanErrorCode = "not-found" | "conflict" | "invalid";
@@ -247,7 +250,8 @@ CREATE TABLE IF NOT EXISTS lanes (
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   position REAL NOT NULL,
-  fixed INTEGER NOT NULL DEFAULT 0
+  fixed INTEGER NOT NULL DEFAULT 0,
+  wip_limit INTEGER
 );
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -349,7 +353,7 @@ CREATE INDEX IF NOT EXISTS lane_events_task ON lane_events (task_id, created_at)
 CREATE INDEX IF NOT EXISTS lane_events_to_lane ON lane_events (to_lane_id, created_at);
 `;
 
-export const DEFAULT_LANES: Array<Omit<Lane, "position">> = [
+export const DEFAULT_LANES: Array<Omit<Lane, "position" | "wipLimit">> = [
   { id: "waiting", name: "Waiting on you", description: "Parked for a human answer — replying returns the card", fixed: 1 },
   { id: "backlog", name: "Backlog", description: "Waiting work, nothing started", fixed: 1 },
   { id: "plan", name: "Plan", description: "Scoping and design before code", fixed: 0 },
@@ -391,7 +395,8 @@ export const UNBLOCKED_LANES = ["done", "archive"] as const;
 export type BoardViolation =
   | { kind: "done-parent-active-children"; cardId: string; childIds: string[] }
   | { kind: "child-behind-parent"; cardId: string; parentId: string; cardLaneId: string; parentLaneId: string }
-  | { kind: "missing-plan"; cardId: string; laneId: string };
+  | { kind: "missing-plan"; cardId: string; laneId: string }
+  | { kind: "wip-over-limit"; laneId: string; limit: number; count: number };
 
 export function defaultDbPath(): string {
   return process.env.KANBAN_DB ?? join(import.meta.dir, "..", "data", "kanban.db");
@@ -403,6 +408,7 @@ interface LaneRow {
   description: string;
   position: number;
   fixed: number;
+  wip_limit: number | null;
 }
 
 interface TaskRow {
@@ -450,7 +456,7 @@ interface LaneEventRow {
   created_at: number;
 }
 
-const rowToLane = (r: LaneRow): Lane => ({ ...r });
+const rowToLane = (r: LaneRow): Lane => ({ ...r, wipLimit: r.wip_limit ?? null });
 
 /** tasks.tags is one JSON array column; corrupt data parses to [] — never crashes the board. */
 const parseTags = (raw: string): string[] => {
@@ -658,6 +664,7 @@ export class KanbanDb {
     this.migratePreviousLaneColumn();
     this.migrateWorkspaceColumn();
     this.migrateTagsColumn();
+    this.migrateWipLimitColumn();
     this.db.exec(SCHEMA);
     this.seedLanes();
     this.ensureWaitingLane();
@@ -780,6 +787,15 @@ export class KanbanDb {
     const cols = this.q("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     if (!cols.some((col) => col.name === "tags"))
       this.db.exec("ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'");
+  }
+
+  /** Boards created before wip limits existed need the column added once (nullable, no backfill: existing lanes read unlimited). */
+  private migrateWipLimitColumn(): void {
+    const table = this.q("SELECT name FROM sqlite_master WHERE type='table' AND name='lanes'").get();
+    if (!table) return; // fresh db: SCHEMA creates the table with the column
+    const cols = this.q("PRAGMA table_info(lanes)").all() as Array<{ name: string }>;
+    if (!cols.some((col) => col.name === "wip_limit"))
+      this.db.exec("ALTER TABLE lanes ADD COLUMN wip_limit INTEGER");
   }
 
   // boards created before the archive lane existed need it appended once
@@ -1321,6 +1337,13 @@ export class KanbanDb {
           });
         }
       }
+    }
+
+    // (d) lane over its WIP limit (advisory; fires only when a limit is set)
+    for (const lane of lanes) {
+      if (lane.wipLimit === null) continue;
+      const count = this.taskCount(lane.id);
+      if (count > lane.wipLimit) violations.push({ kind: "wip-over-limit", laneId: lane.id, limit: lane.wipLimit, count });
     }
 
     return violations;
@@ -2314,10 +2337,14 @@ export class KanbanDb {
     const lane = this.resolveLane(prefix);
     const name = patch.name?.trim();
     if (patch.name !== undefined && !name) throw new KanbanError("lane name must not be empty", "invalid");
+    if (patch.wipLimit !== undefined && patch.wipLimit !== null && !(Number.isInteger(patch.wipLimit) && patch.wipLimit >= 1 && patch.wipLimit <= 999))
+      throw new KanbanError("wip limit must be an integer from 1 to 999 (or null to clear)", "invalid");
+    const wipLimit = patch.wipLimit === undefined ? lane.wipLimit : patch.wipLimit;
     if (patch.index === undefined) {
-      this.q("UPDATE lanes SET name = ?, description = ? WHERE id = ?").run(
+      this.q("UPDATE lanes SET name = ?, description = ?, wip_limit = ? WHERE id = ?").run(
         name ?? lane.name,
         patch.description ?? lane.description,
+        wipLimit,
         lane.id,
       );
     } else {
@@ -2329,10 +2356,11 @@ export class KanbanDb {
           : clamped >= lanes.length
             ? (lanes.at(-1)?.position ?? 0) + GAP
             : (lanes[clamped - 1].position + lanes[clamped].position) / 2;
-      this.q("UPDATE lanes SET name = ?, description = ?, position = ? WHERE id = ?").run(
+      this.q("UPDATE lanes SET name = ?, description = ?, position = ?, wip_limit = ? WHERE id = ?").run(
         name ?? lane.name,
         patch.description ?? lane.description,
         position,
+        wipLimit,
         lane.id,
       );
     }

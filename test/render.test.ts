@@ -403,3 +403,35 @@ describe("colorizePatch", () => {
     expect(colorized).toContain("\n context\n");
   });
 });
+
+test("taskLine appends the wip warning only when the lane is over its limit", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kanban-render-wip-"));
+  const db = new KanbanDb(join(dir, "t.db"));
+  try {
+    db.updateLane("implement", { wipLimit: 2 });
+    db.createTask({ title: "wip-one", lane: "implement" });
+    db.createTask({ title: "wip-two", lane: "implement" });
+    const third = db.createTask({ title: "wip-three", lane: "implement" });
+
+    const over = stripAnsi(taskLine(db, db.resolveTask(third.id)));
+    expect(over).toContain("⚠ implement over WIP limit: 3/2");
+
+    // At exactly the limit → no warn; unlimited lanes never warn.
+    db.moveTask(third.id, "backlog");
+    const atLimit = stripAnsi(taskLine(db, db.resolveTask(third.id)));
+    expect(atLimit).not.toContain("over WIP limit");
+    const unlimited = stripAnsi(taskLine(db, db.resolveTask(db.createTask({ title: "backlog-card" }).id)));
+    expect(unlimited).not.toContain("over WIP limit");
+
+    // Over again after moving back; then clearing the limit silences it.
+    db.moveTask(third.id, "implement");
+    const overAgain = stripAnsi(taskLine(db, db.resolveTask(third.id)));
+    expect(overAgain).toContain("over WIP limit: 3/2");
+    db.updateLane("implement", { wipLimit: null });
+    const cleared = stripAnsi(taskLine(db, db.resolveTask(third.id)));
+    expect(cleared).not.toContain("over WIP limit");
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

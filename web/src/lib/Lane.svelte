@@ -12,6 +12,8 @@
   let composing = $state(false);
   let renaming = $state(false);
   let renameValue = $state("");
+  let editingLimit = $state(false);
+  let limitValue = $state("");
 
   let visible = $derived(board.visibleTasks(lane.id));
   let count = $derived(
@@ -58,6 +60,17 @@
     const name = renameValue.trim();
     if (name && name !== lane.name) board.renameLane(lane.id, name);
   }
+
+  function commitLimit() {
+    editingLimit = false;
+    const v = limitValue.trim();
+    if (v === "") {
+      if (lane.wipLimit !== null) board.setLaneLimit(lane.id, null);
+    } else if (/^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= 999) {
+      if (Number(v) !== lane.wipLimit) board.setLaneLimit(lane.id, Number(v));
+    }
+    // anything else cancels
+  }
 </script>
 
 {#if collapsed}
@@ -80,7 +93,9 @@
     <button class="collapsed-head" title="expand {lane.name}" onclick={() => (board.archiveOpen = true)}>
       <span class="lane-dot"></span>
       <span class="collapsed-name">{lane.name}</span>
-      <span class="count">{count}</span>
+      <span class="count" class:over={lane.wipLimit !== null && count > lane.wipLimit}>
+        {lane.wipLimit === null ? count : `${count}/${lane.wipLimit}`}
+      </span>
     </button>
   </section>
 {:else}
@@ -112,7 +127,32 @@
           {lane.name}
         </h2>
       {/if}
-      <span class="count">{count}</span>
+      {#if editingLimit}
+        <input
+          class="rename limit-input"
+          bind:value={limitValue}
+          title="WIP limit — Enter sets, empty clears, Escape cancels"
+          onblur={commitLimit}
+          onkeydown={(e) => {
+            if (e.key === "Enter") commitLimit();
+            if (e.key === "Escape") editingLimit = false;
+          }}
+        />
+      {:else}
+        <span
+          role="button"
+          tabindex="-1"
+          class="count"
+          class:over={lane.wipLimit !== null && count > lane.wipLimit}
+          title="WIP limit — double-click to set or clear"
+          ondblclick={() => {
+            limitValue = lane.wipLimit === null ? "" : String(lane.wipLimit);
+            editingLimit = true;
+          }}
+        >
+          {lane.wipLimit === null ? count : `${count}/${lane.wipLimit}`}
+        </span>
+      {/if}
       {#if laneDwellLabel(board.stats, lane.id)}
         <span class="lane-dwell" title="average time per card in this lane">{laneDwellLabel(board.stats, lane.id)}</span>
       {/if}

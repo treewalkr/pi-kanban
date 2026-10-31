@@ -16,7 +16,7 @@ const DAY = 24 * HOUR;
 const now = () => Date.now();
 
 function lane(partial: Partial<Lane> & { id: string; name: string }): Lane {
-  return { description: "", position: 100, fixed: 0, ...partial };
+  return { description: "", position: 100, fixed: 0, wipLimit: null, ...partial };
 }
 
 function task(partial: Partial<Task> & { id: string; title: string }): Task {

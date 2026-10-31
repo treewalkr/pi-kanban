@@ -875,6 +875,59 @@ test("/activity carries the resolved model per session", async () => {
   for (const f of finishes) f();
 });
 
+test("PATCH /lanes/:id wipLimit roundtrip; shape violations 422, null clears", async () => {
+  const app = createApp(db);
+
+  const set = await app.handle(
+    new Request("http://localhost/lanes/implement", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ wipLimit: 3 }),
+    }),
+  );
+  expect(set.status).toBe(200);
+  expect(((await set.json()) as { wipLimit: number | null }).wipLimit).toBe(3);
+
+  const boardRes = await app.handle(new Request("http://localhost/board"));
+  const board = (await boardRes.json()) as { lanes: Array<{ id: string; wipLimit: number | null }> };
+  expect(board.lanes.find((l) => l.id === "implement")?.wipLimit).toBe(3);
+
+  for (const bad of [0, 1000, "3"]) {
+    const badRes = await app.handle(
+      new Request("http://localhost/lanes/implement", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ wipLimit: bad }),
+      }),
+    );
+    expect(badRes.status).toBe(422);
+  }
+
+  const clear = await app.handle(
+    new Request("http://localhost/lanes/implement", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ wipLimit: null }),
+    }),
+  );
+  expect(clear.status).toBe(200);
+  expect(((await clear.json()) as { wipLimit: number | null }).wipLimit).toBeNull();
+
+  const boardRes2 = await app.handle(new Request("http://localhost/board"));
+  const board2 = (await boardRes2.json()) as { lanes: Array<{ id: string; wipLimit: number | null }> };
+  expect(board2.lanes.find((l) => l.id === "implement")?.wipLimit).toBeNull();
+
+  const create = await app.handle(
+    new Request("http://localhost/lanes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "QA" }),
+    }),
+  );
+  expect(create.status).toBe(201);
+  expect(((await create.json()) as { wipLimit: number | null }).wipLimit).toBeNull();
+});
+
 test("PATCH /tasks/:id {lane:'plan'} moves a backlog card; /board reflects it", async () => {
   const app = createApp(db);
   const task = db.createTask({ title: "one", lane: "backlog" });
