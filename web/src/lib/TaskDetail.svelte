@@ -4,6 +4,8 @@
   import { GitBranch, Sparkles } from "@lucide/svelte";
   import { api } from "../api";
   import { board } from "./board.svelte";
+  import { chat } from "./chat.svelte";
+  import ChatPanel from "./ChatPanel.svelte";
   import IdChip from "./IdChip.svelte";
   import { copyText } from "./copy";
   import { renderMarkdown, toggleTaskLine } from "./markdown";
@@ -606,6 +608,19 @@
           {/each}
         </details>
       {/if}
+      <details
+        class="detail-plan chat-section"
+        ontoggle={(e) => {
+          // lazy and free: opening the section is what spins the session up (or resumes it)
+          if ((e.currentTarget as HTMLDetailsElement).open && chat.openCardId !== me.id) void chat.open(me.id);
+        }}
+      >
+        <summary>
+          chat
+          <span class="plan-meta">talk to the card's agent — board writes stay on the thread</span>
+        </summary>
+        <ChatPanel />
+      </details>
       <div class="detail-comments">
         <div class="children-head">thread · {comments.length}</div>
         {#if comments.length === 0}

@@ -209,3 +209,32 @@ test("close resets every field and detaches the source", async () => {
   expect(chat.tools.size).toBe(0);
   expect(chat.modelLabel).toBe("");
 });
+
+// ── source contracts (panel wiring) ─────────────────────────────────────────
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const taskDetailSource = readFileSync(join(import.meta.dir, "..", "web", "src", "lib", "TaskDetail.svelte"), "utf-8");
+const chatPanelSource = readFileSync(join(import.meta.dir, "..", "web", "src", "lib", "ChatPanel.svelte"), "utf-8");
+
+test("TaskDetail mounts ChatPanel between agent sessions and the thread; opens on first expand", () => {
+  const sessionsIdx = taskDetailSource.indexOf('class="detail-plan agent-sessions"');
+  const chatIdx = taskDetailSource.indexOf('class="detail-plan chat-section"');
+  const panelIdx = taskDetailSource.indexOf("<ChatPanel />");
+  const commentsIdx = taskDetailSource.indexOf('class="detail-comments"');
+  expect(sessionsIdx).toBeGreaterThan(-1);
+  expect(chatIdx).toBeGreaterThan(sessionsIdx);
+  expect(panelIdx).toBeGreaterThan(chatIdx);
+  expect(commentsIdx).toBeGreaterThan(panelIdx);
+  expect(taskDetailSource).toContain("chat.open(me.id)");
+});
+
+test("ChatPanel wires send/stop and carries no gate verbs", () => {
+  expect(chatPanelSource).toContain("chat.send(");
+  expect(chatPanelSource).toContain("chat.stop(");
+  expect(chatPanelSource).toContain('aria-label="chat message"');
+  for (const banned of ["approve", "reject", "moveTask", "toLane"]) {
+    expect(chatPanelSource).not.toContain(banned);
+  }
+});
