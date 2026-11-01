@@ -28,7 +28,7 @@ test("agents settings shows the lane workers empty state", async ({ page }) => {
   const surface = page.locator(".settings-surface");
   await expect(surface).toBeVisible();
 
-  const section = page.locator(".settings-general-section", { hasText: "lane workers" });
+  const section = page.locator(".settings-general-section").filter({ has: page.getByRole("heading", { name: "lane workers" }) });
   await expect(section).toBeVisible();
   await expect(section).toContainText("no runs — dispatch from board chat or `kanban worker run`");
 
