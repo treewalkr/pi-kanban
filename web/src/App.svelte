@@ -36,6 +36,11 @@
   // sidebar width drag: pointer events on the thin handle between panel and board
   let resizing = $state(false);
 
+  // the handle stacks above the modal overlays (z 45 > 40), so hide it while any is open
+  const modalOpen = $derived(
+    !!board.editing || !!files.preview || agents.open || manager.open || palette.open,
+  );
+
   function startResize(e: PointerEvent): void {
     e.preventDefault();
     resizing = true;
@@ -163,14 +168,16 @@
     <Sidebar />
   </aside>
   {#if ui.sidebarOpen}
-    <div
-      class="sidebar-resize"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="resize sidebar"
-      title="resize sidebar: drag"
-      onpointerdown={startResize}
-    ></div>
+    {#if !modalOpen}
+      <div
+        class="sidebar-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="resize sidebar"
+        title="resize sidebar: drag"
+        onpointerdown={startResize}
+      ></div>
+    {/if}
     <div class="sidebar-backdrop" onclick={() => (ui.sidebarOpen = false)} aria-hidden="true"></div>
   {/if}
 
