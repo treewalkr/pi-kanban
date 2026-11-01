@@ -42,22 +42,29 @@ bun run dev                         # hacking: api watch + vite dev server
 
 One server per port — `serve` refuses a taken port; `kanban stop` and the Settings →
 Service **restart** button drain in-flight agent sessions cleanly, never orphan them.
+The header grows a `⟳ stale` chip when the server lags the checkout — moved HEAD, dirty
+src, or a version split (`check --port <n>` reports it from the CLI); the restart button
+rebuilds the web bundle and self-respawns onto it.
 
 ```bash
 kanban add <title> --project my-app [--note <text>] [--parent <id>] [--elaborate]
 kanban elaborate <id>               # retrofit/retry elaboration on any card
-kanban ls · search <query> · show <id> · brief <id>
+kanban ls · search <query> · show <id> · brief <id> · overview
 kanban next                         # lane → priority → oldest; skips blocked, counts waiting
 kanban link <id> <other> · unlink <id> <other>
+kanban claim <id>                   # ownership — auto-set entering Test + Implement, cleared on exit; ls --owner filters
 kanban mv <id> <lane> · edit <id> … · done <id> · archive <id> · archive auto [<n>|off] · undo [id] · rm <id> --force
-kanban lane ls | add | rename | rm
+kanban lane ls | add | rename | rm | limit <ref> <n|off>   # lane WIP limit; lanes over it flag in check
 kanban attach <id> <plan-file>      # versioned plan attach — re-attaching versions it
+kanban diff <id> <name>             # unified diff between plan versions (default: latest pair)
 kanban comment <id> <text…> [--kind comment|review|handoff|question] · comments <id>
 kanban handoff <id> <lane> --message <text>   # atomic move + thread record
 kanban review <id> (--approve | --block --message <text> [--finding <text>]…)
 kanban approve <id> · reject <id> --message <text>   # the human plan gate
+kanban ws <id> <branch>             # record where the card's implementation lives
+kanban worker run <lane> · worker ls   # queue/inspect lane-worker runs (drained by serve --agents)
 kanban stats [id] [--json]          # board summary, or one card's lane times / cycle / gate metrics
-kanban check [--json] · stop · help
+kanban check [--json] [--port <n>] · stop · help   # board-health lint; --port also flags a stale/down serve
 ```
 
 Ids accept any unique prefix; lanes accept slug, prefix, name, or ordinal. `--json`
