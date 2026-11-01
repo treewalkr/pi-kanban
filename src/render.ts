@@ -86,6 +86,22 @@ export function listLanes(db: KanbanDb, laneRef?: string, project?: string, tags
   return out.join("\n");
 }
 
+/** The overview counts line: `waiting 1 · backlog 14 · … · implement 1/3 · …` —
+ *  lane ids in board order, `count/limit` only when a WIP limit is set. */
+export function overviewLine(db: KanbanDb): string {
+  return db
+    .overview()
+    .lanes.map((l) => (l.wipLimit !== null ? `${l.id} ${l.count}/${l.wipLimit}` : `${l.id} ${l.count}`))
+    .join(" · ");
+}
+
+/** One line per owned card: `owned <id>  <title> → <laneId> · <owner>`. */
+export function ownedLines(db: KanbanDb): string[] {
+  return db
+    .overview()
+    .owned.map((t) => `owned ${c.dim(t.id)}  ${truncate(t.title, 60)} → ${t.laneId} · ${t.owner}`);
+}
+
 /** Compact single-line summary of a task, e.g. after add/mv/edit. */
 export function taskLine(db: KanbanDb, task: Task): string {
   const lanes = db.lanes();

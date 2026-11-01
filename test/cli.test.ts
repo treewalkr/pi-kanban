@@ -1514,3 +1514,96 @@ test("handoff into implement sets owner; exits clear it (CLI)", async () => {
   expect(approved.code).toBe(0);
   expect(JSON.parse((await cli("show", gateCard.id, "--json")).stdout).owner).toBe("pi-builder");
 });
+
+test("overview: lane counts, wip limits, owned cards, and a 2 KB pin on a 300-card board", async () => {
+  const oDb = join(dir, "overview.db");
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: oDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, code };
+  };
+
+  // seed: 300 backlog cards with 4000-char notes, a WIP limit, one owned card
+  {
+    const seed = new KanbanDb(oDb);
+    const note = "secret note text that must never leak into the overview. ".repeat(80);
+    for (let i = 0; i < 300; i++) seed.createTask({ title: `bulk card ${i}`, note });
+    seed.updateLane("implement", { wipLimit: 3 });
+    const owned = seed.createTask({ title: "the owned one", lane: "implement" });
+    seed.claimTask(owned.id, { author: "pi-builder" });
+    seed.close();
+  }
+
+  const human = await run("overview");
+  expect(human.code).toBe(0);
+  expect(Buffer.byteLength(human.stdout)).toBeLessThanOrEqual(2048);
+  expect(human.stdout).toContain("waiting 0 · backlog 300 · plan 0 · implement 1/3 · review 0 · done 0 · archive 0");
+  expect(human.stdout).toContain("owned ");
+  expect(human.stdout).toContain("the owned one → implement · pi-builder");
+  expect(human.stdout).not.toContain("secret note text"); // no note text ever
+
+  const parsed = JSON.parse((await run("overview", "--json")).stdout) as {
+    lanes: Array<{ id: string; name: string; count: number; wipLimit: number | null }>;
+    owned: Array<{ id: string; title: string; laneId: string; owner: string | null; note?: string }>;
+  };
+  expect(parsed.lanes.map((l) => l.id)).toEqual([
+    "waiting",
+    "backlog",
+    "plan",
+    "implement",
+    "review",
+    "done",
+    "archive",
+  ]);
+  expect(parsed.lanes.find((l) => l.id === "implement")).toMatchObject({ count: 1, wipLimit: 3 });
+  expect(parsed.owned).toHaveLength(1);
+  expect(parsed.owned[0]).toMatchObject({ title: "the owned one", laneId: "implement", owner: "pi-builder" });
+  expect(parsed.owned[0].note).toBeUndefined(); // compact rows, never Task bodies
+});
+
+test("reads never write: overview/ls/search leave data_version unchanged", async () => {
+  const rDb = join(dir, "reads.db");
+  {
+    const seed = new KanbanDb(rDb);
+    seed.createTask({ title: "read only card", note: "needle for search" });
+    seed.close();
+  }
+  // Both snapshots are fresh short-lived connections (the plan's "reopen"): a
+  // long-lived witness bumps data_version when another connection merely joins and
+  // leaves the WAL — the file change counter it reads stays put when nothing wrote.
+  const { Database } = await import("bun:sqlite");
+  const dataVersion = () => {
+    const d = new Database(rDb);
+    const v = (d.query("PRAGMA data_version").get() as { data_version: number }).data_version;
+    d.close();
+    return v;
+  };
+  const before = dataVersion();
+
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: rDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await proc.exited;
+  };
+  await run("overview");
+  await run("overview", "--json");
+  await run("ls");
+  await run("ls", "--json");
+  await run("search", "needle");
+  await run("search", "needle", "--json");
+
+  expect(dataVersion()).toBe(before);
+});

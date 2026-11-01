@@ -781,12 +781,26 @@ export class KanbanDb {
     this.migrateOwnerColumn();
     this.migrateTagsColumn();
     this.migrateWipLimitColumn();
-    this.db.exec(SCHEMA);
+    if (!this.schemaIsCurrent()) this.db.exec(SCHEMA); // fresh/old boards only — see below
     this.seedLanes();
     this.ensureWaitingLane();
     this.ensureArchiveLane();
     this.migratePlansTable();
     this.backfillLaneEvents();
+  }
+
+  /** True when every object SCHEMA creates already exists. Even a fully no-op
+   *  exec(SCHEMA) opens a write transaction, which would make every CLI read bump
+   *  the DB change counter — breaking "reads never write" (lesson #6). Names are
+   *  parsed from SCHEMA itself, so the check can never drift from the DDL. */
+  private schemaIsCurrent(): boolean {
+    const names = [...SCHEMA.matchAll(/CREATE (?:TABLE|UNIQUE INDEX|INDEX) IF NOT EXISTS (\w+)/g)].map((m) => m[1]!);
+    if (names.length === 0) return false;
+    const rows = this.q(`SELECT name FROM sqlite_master WHERE name IN (${names.map(() => "?").join(",")})`).all(
+      ...names,
+    ) as Array<{ name: string }>;
+    const present = new Set(rows.map((r) => r.name));
+    return names.every((n) => present.has(n));
   }
 
   private watchers = new Set<() => void>();
@@ -943,7 +957,10 @@ export class KanbanDb {
   private ensureWaitingLane(): void {
     const row = this.q("SELECT COUNT(*) AS n FROM lanes WHERE id = 'waiting'").get() as { n: number };
     if (row.n > 0) {
-      this.q("UPDATE lanes SET fixed = 1 WHERE id = 'waiting'").run();
+      // Repair only when needed: running the UPDATE unconditionally would make every CLI
+      // open — including pure reads like overview/ls/search — commit a write (lesson #6).
+      const lane = this.q("SELECT fixed FROM lanes WHERE id = 'waiting'").get() as { fixed: number };
+      if (lane.fixed !== 1) this.q("UPDATE lanes SET fixed = 1 WHERE id = 'waiting'").run();
       return;
     }
     const first = this.q("SELECT MIN(position) AS p FROM lanes").get() as { p: number | null };
@@ -1162,6 +1179,22 @@ export class KanbanDb {
   taskCount(laneId: string): number {
     const row = this.q("SELECT COUNT(*) AS n FROM tasks WHERE lane_id = ?").get(laneId) as { n: number };
     return row.n;
+  }
+
+  /** The cheap one-read board shape: every lane with its count and WIP limit, plus the
+   *  owned cards (lane order, then position). Never card bodies — that is what brief is for. */
+  overview(): { lanes: Array<{ id: string; name: string; count: number; wipLimit: number | null }>; owned: Task[] } {
+    const lanes = this.lanes();
+    const laneOrder = new Map(lanes.map((l, i) => [l.id, i]));
+    const owned = this.tasks()
+      .filter((t) => t.owner !== null)
+      .sort(
+        (a, b) => (laneOrder.get(a.laneId) ?? 0) - (laneOrder.get(b.laneId) ?? 0) || a.position - b.position,
+      );
+    return {
+      lanes: lanes.map((l) => ({ id: l.id, name: l.name, count: this.taskCount(l.id), wipLimit: l.wipLimit })),
+      owned,
+    };
   }
 
   childrenOf(taskId: string): Task[] {

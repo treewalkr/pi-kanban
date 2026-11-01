@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
-import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
+import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, ownedLines, overviewLine, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
 import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
 import { searchBoard } from "./search";
 import { cardFileDiff } from "./diff";
@@ -298,6 +298,20 @@ async function main(): Promise<number> {
           jsonOut(tasks.map((t) => ({ ...t, blockedBy: map[t.id] ?? [] })));
         } else {
           out(listLanes(db, laneRef, project, tagFilter));
+        }
+        return 0;
+      }
+
+      case "overview": {
+        if (json) {
+          const o = db.overview();
+          jsonOut({
+            lanes: o.lanes,
+            owned: o.owned.map((t) => ({ id: t.id, title: t.title, laneId: t.laneId, owner: t.owner })),
+          });
+        } else {
+          out(overviewLine(db));
+          for (const line of ownedLines(db)) out(line);
         }
         return 0;
       }
