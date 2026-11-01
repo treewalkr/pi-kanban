@@ -4,10 +4,9 @@
   import Brand from "./Brand.svelte";
   import PathLabel from "./PathLabel.svelte";
   import Dropdown from "./Dropdown.svelte";
-  import { Bot, Check, ChevronDown, FolderOpen, GitBranch, Layers, Loader2, MessagesSquare, Plus, Search, Settings2 } from "@lucide/svelte";
+  import { Bot, Check, ChevronDown, FolderOpen, GitBranch, Layers, Loader2, Plus, Search, Settings2 } from "@lucide/svelte";
   import { formatRelativeTime, roleVerb } from "./util";
   import { agents, type SettingsSection } from "./agents.svelte";
-  import { manager } from "./manager.svelte";
   import { files } from "./files.svelte";
   import FilesPanel from "./FilesPanel.svelte";
   import type { AgentRole } from "../../../src/db";
@@ -387,8 +386,4 @@
       <span>{s.label}</span>
     </button>
   {/each}
-  <button type="button" class="foot-btn" title="Board chat" aria-label="Board chat" onclick={() => void manager.toggle()}>
-    <MessagesSquare size={14} strokeWidth={1.8} />
-    <span>Board chat</span>
-  </button>
 </div>

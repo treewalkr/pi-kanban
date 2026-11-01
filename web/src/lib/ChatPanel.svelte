@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowRight, Check, ChevronDown, Lightbulb, Square, X } from "@lucide/svelte";
+  import { ArrowRight, Check, ChevronDown, Lightbulb, Maximize2, Minimize2, Square, X } from "@lucide/svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { chat } from "./chat.svelte";
   import ChatSelectors from "./ChatSelectors.svelte";
@@ -65,7 +65,7 @@
   }
 </script>
 
-<div class="chat-panel">
+<div class="chat-panel" class:expanded={chat.expanded}>
   <div class="chat-log" bind:this={logEl}>
     {#if chat.messages.length === 0 && !chat.streaming.isStreaming && chat.tools.size === 0}
       <p class="chat-empty">no messages yet — say hi or ask about this card</p>
@@ -208,6 +208,26 @@
           <Square size={10} strokeWidth={2} fill="currentColor" /> stop
         </button>
       {/if}
+      <button
+        type="button"
+        class="chat-expand"
+        title={chat.expanded ? "collapse chat (esc)" : "expand chat"}
+        aria-pressed={chat.expanded}
+        onclick={() => chat.toggleExpanded()}
+      >
+        {#if chat.expanded}
+          <Minimize2 size={12} strokeWidth={2} />
+        {:else}
+          <Maximize2 size={12} strokeWidth={2} />
+        {/if}
+      </button>
     </div>
   </div>
 </div>
+
+<svelte:window
+  onkeydown={(e) => {
+    // the first Escape leaves full view; the drawer/modal handlers check the flag
+    if (e.key === "Escape" && chat.expanded) chat.expanded = false;
+  }}
+/>

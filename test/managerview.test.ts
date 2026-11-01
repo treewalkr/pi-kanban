@@ -93,16 +93,18 @@ test("toggle is a switch: open → close → open", async () => {
 
 const read = (p: string): string => readFileSync(join(import.meta.dir, "..", p), "utf-8");
 
-test("sidebar footer carries the Board chat button wired to manager.toggle", () => {
+test("header view-toggle row carries the chat button wired to manager.toggle", () => {
+  // the sidebar footer no longer has it — the button lives beside the view tabs
   const sidebar = read("web/src/lib/Sidebar.svelte");
-  expect(sidebar).toContain('import { manager } from "./manager.svelte"');
-  expect(sidebar).toContain("MessagesSquare");
-  expect(sidebar).toContain('aria-label="Board chat"');
-  expect(sidebar.indexOf('onclick={() => void manager.toggle()}')).toBeGreaterThan(-1);
-  // it lives in the same footer row as the settings sections
-  const footIdx = sidebar.indexOf('class="sidebar-foot"');
-  expect(footIdx).toBeGreaterThan(-1);
-  expect(sidebar.indexOf("Board chat", footIdx)).toBeGreaterThan(footIdx);
+  expect(sidebar).not.toContain("Board chat");
+  const app = read("web/src/App.svelte");
+  const toggleIdx = app.indexOf('class="view-toggle"');
+  expect(toggleIdx).toBeGreaterThan(-1);
+  const chatBtnIdx = app.indexOf('class="view-chat"');
+  expect(chatBtnIdx).toBeGreaterThan(toggleIdx);
+  expect(app.indexOf("void manager.toggle()", chatBtnIdx)).toBeGreaterThan(chatBtnIdx);
+  const css = read("web/src/app.css");
+  expect(css).toMatch(/\.view-chat\s*{/);
 });
 
 test("App mounts ManagerChat beside SettingsPanel, gated on manager.open", () => {
@@ -124,9 +126,13 @@ test("ManagerChat is a right-side drawer carrying the ChatPanel and both close p
   expect(drawer).toContain("<ChatPanel />");
   expect(drawer).toContain('manager.close()'); // ✕ button
   expect(drawer).toContain('if (e.target === e.currentTarget) manager.close()'); // backdrop click
-  expect(drawer).toContain('if (e.key === "Escape") manager.close()'); // Escape
+  // Escape: full view collapses first, the second Escape closes (chat.expanded flag)
+  expect(drawer).toContain('if (chat.expanded) chat.expanded = false; else manager.close();');
+  // the drawer widens for full view instead of the panel overlaying
+  expect(drawer).toContain('class:expanded={chat.expanded}');
   const css = read("web/src/app.css");
   expect(css).toMatch(/\.manager-backdrop\s*{[^}]*justify-content: flex-end;/s);
+  expect(css).toMatch(/\.manager-drawer\.expanded\s*{[^}]*width:/s);
 });
 
 test("agents settings: manager/worker roles plus the lane workers section with empty state", () => {

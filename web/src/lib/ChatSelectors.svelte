@@ -2,8 +2,9 @@
   /**
    * Composer controls: model + thinking-level picker chips (pi-web toolbar
    * variant). One shared implementation for both chat surfaces — ChatPanel
-   * mounts it under the input box. Catalog comes straight from /pi-models
-   * (server caches 10 min); the agents settings store is left untouched.
+   * mounts it under the input box. Catalog comes from /chat-models — the
+   * chat runtime's authed catalog (chat sessions run noExtensions, so CLI
+   * extension models like antigravity are not offered); server caches 10 min.
    */
   import { Check, Cpu, Lightbulb, LoaderCircle } from "@lucide/svelte";
   import { api } from "../api";
@@ -18,7 +19,7 @@
   $effect(() => {
     if (catalogFetched) return;
     catalogFetched = true;
-    void api["pi-models"].get().then((res) => {
+    void api["chat-models"].get().then((res) => {
       if (!res.error) catalog = res.data.models;
     });
   });
