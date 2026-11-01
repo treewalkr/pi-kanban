@@ -29,7 +29,9 @@ if [ -z "$PORT" ]; then
 fi
 [ -n "$PORT" ] || { echo "repro: no free port in 4611-4620 — pass REPRO_PORT=<n>" >&2; exit 1; }
 
-DB="$(mktemp -t kanban-repro)"
+# explicit template: GNU mktemp needs ≥3 X's in the operand (macOS -t silently
+# appends them), so `mktemp -t kanban-repro` dies on Linux before the banner
+DB="$(mktemp "${TMPDIR:-/tmp}/kanban-repro.XXXXXX")"
 TTL="${REPRO_TTL:-1800}"
 PIDFILE="/tmp/kanban-repro-$PORT.pid"
 WATCHDOG_PID=""
