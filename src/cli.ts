@@ -110,6 +110,9 @@ export function parse(argv: string[]): Parsed {
 
 export function applyServeEnv(flags: Parsed["flags"]): void {
   if (flags.agents || flags["auto-review"]) process.env.KANBAN_AUTO_REVIEW = "1";
+  // stderr directly: serve never returns from boot(), so outBuf never flushes
+  if (flags["auto-review"] && !flags.agents)
+    console.error("kanban: --auto-review is deprecated — use --agents (identical behavior)");
 }
 
 const str = (flags: Parsed["flags"], key: string): string | undefined => {
