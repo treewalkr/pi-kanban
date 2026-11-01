@@ -29,8 +29,13 @@ For every non-trivial unit of work:
 
 - **Before starting**: ensure a card exists and sits in the lane matching what
   you're about to do (`add` → `mv plan` when planning, `mv implement` when coding).
-- **Pickup**: run `kanban brief <id>` before starting work on a card — note,
-  latest plan, and full thread in one read.
+- **Pickup**: run `kanban overview` first — lane counts, WIP limits, and who owns
+  what in one cheap read (never card bodies). Then `kanban brief <id>` before
+  starting work on a card — note, latest plan, and full thread in one read.
+- **Claim what you build**: when you start a card, `kanban claim <id> --author <name>`
+  (or just `handoff` into Test + Implement, which sets the owner for you). Ownership
+  is advisory but visible — `overview`, `ls --owner <name>`, and `show` all display it;
+  any move out of Test + Implement clears it. A foreign owner needs `--force` to take over.
 - **As you progress**: advance the card (`mv implement`, then `mv review` when
   the work looks complete). When you start Implement, attach your plan:
   write it to a file and `kanban attach <id> <plan-file>` — re-attaching a
@@ -118,10 +123,12 @@ review your own work in that mode unless asked.
 
 ```
 kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--tag <tag>]… [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--top]  # new card (Backlog by default; --parent nests it)
-kanban ls [lane] [--project <tag>] [--tag <tag>]… [--json]                           # board overview / one lane (children indented; ▲▼ priority, ⊘ blocked, ☉ waiting)
+kanban overview [--json]                                              # the cheap one-read board shape: lane counts, WIP limits, owned cards (no card bodies)
+kanban ls [lane] [--project <tag>] [--tag <tag>]… [--owner <name>] [--json]      # board overview / one lane (children indented; ▲▼ priority, ⊘ blocked, ☉ waiting; caps at 10 rows/lane, 50 in single-lane view, `… +K more` points at --json)
 kanban next [--project <tag>] [--json]                           # what's next: lane priority, then card priority, then oldest; skips blocked (prints blocked & waiting counts)
-kanban search <query…> [--project <tag>] [--tag <tag>]… [--json]                     # ranked matches: titles, checklist lines, tags, notes, plans
-kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers, from-lane
+kanban search <query…> [--project <tag>] [--tag <tag>]… [--limit <n>] [--json]        # ranked matches (default 20 rows, --limit ≤ 50); --json: {results, matched, hasMore, hint?}
+kanban show <id>                                                      # full detail incl. note, plan, parent, subtasks, blockers, from-lane, owner
+kanban claim <id> [--author <name>] [--force]                         # record who's building it (foreign owner refuses without --force)
 kanban link <id> <other> · unlink <id> <other>                        # relate / unrelate two cards (undirected; visible from both)
 kanban attach <id> <file|gh-ref> [--as <name>]                        # attach/version a card file (default name: plan), or link a GitHub pr/issue: <pr-url|issue-url|gh:owner/repo#n> (--as is files-only); show prints the latest
 kanban gh unlink <id> <ref>                                           # remove a GitHub link (ref: url, gh:owner/repo#n, or #n)
@@ -137,7 +144,7 @@ kanban review <id> (--approve | --block --message <text> [--finding <text>]…) 
 kanban approve <id>                       # plan gate: approve the attached plan → Implement (arms plan-build; works on Waiting-on-you cards parked from Plan)
 kanban reject <id> --message <feedback>   # plan gate: reject with feedback → planner re-plans (a parked card returns to Plan first)
 kanban brief <id>                                                     # full pickup context: note, latest plan, files, thread
-kanban mv <id> <lane> [--pos <1-based>]                               # move / reorder
+kanban mv <id> <lane> [--pos <1-based> | --before <id>]               # move / reorder (--before <anchorId> is concurrent-safe where --pos drifts; same-lane mv without either is a free no-op)
 kanban mv <id> --next | --prev                                        # advance / pull back one lane
 kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--tag <tag>]… [--lane <ref>] [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>]… [--clear-blocked-by] [--clear-tags] [--clear-note] [--clear-parent]
 kanban done <id>                                                      # shortcut → Done
@@ -237,8 +244,20 @@ kanban help | version                                                 # CLI help
   chat section) writes through the same thread verbs as `--author pi-chat` —
   its board writes land as ordinary thread entries; approve/reject stay
   human-owned.
+- **Ownership (`owner`)**: one visible fact for "who's on this". `handoff` into
+  Test + Implement sets it to `--author ?? user`; `approve` sets it to `pi-builder`;
+  leaving Test + Implement (mv, done, archive, park) clears it. `kanban claim <id>`
+  sets it manually; a foreign owner refuses without `--force`.
+- **Board notice**: `scripts/install.sh` symlinks `src/notice.ts` into
+  `~/.pi/agent/extensions/kanban-notice.ts` — every pi session gets one
+  `display:false` `[kanban board]` message at start and again only when the board's
+  shape changes. `KANBAN_NOTICE=0` disables it; `KANBAN_NOTICE_INTERVAL_MS` (min
+  1000) lengthens the poll. It reads via the installed CLI and never creates a
+  board file that does not exist.
 - **`--json`**: append to any command for machine-readable output; on error the
-  CLI exits 1 and prints `kanban: <message>` to stderr.
+  CLI exits 1 and prints `kanban: <message>` to stderr. `search --json` returns
+  the envelope `{results, matched, hasMore, hint?}` — compact rows, never full
+  cards — so narrow the query instead of paging.
 - The web UI edits the same database and receives pushed updates (SSE), so
   CLI and browser changes stay in sync automatically. Clicking a card opens a
   detail view (full note, timestamps, quick done/archive actions) with an edit

@@ -1837,3 +1837,23 @@ test("mv --before: cross-lane anchor, same-lane reorder, --pos conflict", async 
   // help carries the flag
   expect((await run("help")).stdout).toContain("--before <id>");
 });
+
+test("docs: HELP, SKILL.md, AGENTS.md, GLOSSARY.md carry overview/claim/--before/--limit/notice", async () => {
+  const help = (await cli("help")).stdout;
+  for (const needle of ["overview", "claim", "--before", "--limit"]) {
+    expect(help).toContain(needle);
+  }
+
+  const skillMd = readFileSync(join(root, "skills/pi-kanban/SKILL.md"), "utf8");
+  for (const needle of ["overview", "claim", "--before", "--limit", "notice"]) {
+    expect(skillMd).toContain(needle);
+  }
+
+  const agentsMd = readFileSync(join(root, "AGENTS.md"), "utf8");
+  expect(agentsMd).toContain("src/notice.ts");
+
+  const glossary = readFileSync(join(root, "GLOSSARY.md"), "utf8");
+  for (const term of ["**Owner**", "**Overview**", "**Notice**"]) {
+    expect(glossary).toContain(term);
+  }
+});
