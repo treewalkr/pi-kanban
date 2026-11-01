@@ -1,5 +1,5 @@
 import type { Attachment, Lane, Task } from "../../../src/db";
-import { searchBoard } from "../../../src/search";
+import { MAX_RESULTS, searchBoard } from "../../../src/search";
 
 export const PALETTE_MAX = 20;
 
@@ -135,7 +135,7 @@ export function paletteItems(input: PaletteInput): PaletteItem[] {
     return [...projectItems(true), ...laneItems(true)].slice(0, PALETTE_MAX);
   }
 
-  const cardItems: PaletteItem[] = searchBoard(tasks, query, plans).map((r) => ({
+  const cardItems: PaletteItem[] = searchBoard(tasks, query, plans).slice(0, MAX_RESULTS).map((r) => ({
     kind: "card",
     key: `card:jump:${r.task.id}:${r.text}`,
     label: r.text,

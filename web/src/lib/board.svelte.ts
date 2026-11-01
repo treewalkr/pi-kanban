@@ -1,7 +1,7 @@
 import { api } from "../api";
 import type { Attachment, BoardStatsPayload, CardWorkspace, GhLink, GhStatus, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
 import type { AgentSessionInfo, QueuedJobInfo } from "../../../src/autoreview";
-import { searchBoard } from "../../../src/search";
+import { MAX_RESULTS, searchBoard } from "../../../src/search";
 import { initialProject, parseProjectHash, projectHash } from "./viewhash";
 
 type EdenError = { value?: unknown };
@@ -298,7 +298,7 @@ class BoardStore {
   );
   readonly waitingCount = $derived(this.tasks.filter((t) => t.laneId === "waiting").length);
 
-  readonly searchResults = $derived(searchBoard(this.tasks, this.search, this.plans));
+  readonly searchResults = $derived(searchBoard(this.tasks, this.search, this.plans).slice(0, MAX_RESULTS));
 
   openCard(task: Task): void {
     this.editing = task;

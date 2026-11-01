@@ -21,7 +21,10 @@ export interface ChecklistItem {
 
 const CHECKLIST_RE = /^\s*[-*]\s+\[([ xX])]\s+(.*)$/;
 const SNIPPET_MAX = 80;
-const MAX_RESULTS = 20;
+/** Default transport budget for search results — callers may lower it with --limit. */
+export const MAX_RESULTS = 20;
+/** Hard cap: --limit above this is rejected instead of silently honored. */
+export const HARD_RESULT_LIMIT = 50;
 
 /** Parse `- [ ]` / `- [x]` GFM task-list lines out of a note. */
 export function checklistLines(note: string): ChecklistItem[] {
@@ -110,5 +113,5 @@ export function searchBoard(
     }
   }
 
-  return results.sort((a, b) => b.score - a.score).slice(0, MAX_RESULTS);
+  return results.sort((a, b) => b.score - a.score); // all ranked matches — callers slice (CLI budget, web MAX_RESULTS)
 }

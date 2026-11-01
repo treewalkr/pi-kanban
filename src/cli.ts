@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
 import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, ownedLines, overviewLine, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
 import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
-import { searchBoard } from "./search";
+import { searchBoard, HARD_RESULT_LIMIT, MAX_RESULTS } from "./search";
 import { cardFileDiff } from "./diff";
 
 const VERSION = "0.6.0";
@@ -16,7 +16,7 @@ usage:
                       [--priority <high|normal|low>] [--blocked-by <id>]… [--top] [--elaborate]
   kanban ls [lane] [--project <tag>] [--tag <tag>]… [--owner <name>] [--json]
   kanban next [--project <tag>] [--json]  (what's next: lane priority, then card priority, then oldest; skips blocked)
-  kanban search <query…> [--project <tag>] [--tag <tag>]… [--json]
+  kanban search <query…> [--project <tag>] [--tag <tag>]… [--limit <n>] [--json]   (default 20 rows, --limit up to 50)
   kanban show <id>
   kanban link <id> <other>                (relate two cards; visible from both)
   kanban unlink <id> <other>
@@ -345,9 +345,18 @@ async function main(): Promise<number> {
 
       case "search": {
         const query = positional.join(" ").trim();
-        if (!query) throw new KanbanError("usage: kanban search <query…> [--project <tag>] [--tag <tag>]…", "invalid");
+        if (!query)
+          throw new KanbanError("usage: kanban search <query…> [--project <tag>] [--tag <tag>]… [--limit <n>] [--json]", "invalid");
         const tagFilter = arr(flags, "tag");
-        const results = searchBoard(
+        const rawLimit = str(flags, "limit");
+        let limit = MAX_RESULTS;
+        if (rawLimit !== undefined) {
+          if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > HARD_RESULT_LIMIT) {
+            throw new KanbanError("--limit must be between 1 and 50", "invalid");
+          }
+          limit = Number(rawLimit);
+        }
+        const all = searchBoard(
           db
             .tasks()
             .filter((t) => (project ? t.project === project : true))
@@ -355,8 +364,30 @@ async function main(): Promise<number> {
           query,
           db.latestPlans(),
         );
-        if (json) jsonOut(results);
-        else out(searchResults(db, query, results));
+        const results = all.slice(0, limit);
+        const hidden = all.length - results.length;
+        if (json) {
+          jsonOut({
+            results: results.map((r) => ({
+              id: r.task.id,
+              title: r.task.title,
+              laneId: r.task.laneId,
+              kind: r.kind,
+              text: r.text,
+              ...(r.checked !== undefined ? { checked: r.checked } : {}),
+            })),
+            matched: all.length,
+            hasMore: hidden > 0,
+            ...(hidden > 0
+              ? { hint: `…+${hidden} more matches — narrow the query, or pass --limit up to ${HARD_RESULT_LIMIT}` }
+              : {}),
+          });
+        } else {
+          out(searchResults(db, query, results));
+          if (hidden > 0) {
+            out(c.dim(`…+${hidden} more matches — narrow the query, or pass --limit up to ${HARD_RESULT_LIMIT}`));
+          }
+        }
         return 0;
       }
 

@@ -559,26 +559,24 @@ test("search ranks titles, checklists and notes; --project scopes; empty query f
   );
   await cli("add", "unrelated card", "--project", "other", "--note", "- [ ] calibrate the flux");
 
-  const titles = JSON.parse((await cli("search", "flux", "--json")).stdout) as Array<{
-    kind: string;
-    task: Task;
-  }>;
-  expect(titles[0]!.kind).toBe("title");
-  expect(titles[0]!.task.title).toBe("flux capacitor search");
+  const titles = JSON.parse((await cli("search", "flux", "--json")).stdout) as {
+    results: Array<{ kind: string; id: string; title: string }>;
+  };
+  expect(titles.results[0]!.kind).toBe("title");
+  expect(titles.results[0]!.title).toBe("flux capacitor search");
 
   // multi-word positional args join into one query
-  const checklists = JSON.parse((await cli("search", "calibrate", "the", "flux", "--json")).stdout) as Array<{
-    kind: string;
-    task: Task;
-  }>;
-  expect(checklists).toHaveLength(2);
-  expect(checklists.every((r) => r.kind === "checklist")).toBe(true);
+  const checklists = JSON.parse((await cli("search", "calibrate", "the", "flux", "--json")).stdout) as {
+    results: Array<{ kind: string; id: string }>;
+  };
+  expect(checklists.results).toHaveLength(2);
+  expect(checklists.results.every((r) => r.kind === "checklist")).toBe(true);
 
   const scoped = JSON.parse(
     (await cli("search", "calibrate", "--project", "delorean", "--json")).stdout,
-  ) as Array<{ task: Task }>;
-  expect(scoped).toHaveLength(1);
-  expect(scoped[0]!.task.project).toBe("delorean");
+  ) as { results: Array<{ id: string }> };
+  expect(scoped.results).toHaveLength(1);
+  expect(scoped.results[0]!.id).toBeTruthy();
 
   const human = await cli("search", "plutonium");
   expect(human.stdout).toContain("note:");
@@ -1239,9 +1237,11 @@ test("search --tag scopes results to tagged cards", async () => {
   expect(scoped.stdout).not.toContain("polish the footer");
 
   const json = await cli("search", "ui", "--tag", "ui", "--json");
-  const results = JSON.parse(json.stdout) as Array<{ task: Task }>;
-  expect(results.length).toBeGreaterThan(0);
-  expect(results.every((r) => r.task.tags.includes("ui"))).toBe(true);
+  const results = JSON.parse(json.stdout) as { results: Array<{ id: string }> };
+  expect(results.results.length).toBeGreaterThan(0);
+  const board = JSON.parse((await cli("ls", "--json")).stdout) as Task[];
+  const byId = new Map(board.map((t) => [t.id, t]));
+  expect(results.results.every((r) => byId.get(r.id)?.tags.includes("ui"))).toBe(true);
 });
 
 test("lane limit sets, shows in lane ls, clears with off", async () => {
@@ -1682,4 +1682,84 @@ test("ls: per-lane caps with overflow; single-lane cap; --owner flat filter", as
   const ownedJson = JSON.parse((await run("ls", "--owner", "ada", "--json")).stdout) as Array<{ title: string }>;
   expect(ownedJson).toHaveLength(1);
   expect(ownedJson[0]!.title).toBe("ada's card");
+});
+
+test("search: --limit default and 50 cap, compact rows, matched/hasMore/hint", async () => {
+  const sDb = join(dir, "search-limit.db");
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: sDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, code };
+  };
+
+  {
+    const seed = new KanbanDb(sDb);
+    for (let i = 0; i < 30; i++) {
+      seed.createTask({ title: `bulk searchable ${i}`, note: `filler ${i} `.repeat(40) });
+    }
+    const check = seed.createTask({ title: "checklist source", note: "- [x] bulk searchable checkbox" });
+    void check;
+    seed.close();
+  }
+
+  // default 20 rows; matched 31; hasMore + hint on both surfaces
+  const def = JSON.parse((await run("search", "bulk", "--json")).stdout) as {
+    results: Array<{ id: string; title: string; laneId: string; kind: string; text: string; note?: string; checked?: boolean }>;
+    matched: number;
+    hasMore: boolean;
+    hint?: string;
+  };
+  expect(def.results).toHaveLength(20);
+  expect(def.matched).toBe(31);
+  expect(def.hasMore).toBe(true);
+  expect(def.hint).toBe("…+11 more matches — narrow the query, or pass --limit up to 50");
+  const row = def.results[0]!;
+  expect(Object.keys(row).sort()).toEqual(["id", "kind", "laneId", "text", "title"]);
+  expect(row.note).toBeUndefined(); // compact rows, never Task bodies
+  // checklist rows keep their checked flag (rank below titles, so raise the limit)
+  const deep = JSON.parse((await run("search", "bulk", "--limit", "50", "--json")).stdout) as {
+    results: Array<{ kind: string; checked?: boolean }>;
+  };
+  const checkRow = deep.results.find((r) => r.kind === "checklist");
+  expect(checkRow?.checked).toBe(true);
+
+  // human: rows + dim tail with the same string
+  const human = await run("search", "bulk");
+  expect(human.code).toBe(0);
+  expect(human.stdout).toContain("…+11 more matches — narrow the query, or pass --limit up to 50");
+
+  // --limit raises the transport budget up to the hard cap
+  const raised = JSON.parse((await run("search", "bulk", "--limit", "31", "--json")).stdout) as {
+    results: unknown[];
+    matched: number;
+    hasMore: boolean;
+    hint?: string;
+  };
+  expect(raised.results).toHaveLength(31);
+  expect(raised.hasMore).toBe(false);
+  expect(raised.hint).toBeUndefined();
+
+  const capped = JSON.parse((await run("search", "bulk", "--limit", "50", "--json")).stdout) as { results: unknown[] };
+  expect(capped.results).toHaveLength(31);
+
+  // out-of-range and non-numeric limits exit 1 with the exact message
+  for (const bad of ["0", "51", "abc", "-3"]) {
+    const badRes = await run("search", "bulk", "--limit", bad);
+    expect(badRes.code).toBe(1);
+    expect(badRes.stderr).toContain("--limit must be between 1 and 50");
+  }
+
+  // usage error mentions --limit
+  const empty = await run("search");
+  expect(empty.code).toBe(1);
+  expect(empty.stderr).toContain("usage: kanban search <query…> [--project <tag>] [--tag <tag>]… [--limit <n>] [--json]");
 });
