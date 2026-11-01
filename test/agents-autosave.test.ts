@@ -23,6 +23,8 @@ describe("agents auto-save store", () => {
       builder: {},
       "plan-reviewer": {},
       elaborator: {},
+      manager: {},
+      worker: {},
     };
     (agents as any).pending = null;
     (agents as any).inFlight = null;

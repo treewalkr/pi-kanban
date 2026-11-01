@@ -5,7 +5,8 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 ## Layout
 
 - `src/` — Bun/TS: `db.ts` (SQLite + all queries), `app.ts` (Elysia app, exports `type App`), `index.ts` (server entry), `cli.ts` + `render.ts` (CLI)
-- `src/chat.ts` + `src/chat-events.ts` — resident per-card chat sessions over the pi SDK; `/chat/:cardId`, `/chat/:cardId/events` (SSE) in `app.ts`; panel in `web/src/lib/ChatPanel.svelte`
+- `src/chat.ts` + `src/chat-events.ts` — resident chat sessions over the pi SDK (per-card + the board manager on pseudo-card `board`); `/chat/:cardId`, `/chat/:cardId/events` (SSE) in `app.ts`; panel in `web/src/lib/ChatPanel.svelte`, drawer in `web/src/lib/ManagerChat.svelte`
+- `src/lane-workers.ts` — lane worker charters/prompts + the serve-process runner that drains `lane_workers` rows (`kanban worker run`); workers act only via CLI verbs, `pi-worker-<lane>` authors, gates human-only
 - `web/` — Vite + Svelte 5 SPA (board UI), calls the API via Eden Treaty
 - `skills/pi-kanban/SKILL.md` — pi skill, installed to `~/.pi/agent/skills/pi-kanban/` by `scripts/install.sh`
 - `src/notice.ts` — board-notice pi extension (Node-safe: only `node:*` imports; reads the board by spawning the installed CLI), symlinked by `scripts/install.sh` to `~/.pi/agent/extensions/kanban-notice.ts`; one `display:false` message at session start and on board-shape changes (`KANBAN_NOTICE=0` disables)

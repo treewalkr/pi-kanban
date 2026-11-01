@@ -380,7 +380,7 @@ test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async (
 
   const empty = await app.handle(new Request("http://localhost/agents"));
   expect(empty.status).toBe(200);
-  expect(await empty.json()).toEqual({ planner: null, reviewer: null, builder: null, "plan-reviewer": null, elaborator: null });
+  expect(await empty.json()).toEqual({ planner: null, reviewer: null, builder: null, "plan-reviewer": null, elaborator: null, manager: null, worker: null });
 
   const put = await app.handle(
     new Request("http://localhost/agents/reviewer", {
@@ -417,7 +417,7 @@ test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async (
 
   const json = { headers: { "content-type": "application/json" } };
   const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
-  const badRole = await app.handle(new Request("http://localhost/agents/worker", { method: "PUT", ...putBody({}) }));
+  const badRole = await app.handle(new Request("http://localhost/agents/chief", { method: "PUT", ...putBody({}) }));
   expect(badRole.status).toBe(422);
   const unknownKey = await app.handle(
     new Request("http://localhost/agents/reviewer", { method: "PUT", ...putBody({ temperature: 0.2 }) }),
@@ -448,6 +448,54 @@ test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async (
   );
   expect(cleared.status).toBe(200);
   expect(await cleared.json()).toEqual({});
+});
+
+test("GET /workers lists runs without logs; PUT /agents/manager and /agents/worker store configs", async () => {
+  const app = createApp(db);
+
+  // seeded runs: newest first, log stripped
+  const a = db.queueLaneWorker({ laneId: "backlog", focus: "first" });
+  const b = db.queueLaneWorker({ laneId: "review", requestedBy: "pi-manager" });
+  db.claimLaneWorker(a.id, "s-a", Date.now());
+  db.finishLaneWorker(a.id, { status: "done", summary: "groomed", log: "text: groomed\n→ Bash" }, Date.now());
+
+  const res = await app.handle(new Request("http://localhost/workers"));
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { workers: Array<Record<string, unknown>> };
+  expect(body.workers).toHaveLength(2);
+  expect(body.workers.map((w) => w.id)).toEqual([b.id, a.id]);
+  expect(body.workers[0]).toMatchObject({ laneId: "review", status: "queued", requestedBy: "pi-manager" });
+  expect(body.workers[1]).toMatchObject({ laneId: "backlog", status: "done", summary: "groomed" });
+  for (const w of body.workers) expect("log" in w).toBe(false);
+
+  // manager/worker configs persist through the same route as loop roles
+  for (const role of ["manager", "worker"] as const) {
+    const put = await app.handle(
+      new Request(`http://localhost/agents/${role}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "zai", model: "glm-5.3", thinking: role === "worker" ? "low" : "high" }),
+      }),
+    );
+    expect(put.status).toBe(200);
+    expect(db.agentConfig(role)).toMatchObject({ provider: "zai", model: "glm-5.3" });
+  }
+  const got = await app.handle(new Request("http://localhost/agents"));
+  expect(await got.json()).toMatchObject({
+    manager: { provider: "zai", thinking: "high" },
+    worker: { provider: "zai", thinking: "low" },
+  });
+
+  // empty PUT clears (full replace), same as loop roles
+  const cleared = await app.handle(
+    new Request("http://localhost/agents/worker", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }),
+  );
+  expect(cleared.status).toBe(200);
+  expect(db.agentConfig("worker")).toEqual({});
 });
 
 test("GET /tasks/:id/sessions lists saved agent logs oldest-first", async () => {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { board } from "./lib/board.svelte";
   import { agents } from "./lib/agents.svelte";
+  import { manager } from "./lib/manager.svelte";
   import { ui, startViewportSync } from "./lib/ui.svelte";
   import { eventsUrl } from "./api";
   import LaneView from "./lib/Lane.svelte";
@@ -14,6 +15,7 @@
   import Palette from "./lib/CommandPalette.svelte";
   import { palette } from "./lib/palette.svelte";
   import SettingsPanel from "./lib/SettingsPanel.svelte";
+  import ManagerChat from "./lib/ManagerChat.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import { theme, setTheme } from "./lib/theme.svelte";
   import { notify } from "./lib/notify.svelte";
@@ -288,6 +290,10 @@
 
   {#if agents.open}
     <SettingsPanel />
+  {/if}
+
+  {#if manager.open}
+    <ManagerChat />
   {/if}
 
   {#if palette.open}<Palette />{/if}

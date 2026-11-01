@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   CHAT_SESSION_ID_PREFIX,
   ChatManager,
+  MANAGER_SESSION_ID,
   chatSeed,
   chatSystemAppend,
   DEFAULT_CHAT_IDLE_TIMEOUT_MS,
@@ -14,7 +15,7 @@ import {
   type ChatHandle,
   type ChatSessionFactory,
 } from "../src/chat";
-import { KanbanDb } from "../src/db";
+import { KanbanDb, KanbanError } from "../src/db";
 
 let dir = "";
 let db: KanbanDb;
@@ -365,4 +366,100 @@ test("real SDK session constructs in-memory under bun", async () => {
   const session = await defaultChatSessionFactory({ cwd: dir, sessionManager, appendSystemPrompt: "chat append" });
   expect(typeof session.subscribe).toBe("function");
   session.dispose();
+});
+
+// ---------- board manager session (card d26pe) ----------
+
+test('get("board") builds the manager handle: kanban-manager id, charter system append, overview seed', async () => {
+  db.createTask({ title: "the next thing", lane: "backlog", priority: "high" });
+  db.createTask({ title: "parked question", lane: "waiting" });
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+
+  const handle = await manager.get("board");
+  expect(handle.sessionId).toBe(MANAGER_SESSION_ID);
+  expect(manager.peek("board")).toBe(handle);
+  expect(manager.sessionCount()).toBe(1);
+
+  const capture = sessions[0] as {
+    appendSystemPrompt: string;
+    session: Record<string, unknown>;
+    sessionManager: { appendMessage(m: unknown): string };
+  };
+  expect(capture.appendSystemPrompt).toContain("board manager");
+  expect(capture.appendSystemPrompt).toContain("`pi-manager`");
+  expect(capture.appendSystemPrompt).toContain('<skill name="pi-kanban"');
+  expect(capture.appendSystemPrompt).toContain("kanban worker run <lane>");
+  expect(capture.appendSystemPrompt).toContain("Propose before you dispatch");
+  expect(capture.appendSystemPrompt).toContain(
+    "Never run `kanban approve`, `kanban reject`, `kanban review`, or `kanban plan-review`",
+  );
+
+  const prompts: string[] = [];
+  capture.session.prompt = async (text: string) => {
+    prompts.push(text);
+    capture.sessionManager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+  };
+  await handle.send({ type: "prompt", message: "what needs attention?" });
+  expect(prompts[0]).toContain("You are the board manager (`pi-manager`)");
+  expect(prompts[0]).toContain("Snapshot of the board as this session starts:");
+  expect(prompts[0]).toContain("Backlog 1"); // lane counts from the seeded db
+  expect(prompts[0]).toContain("the next thing");
+  expect(prompts[0]).toContain("waiting on you:");
+  // a second prompt skips the seed
+  await handle.send({ type: "prompt", message: "and now?" });
+  expect(prompts[1]).not.toContain("Snapshot of the board");
+  await manager.disposeAll();
+});
+
+test('"board" is never a card id: resolveTask throws while the manager handle works', async () => {
+  const card = db.createTask({ title: "a real card" });
+  expect(() => db.resolveTask("board")).toThrow(new KanbanError("no task matching 'board'", "not-found"));
+
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+  const boardHandle = await manager.get("board");
+  const cardHandle = await manager.get(card.id);
+  expect(boardHandle).not.toBe(cardHandle);
+  expect(cardHandle.sessionId).toBe(CHAT_SESSION_ID_PREFIX + card.id);
+  await manager.disposeAll();
+});
+
+test("manager handle idle-expires and resumes with a fresh overview seed", async () => {
+  let now = 1_000_000;
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({
+    cwd: dir,
+    db,
+    createSession: factory,
+    idleTimeoutMs: DEFAULT_CHAT_IDLE_TIMEOUT_MS,
+    now: () => now,
+  });
+
+  const handle = await manager.get("board");
+  now += DEFAULT_CHAT_IDLE_TIMEOUT_MS + 1;
+  await Bun.sleep(400); // the idle sweep ticks at 250ms
+  expect(manager.peek("board")).toBeNull();
+
+  // board changed while the manager was away — the rebuilt handle seeds from fresh numbers
+  db.createTask({ title: "later card", lane: "review" });
+  const resumed = await manager.get("board");
+  expect(resumed).not.toBe(handle);
+  const capture2 = sessions[1] as {
+    session: Record<string, unknown>;
+    sessionManager: { appendMessage(m: unknown): string };
+  };
+  const prompts2: string[] = [];
+  capture2.session.prompt = async (text: string) => {
+    prompts2.push(text);
+    capture2.sessionManager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+  };
+  await resumed.send({ type: "prompt", message: "back" });
+  expect(prompts2[0]).toContain("Snapshot of the board as this session starts:");
+  expect(prompts2[0]).toContain("later card");
+  expect(prompts2[0]).toContain("Review 1");
+  await manager.disposeAll();
 });

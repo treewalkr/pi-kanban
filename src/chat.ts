@@ -13,7 +13,7 @@
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, type AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { skillActivationPrompt } from "./autoreview";
-import { KanbanError, type KanbanDb, type Task } from "./db";
+import { KanbanError, type BoardOverview, type KanbanDb, type Task } from "./db";
 import { registerShutdown } from "./shutdown";
 
 export const CHAT_SESSION_ID_PREFIX = "kanban-chat-";
@@ -23,6 +23,11 @@ export const THINKING_BLOCK_CAP = 2_000;
 export const SEED_NOTE_CAP = 4_000;
 export const PROMPT_MAX_CHARS = 100_000;
 export const CHAT_AUTHOR = "pi-chat";
+
+/** Pseudo-card id of the resident board manager chat — no card id can ever collide (the id alphabet has no "o"). */
+export const BOARD_CHAT_ID = "board";
+export const MANAGER_SESSION_ID = "kanban-manager";
+export const MANAGER_AUTHOR = "pi-manager";
 
 /** Env knob: 0 disables idle expiry, invalid → default + console.warn. */
 export function resolveChatIdleTimeoutMs(env: string | undefined = process.env.KANBAN_CHAT_IDLE_TIMEOUT_MS): number {
@@ -102,6 +107,51 @@ export function chatSeed(task: Task, laneName: string): string {
     note || "(no note)",
     "",
     `Full pickup context: run \`kanban brief ${task.id}\`.`,
+  ].join("\n");
+}
+
+/** The board manager's system append: identity, the skill, its view/dispatch/autonomy rules, gate discipline. */
+export function managerSystemAppend(): string {
+  const skill = skillActivationPrompt([chatSkillPath], (message) => console.warn(`[chat] ${message}`));
+  return [
+    `You are the board manager (\`${MANAGER_AUTHOR}\`) for this kanban board. The human is talking to you in the kanban UI; this repo is the board's serving repo.`,
+    "",
+    skill,
+    "View:",
+    "- Your first prompt carries a board overview — lane counts, oldest card age per lane, what's parked in Waiting on you, the next proposal. It is a snapshot from when this session started; refresh with `kanban stats`, `kanban ls <lane>`, `kanban next`, `kanban check` before drawing conclusions.",
+    "Dispatch:",
+    '- Lane workers are short-lived headless agents with a charter over one lane: `kanban worker run <lane> --focus "<what to look at>"` — backlog grooms (the only writable charter); waiting, plan, implement, review are report-only sweeps. Check results with `kanban worker ls` and relay the summaries; don\'t paste raw logs.',
+    "Autonomy:",
+    "- Propose before you dispatch: say which lane you'd sweep and why, and run it once the human says go. Never dispatch on your own initiative.",
+    "Rules:",
+    `- Board writes go through the kanban CLI only, always \`--author ${MANAGER_AUTHOR}\`; the card thread is the durable record. Never run \`kanban approve\`, \`kanban reject\`, \`kanban review\`, or \`kanban plan-review\` — verdicts and gates belong to the human — and never instruct a worker to run them. Never comment on cards in the Plan, Test + Implement, or Review lanes — the auto-agent loop owns those threads; report concerns to the human instead.`,
+  ].join("\n");
+}
+
+/** The board overview rendered for the manager's seed prompt (free-form; the numbers are the contract). */
+export function formatBoardOverview(o: BoardOverview): string {
+  const lines: string[] = [];
+  lines.push(`lanes: ${o.lanes.map((l) => `${l.name} ${l.count}`).join(" · ")}`);
+  const aging = o.lanes.filter((l) => l.count > 0 && l.oldestDays > 0);
+  if (aging.length > 0) {
+    lines.push(`oldest in lane: ${aging.map((l) => `${l.name.toLowerCase()} ${l.oldestDays}d`).join(", ")}`);
+  }
+  if (o.waiting.length > 0) {
+    lines.push(`waiting on you: ${o.waiting.map((w) => `${w.id} ${w.title} (${w.ageDays}d)`).join(" · ")}`);
+  }
+  lines.push(o.next ? `next: ${o.next.id} ${o.next.title}` : "next: nothing — the board is clear");
+  lines.push(`blocked: ${o.blocked}`);
+  return lines.join("\n");
+}
+
+/** The manager's first prompt: identity plus the board snapshot taken as the session starts. */
+export function managerSeed(overview: string): string {
+  return [
+    `You are the board manager (\`${MANAGER_AUTHOR}\`). Snapshot of the board as this session starts:`,
+    "",
+    overview,
+    "",
+    "Refresh with `kanban stats` / `kanban ls` / `kanban next`. Ask what needs attention, or propose a worker sweep (`kanban worker run <lane>`).",
   ].join("\n");
 }
 
@@ -231,8 +281,10 @@ interface HandleOpts {
   sessionId: string;
   session: AgentSession;
   sessionManager: import("@earendil-works/pi-coding-agent").SessionManager;
-  task: Task;
-  laneName: string;
+  /** The appended system prompt this handle's session was created with. */
+  appendSystemPrompt: string;
+  /** The first prompt's context (card note or board overview), computed at send time. */
+  firstSeed: () => string;
   idleTimeoutMs: number;
   now: () => number;
   log: (message: string) => void;
@@ -246,8 +298,8 @@ class ChatHandleImpl implements ChatHandle {
   readonly sessionId: string;
   private readonly session: AgentSession;
   private readonly sessionManager: import("@earendil-works/pi-coding-agent").SessionManager;
-  private readonly task: Task;
-  private readonly laneName: string;
+  private readonly appendSystemPrompt: string;
+  private readonly firstSeed: () => string;
   private readonly idleTimeoutMs: number;
   private readonly now: () => number;
   private readonly log: (message: string) => void;
@@ -264,8 +316,8 @@ class ChatHandleImpl implements ChatHandle {
     this.sessionId = opts.sessionId;
     this.session = opts.session;
     this.sessionManager = opts.sessionManager;
-    this.task = opts.task;
-    this.laneName = opts.laneName;
+    this.appendSystemPrompt = opts.appendSystemPrompt;
+    this.firstSeed = opts.firstSeed;
     this.idleTimeoutMs = opts.idleTimeoutMs;
     this.now = opts.now;
     this.log = opts.log;
@@ -320,7 +372,7 @@ class ChatHandleImpl implements ChatHandle {
         if (this.session.isStreaming && !command.streamingBehavior) {
           throw new KanbanError("chat is streaming — send steer or followUp", "conflict");
         }
-        const seed = hasUserMessage(this.sessionManager) ? "" : `${chatSeed(this.task, this.laneName)}\n\n`;
+        const seed = hasUserMessage(this.sessionManager) ? "" : `${this.firstSeed()}\n\n`;
         // Decision 7 (the rpc-mode contract): the send resolves when the SDK's
         // preflight callback fires — synchronous validation, auth, and queueing all
         // happen before it — not when the whole LLM + tool loop finishes. Run output
@@ -470,50 +522,67 @@ export class ChatManager {
     this.now = opts.now ?? (() => Date.now());
   }
 
-  private async buildHandle(task: Task): Promise<ChatHandleImpl> {
-    const sessionId = CHAT_SESSION_ID_PREFIX + task.id;
-    const append = chatSystemAppend(task);
-    const laneName = this.db.lanes().find((l) => l.id === task.laneId)?.name ?? task.laneId;
+  private async buildHandle(cardId: string, sessionId: string, appendSystemPrompt: string, firstSeed: () => string): Promise<ChatHandleImpl> {
     const existingPath = SessionManager.findById(this.cwd, sessionId, this.sessionDir);
     const sessionManager = existingPath
       ? SessionManager.open(existingPath, this.sessionDir, this.cwd)
       : SessionManager.create(this.cwd, this.sessionDir, { id: sessionId });
-    this.log(`${task.id} ${existingPath ? "resumed" : "created"}`);
-    const session = await this.createSession({ cwd: this.cwd, sessionManager, appendSystemPrompt: append });
+    this.log(`${cardId} ${existingPath ? "resumed" : "created"}`);
+    const session = await this.createSession({ cwd: this.cwd, sessionManager, appendSystemPrompt });
     return new ChatHandleImpl({
       cwd: this.cwd,
-      cardId: task.id,
+      cardId,
       sessionId,
       session,
       sessionManager,
-      task,
-      laneName,
+      appendSystemPrompt,
+      firstSeed,
       idleTimeoutMs: this.idleTimeoutMs,
       now: this.now,
       log: this.log,
       onDisposed: (handle) => {
-        if (this.handles.get(task.id) === handle) this.handles.delete(task.id);
+        if (this.handles.get(cardId) === handle) this.handles.delete(cardId);
       },
     });
   }
 
   /** Resolve task → get-or-create one alive handle per card (concurrent gets share one creation). */
   async get(cardId: string): Promise<ChatHandle> {
+    if (cardId === BOARD_CHAT_ID) {
+      return this.getOrCreate(BOARD_CHAT_ID, () => ({
+        sessionId: MANAGER_SESSION_ID,
+        appendSystemPrompt: managerSystemAppend(),
+        firstSeed: () => managerSeed(formatBoardOverview(this.db.boardOverview())),
+      }));
+    }
     const task = this.db.resolveTask(cardId); // 404 for unknown/ambiguous ids, before any map lookup
-    const alive = this.handles.get(task.id);
+    return this.getOrCreate(task.id, () => {
+      const laneName = this.db.lanes().find((l) => l.id === task.laneId)?.name ?? task.laneId;
+      return {
+        sessionId: CHAT_SESSION_ID_PREFIX + task.id,
+        appendSystemPrompt: chatSystemAppend(task),
+        firstSeed: () => chatSeed(task, laneName),
+      };
+    });
+  }
+
+  /** Get-or-create one alive handle per key (concurrent gets share one creation). */
+  private async getOrCreate(key: string, spec: () => { sessionId: string; appendSystemPrompt: string; firstSeed: () => string }): Promise<ChatHandle> {
+    const alive = this.handles.get(key);
     if (alive) return alive;
-    const pending = this.inflight.get(task.id);
+    const pending = this.inflight.get(key);
     if (pending) return pending;
-    const creation = this.buildHandle(task).then((handle) => {
-      this.handles.set(task.id, handle);
+    const { sessionId, appendSystemPrompt, firstSeed } = spec();
+    const creation = this.buildHandle(key, sessionId, appendSystemPrompt, firstSeed).then((handle) => {
+      this.handles.set(key, handle);
       if (!this.shutdownRegistered) {
         this.shutdownRegistered = true;
         registerShutdown(() => this.disposeAll());
       }
       return handle;
     });
-    creation.finally(() => this.inflight.delete(task.id)).catch(() => {});
-    this.inflight.set(task.id, creation);
+    creation.finally(() => this.inflight.delete(key)).catch(() => {});
+    this.inflight.set(key, creation);
     return creation;
   }
 
@@ -529,7 +598,7 @@ export class ChatManager {
 
   /** Disk-backed history without touching the live map (the GET route's not-running path). */
   historyFromDisk(cardId: string): { sessionId: string | null; messages: ChatState["messages"]; messagesTruncated: boolean } {
-    const sessionId = CHAT_SESSION_ID_PREFIX + this.db.resolveTask(cardId).id;
+    const sessionId = cardId === BOARD_CHAT_ID ? MANAGER_SESSION_ID : CHAT_SESSION_ID_PREFIX + this.db.resolveTask(cardId).id;
     const path = SessionManager.findById(this.cwd, sessionId, this.sessionDir);
     if (!path) return { sessionId: null, messages: [], messagesTruncated: false };
     const { messages, truncated } = projectSessionEntries(SessionManager.open(path, this.sessionDir, this.cwd));

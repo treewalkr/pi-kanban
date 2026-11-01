@@ -42,7 +42,7 @@ test("agentConfig: null → set → roundtrip → replace; unknown role rejected
   // set is a full replace — dropped fields disappear
   expect(db.setAgentConfig("reviewer", { model: "other" })).toEqual({ model: "other" });
 
-  expect(() => db.setAgentConfig("worker", {})).toThrow(KanbanError);
+  expect(() => db.setAgentConfig("chief", {})).toThrow(KanbanError);
 });
 
 test("pools: set → list → replace → delete; caps and field trimming", () => {
@@ -1847,4 +1847,146 @@ test("same-lane moveTask without index/before writes nothing", () => {
   // --pos still reorders within the same lane
   db.moveTask(b.id, "backlog", 0);
   expect(db.laneTasks("backlog").map((t) => t.id)).toEqual([b.id, a.id, c.id]);
+});
+
+// ---------- lane workers + board overview (card d26pe) ----------
+
+test("lane workers: queue → claim → finish lifecycle with guards", () => {
+  expect(db.laneWorkers()).toEqual([]);
+
+  const run = db.queueLaneWorker({ laneId: "backlog", focus: "  groom stale cards  " });
+  expect(run.status).toBe("queued");
+  expect(run.laneId).toBe("backlog");
+  expect(run.focus).toBe("groom stale cards");
+  expect(run.requestedBy).toBe("user");
+  expect(run.id).toMatch(/^[23456789abcdefghjkmnpqrstuvwxyz]+$/);
+  expect(run.sessionId).toBeUndefined();
+  expect(run.startedAt).toBeUndefined();
+
+  // newest first
+  const second = db.queueLaneWorker({ laneId: "waiting", requestedBy: "pi-manager" });
+  expect(db.laneWorkers().map((r) => r.id)).toEqual([second.id, run.id]);
+  expect(db.laneWorker(run.id)).toMatchObject({ id: run.id });
+  expect(db.laneWorker("zzzzzz")).toBeNull();
+  expect(db.laneWorkers({ laneId: "backlog" }).map((r) => r.id)).toEqual([run.id]);
+
+  const now = Date.now();
+  const claimed = db.claimLaneWorker(run.id, "kanban-worker-backlog-" + run.id, now);
+  expect(claimed).toMatchObject({ status: "running", sessionId: "kanban-worker-backlog-" + run.id, startedAt: now });
+
+  // claim on a non-queued row loses
+  expect(db.claimLaneWorker(run.id, "other", now)).toBeNull();
+  expect(db.claimLaneWorker("zzzzzz", "other", now)).toBeNull();
+
+  // finish only from running
+  const done = db.finishLaneWorker(run.id, { status: "done", summary: "groomed 3 cards", log: "text: done" }, now + 5);
+  expect(done).toMatchObject({ status: "done", summary: "groomed 3 cards", endedAt: now + 5 });
+  expect(db.finishLaneWorker(run.id, { status: "failed" }, now + 6)).toBeNull(); // second finish null
+  expect(db.finishLaneWorker(second.id, { status: "done" }, now)).toBeNull(); // only from running
+  expect(db.laneWorkers({ status: "done" }).map((r) => r.id)).toEqual([run.id]);
+});
+
+test("failRunningLaneWorkers reaps orphaned running rows", () => {
+  const a = db.queueLaneWorker({ laneId: "backlog" });
+  const b = db.queueLaneWorker({ laneId: "review" });
+  const parked = db.queueLaneWorker({ laneId: "waiting" }); // stays queued — untouched
+  const now = Date.now();
+  db.claimLaneWorker(a.id, "s-a", now);
+  db.claimLaneWorker(b.id, "s-b", now);
+
+  const reaped = db.failRunningLaneWorkers("server restarted — run lost; re-dispatch if needed");
+  expect(reaped).toBe(2);
+  expect(db.laneWorker(a.id)).toMatchObject({
+    status: "failed",
+    exitInfo: "server restarted — run lost; re-dispatch if needed",
+  });
+  expect(db.laneWorker(b.id)!.endedAt).toBeGreaterThan(0);
+  expect(db.laneWorker(parked.id)!.status).toBe("queued");
+
+  expect(db.failRunningLaneWorkers("again")).toBe(0);
+});
+
+test("queueLaneWorker rejects focus over 2000 characters", () => {
+  expect(() => db.queueLaneWorker({ laneId: "backlog", focus: "x".repeat(2001) })).toThrow(
+    new KanbanError("worker focus must be at most 2000 characters", "invalid"),
+  );
+  expect(() => db.queueLaneWorker({ laneId: "backlog", focus: "x".repeat(2000) })).not.toThrow();
+});
+
+test("laneSnapshot caps cards at 40 and reports total/truncated; ageDays from the lane entry", () => {
+  for (let i = 0; i < 45; i++) db.createTask({ title: `bulk ${i}`, lane: "backlog" });
+  const now = Date.now() + 3.5 * 86_400_000; // 3+ days after every entry
+  const snap = db.laneSnapshot("backlog", 40, now);
+  expect(snap.laneId).toBe("backlog");
+  expect(snap.total).toBe(45);
+  expect(snap.truncated).toBe(true);
+  expect(snap.cards).toHaveLength(40);
+  expect(snap.cards.every((c) => c.ageDays === 3)).toBe(true);
+  expect(snap.cards.every((c) => c.priority === "normal")).toBe(true);
+  expect(snap.cards.every((c) => !c.blocked)).toBe(true);
+
+  // lane order, not creation order across lanes: a moved card reports its current lane
+  const mover = db.createTask({ title: "mover", lane: "plan" });
+  db.moveTask(mover.id, "backlog");
+  const plan = db.laneSnapshot("plan");
+  expect(plan.total).toBe(0);
+
+  // blocked per the soft-block rule: a blocker outside done/archive
+  const blocker = db.createTask({ title: "blocker", lane: "plan" });
+  const blocked = db.createTask({ title: "blocked card", lane: "plan", blockedBy: [blocker.id] });
+  const snap2 = db.laneSnapshot("plan", 40, now);
+  expect(snap2.cards.find((c) => c.id === blocked.id)!.blocked).toBe(true);
+  expect(snap2.cards.find((c) => c.id === blocker.id)!.blocked).toBe(false);
+});
+
+test("boardOverview: lane counts, oldest age, waiting ages, next proposal, blocked count", () => {
+  // fresh board: every lane present except archive, all empty
+  const empty = db.boardOverview();
+  expect(empty.lanes.map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "done"]);
+  expect(empty.lanes.every((l) => l.count === 0 && l.oldestDays === 0)).toBe(true);
+  expect(empty.waiting).toEqual([]);
+  expect(empty.next).toBeNull();
+  expect(empty.blocked).toBe(0);
+
+  const day = 86_400_000;
+  const future = Date.now() + 5.5 * day; // every entry is 5 days old at this clock
+
+  const b1 = db.createTask({ title: "oldest backlog card", lane: "backlog", priority: "low" });
+  for (let i = 0; i < 11; i++) db.createTask({ title: `waiting ${i}`, lane: "waiting" });
+  const oldestWaiting = db.createTask({ title: "waiting oldest", lane: "waiting" });
+  // park oldestWaiting the longest: rewrite its waiting-entry event to 9 days before `future`
+  const raw = new Database(join(dir, "t.db"));
+  raw.run("UPDATE lane_events SET created_at = ? WHERE task_id = ?", [future - 9 * day, oldestWaiting.id]);
+  raw.close();
+
+  const imp = db.createTask({ title: "implement card", lane: "implement" });
+  const impBlocker = db.createTask({ title: "stuck implement card", lane: "implement", blockedBy: [imp.id] });
+  const blocker = db.createTask({ title: "backlog blocker", lane: "backlog", priority: "high" });
+  db.moveTask(b1.id, "done"); // frees backlog for next
+
+  const overview = db.boardOverview(future);
+  const byLane = new Map(overview.lanes.map((l) => [l.id, l]));
+  expect(byLane.get("backlog")).toMatchObject({ id: "backlog", name: "Backlog", count: 1, oldestDays: 5 });
+  expect(byLane.get("waiting")!.count).toBe(12);
+  expect(byLane.get("waiting")!.oldestDays).toBe(9);
+  expect(byLane.get("done")!.count).toBe(1);
+  expect(overview.lanes.some((l) => l.id === "archive")).toBe(false);
+
+  // waiting: longest-parked first, capped at 10
+  expect(overview.waiting).toHaveLength(10);
+  expect(overview.waiting[0]).toMatchObject({ id: oldestWaiting.id, title: "waiting oldest", ageDays: 9 });
+
+  // next: first eligible in lane priority order (review → implement → plan → backlog)
+  expect(overview.next).toMatchObject({ id: imp.id, title: "implement card" });
+  expect(overview.blocked).toBe(1); // the backlog blocker skipped by next
+
+  // a title over 80 chars is capped in the waiting list
+  const longTitle = "x".repeat(120);
+  const longCard = db.createTask({ title: longTitle, lane: "waiting" });
+  const raw2 = new Database(join(dir, "t.db"));
+  raw2.run("UPDATE lane_events SET created_at = ? WHERE task_id = ?", [future - 12 * day, longCard.id]);
+  raw2.close();
+  const overview2 = db.boardOverview(future);
+  expect(overview2.waiting[0]!.title).toHaveLength(80);
+  expect(overview2.waiting[0]!.ageDays).toBe(12);
 });

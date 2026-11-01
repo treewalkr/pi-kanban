@@ -5,6 +5,7 @@ import { startAutoArchiveSweep } from "./autoarchive";
 import { startAutoReview } from "./autoreview";
 import { KanbanDb, defaultDbPath } from "./db";
 import { startGhSync } from "./gh";
+import { startWorkerRunner } from "./lane-workers";
 import { registerShutdown, runShutdown } from "./shutdown";
 import "./dev-reload"; // watch marker: rewritten by POST /restart to trigger a bun --watch reload
 
@@ -94,7 +95,7 @@ function envMs(name: string): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: () => void; stopAutoArchive: () => void; stopGhSync: () => void }> {
+export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: () => void; stopWorkers: () => void; stopAutoArchive: () => void; stopGhSync: () => void }> {
   const port = opts.port ?? Number(process.env.PORT ?? 4600);
 
   // single-server guard: SO_REUSEPORT would stack N silent listeners on one
@@ -153,6 +154,7 @@ export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: ()
   );
 
   let stopAutoReview: () => void = () => {};
+  let stopWorkers: () => void = () => {};
   if (opts.autoReview ?? process.env.KANBAN_AUTO_REVIEW === "1") {
     // own connection, like the CLI — the reviewer/builder children talk to the
     // board through the kanban CLI, never through this process
@@ -169,6 +171,20 @@ export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: ()
     // (bun test) must be able to tear the loop down itself or it leaks live
     stopAutoReview = () => handle.stop();
     registerShutdown(stopAutoReview);
+
+    // lane workers ride the same agent boot: --agents starts loop + runner,
+    // KANBAN_WORKERS=0 is the process-level opt-out (Decision 11)
+    if (process.env.KANBAN_WORKERS !== "0") {
+      const workerTimeoutMs = envMs("KANBAN_WORKER_TIMEOUT_MS");
+      const runner = startWorkerRunner({
+        db: new KanbanDb(defaultDbPath()),
+        cwd: process.cwd(),
+        log: (message) => console.log(`[workers] ${message}`),
+        ...(workerTimeoutMs !== undefined ? { timeoutMs: workerTimeoutMs } : {}),
+      });
+      stopWorkers = runner.stop;
+      registerShutdown(stopWorkers);
+    }
   }
 
   // board hygiene, not agent work — defaults on (0 disables via the setting);
@@ -209,7 +225,7 @@ export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: ()
     });
   }
 
-  return { stopAutoReview, stopAutoArchive, stopGhSync };
+  return { stopAutoReview, stopWorkers, stopAutoArchive, stopGhSync };
 }
 
 if (import.meta.main) {

@@ -1,18 +1,23 @@
 import { api } from "../api";
-import type { AgentConfig, AgentRole } from "../../../src/db";
+import type { AgentConfig, AgentRole, LaneWorkerRun } from "../../../src/db";
 import type { CatalogModel } from "../../../src/models";
 import type { CatalogSkill } from "../../../src/skills";
 import { board } from "./board.svelte";
 
 type EdenError = { value?: unknown };
 
-const emptyConfigs = (): Record<AgentRole, AgentConfig> => ({
+const emptyConfigs = (): Record<SettingsRole, AgentConfig> => ({
   planner: {},
   reviewer: {},
   builder: {},
   "plan-reviewer": {},
   elaborator: {},
+  manager: {},
+  worker: {},
 });
+
+/** A config-assignable role: the loop's AgentRole union plus the manager/worker keys (card d26pe). */
+export type SettingsRole = AgentRole | "manager" | "worker";
 
 export type SettingsSection = "general" | "agents" | "pools";
 
@@ -25,8 +30,10 @@ class AgentsStore {
   /** Section the dialog should open on — the sidebar's bottom bar sets it, the ⚙ keeps the last one. */
   section = $state<SettingsSection>("general");
   loaded = $state(false);
-  /** One config per role, keyed by AgentRole ("plan-reviewer" needs a key, not a class field — $state rejects computed names). */
-  configs = $state<Record<AgentRole, AgentConfig>>(emptyConfigs());
+  /** One config per role ("plan-reviewer" needs a key, not a class field — $state rejects computed names). */
+  configs = $state<Record<SettingsRole, AgentConfig>>(emptyConfigs());
+  /** Lane worker runs for the settings panel's "lane workers" section; null = not loaded. */
+  workerRuns = $state<LaneWorkerRun[] | null>(null);
   /** pi's catalog for the provider/model selects; empty → the panel falls back to text inputs. */
   models = $state<CatalogModel[]>([]);
   /** pi's skill catalog for the Skills picker; empty → picker falls back to custom-path entry. */
@@ -37,7 +44,7 @@ class AgentsStore {
 
   private inFlight: Promise<boolean> | null = null;
   private inFlightVersion = 0;
-  private pending: { role: AgentRole; get: () => AgentConfig } | null = null;
+  private pending: { role: SettingsRole; get: () => AgentConfig } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private wasFailed = false;
   private editVersion = 0;
@@ -77,6 +84,8 @@ class AgentsStore {
         builder: agents.data.builder ?? {},
         "plan-reviewer": agents.data["plan-reviewer"] ?? {},
         elaborator: agents.data.elaborator ?? {},
+        manager: agents.data.manager ?? {},
+        worker: agents.data.worker ?? {},
       };
       this.loaded = true;
     }
@@ -91,7 +100,7 @@ class AgentsStore {
     else this.paused = paused;
   }
 
-  async save(role: AgentRole, config: AgentConfig): Promise<boolean> {
+  async save(role: SettingsRole, config: AgentConfig): Promise<boolean> {
     this.saveState = "saving";
     const { error } = await api.agents({ role }).put(config);
     if (error) {
@@ -105,7 +114,7 @@ class AgentsStore {
   }
 
   /** Register a dirty edit for `role`; re-arms the DEBOUNCE_MS timer. */
-  schedule(role: AgentRole, config: () => AgentConfig): void {
+  schedule(role: SettingsRole, config: () => AgentConfig): void {
     if (this.saveState === "failed") {
       this.wasFailed = true;
     }
@@ -176,6 +185,12 @@ class AgentsStore {
 
     this.inFlight = savePromise;
     return savePromise;
+  }
+
+  /** GET /workers for the settings panel; empty string rows are the load-failed marker. */
+  async loadWorkers(): Promise<void> {
+    const res = await api.workers.get();
+    if (!res.error) this.workerRuns = res.data.workers;
   }
 
   /** Modal close path: flush → on success open=false and saveState="idle"; on failure modal stays open. */

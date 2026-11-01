@@ -10,7 +10,9 @@ and any human reply (or the approve/reject gate) returns it. Cards nest into an
 **epic → story → subtask** hierarchy; every card moves
 independently. Every card wears an age chip showing how long it has sat in its current lane, and
 done cards auto-archive after a configurable number of days (`archive auto [<n>|off]`, default 7).
-The CLI writes the DB directly (no server needed for agent-side CRUD); the
+`serve --agents` also hosts a **board manager** chat (web UI sidebar → Board chat) that dispatches
+short-lived **lane workers** — one charter per column, dispatched only on your say-so — plus the
+per-card chat threads. The CLI writes the DB directly (no server needed for agent-side CRUD); the
 server pushes live updates to the web UI over SSE and raises notifications when a card
 enters Review (browser notification in a background tab; set `KANBAN_OSASCRIPT_NOTIFY=1`
 to also get a macOS notification from the server when no tab is open).

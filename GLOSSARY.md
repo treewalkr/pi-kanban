@@ -85,3 +85,11 @@ _Avoid_: Implementer, coder, developer, worker
 **Reviewer** (`pi-reviewer`):
 The agent role that evaluates completed work in the `Review` lane against the plan and review rules, recording an approve or block verdict with proof.
 _Avoid_: QA, verifier, auditor
+
+**Board manager** (`pi-manager`):
+The resident chat agent behind the web UI's board chat: one session with a board-wide view (lane counts, aging, what's parked, what's next) that proposes lane sweeps on request and relays their summaries.
+_Avoid_: Orchestrator, supervisor, main agent
+
+**Lane worker** (`pi-worker-<lane>`):
+A short-lived headless agent with a charter over one lane (`kanban worker run <lane>`), drained by the serve process; Backlog's charter is the only writable one, the rest report. Distinct from the loop's spawn pools (`worker_pools`), which it does not use.
+_Avoid_: Worker, agent pool, column agent

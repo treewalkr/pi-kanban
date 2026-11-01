@@ -181,3 +181,34 @@ test("/restart counts chat sessions in the in-flight guard", async () => {
   expect(refused.status).toBe(409);
   expect(errorValue(refused.error)).toMatchObject({ code: "sessions-in-flight", sessions: 1 });
 });
+
+test("GET/POST /chat/board: cold history-from-disk then prompt round-trip", async () => {
+  const sessions: unknown[] = [];
+  const client = treaty(appWithChat(sessions));
+
+  // cold: the manager is not running and has no disk history
+  const cold = await client.chat({ cardId: "board" }).get();
+  expect(cold.error).toBeNull();
+  expect(cold.data).toMatchObject({ running: false, sessionId: null, messages: [], messagesTruncated: false });
+
+  // a prompt accepts through the fake factory; the handle is live afterwards
+  const post = await client.chat({ cardId: "board" }).post({
+    type: "prompt",
+    message: "what needs attention?",
+  });
+  expect(post.error).toBeNull();
+  expect(post.data).toMatchObject({ accepted: true });
+
+  const live = await client.chat({ cardId: "board" }).get();
+  expect(live.data).toMatchObject({ running: true, sessionId: "kanban-manager" });
+
+  // the append carried the manager charter; the seed carried the overview
+  const capture = sessions[0] as { appendSystemPrompt: string; session: Record<string, unknown> };
+  expect(capture.appendSystemPrompt).toContain("board manager");
+  void capture;
+
+  // a real card is unaffected by the board branch
+  const task = db.createTask({ title: "plain card" });
+  const cardState = await client.chat({ cardId: task.id }).get();
+  expect(cardState.data).toMatchObject({ running: false, sessionId: null });
+});

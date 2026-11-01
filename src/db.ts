@@ -104,6 +104,53 @@ export interface WorkerPool {
   updatedAt: number;
 }
 
+/** One dispatch of a lane worker — queued by CLI/manager, drained by the serve-process runner (lane-workers.ts). */
+export interface LaneWorkerRun {
+  id: string;
+  laneId: string;
+  status: "queued" | "running" | "done" | "failed";
+  focus?: string;
+  sessionId?: string;
+  summary?: string;
+  exitInfo?: string;
+  log?: string;
+  requestedBy: string;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+}
+
+/** One card row of a lane snapshot: what a lane worker starts from instead of unbounded reads. */
+export interface LaneSnapshotCard {
+  id: string;
+  title: string;
+  ageDays: number;
+  priority: string;
+  blocked: boolean;
+}
+
+export interface LaneSnapshot {
+  laneId: string;
+  total: number;
+  truncated: boolean;
+  cards: LaneSnapshotCard[];
+}
+
+export interface BoardOverviewLane {
+  id: string;
+  name: string;
+  count: number;
+  oldestDays: number;
+}
+
+/** The manager's board-wide view: lane counts, aging, what's parked, what's next. */
+export interface BoardOverview {
+  lanes: BoardOverviewLane[];
+  waiting: Array<{ id: string; title: string; ageDays: number }>;
+  next: { id: string; title: string } | null;
+  blocked: number;
+}
+
 export interface Comment {
   id: string;
   taskId: string;
@@ -295,6 +342,8 @@ export const BUILDER_AUTHOR = "pi-builder";
 
 const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "review", "handoff", "approval", "rejection", "question"]);
 const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder", "planner", "plan-reviewer", "elaborator"]);
+/** Roles storable in agent_configs: the loop roles plus the board manager and lane worker (card d26pe). */
+const AGENT_CONFIG_ROLES: ReadonlySet<string> = new Set([...AGENT_ROLES, "manager", "worker"]);
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lanes (
@@ -392,6 +441,20 @@ CREATE TABLE IF NOT EXISTS worker_pools (
   id TEXT PRIMARY KEY,
   config TEXT NOT NULL,
   updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lane_workers (
+  id TEXT PRIMARY KEY,
+  lane_id TEXT NOT NULL,
+  focus TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',   -- queued | running | done | failed
+  session_id TEXT,
+  summary TEXT,
+  exit_info TEXT,
+  log TEXT,
+  requested_by TEXT NOT NULL DEFAULT 'user',
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  ended_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS lane_events (
   id TEXT PRIMARY KEY,
@@ -2589,8 +2652,8 @@ export class KanbanDb {
 
   /** Full replace of a role's config; empty strings/arrays drop out. */
   setAgentConfig(role: string, config: AgentConfig): AgentConfig {
-    if (!AGENT_ROLES.has(role)) {
-      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder | planner | plan-reviewer | elaborator)`, "invalid");
+    if (!AGENT_CONFIG_ROLES.has(role)) {
+      throw new KanbanError(`unknown agent role '${role}' (reviewer | builder | planner | plan-reviewer | elaborator | manager | worker)`, "invalid");
     }
     const clean: AgentConfig = {};
     if (config.provider?.trim()) clean.provider = config.provider.trim();
@@ -2741,6 +2804,175 @@ export class KanbanDb {
     if (info.changes === 0) {
       throw new KanbanError(`no pool '${id}'`, "not-found");
     }
+  }
+
+  // ---------- lane workers ----------
+  // Queue-as-rows (the resume_requests pattern): the CLI and the board manager
+  // enqueue runs here; the serve-process runner drains them. Rows survive
+  // restarts; a run lost mid-flight is failed at boot with an explicit reason.
+
+  private rowToLaneWorker(r: {
+    id: string;
+    lane_id: string;
+    focus: string | null;
+    status: string;
+    session_id: string | null;
+    summary: string | null;
+    exit_info: string | null;
+    log: string | null;
+    requested_by: string;
+    created_at: number;
+    started_at: number | null;
+    ended_at: number | null;
+  }): LaneWorkerRun {
+    const run: LaneWorkerRun = {
+      id: r.id,
+      laneId: r.lane_id,
+      status: r.status as LaneWorkerRun["status"],
+      requestedBy: r.requested_by,
+      createdAt: r.created_at,
+    };
+    if (r.focus !== null) run.focus = r.focus;
+    if (r.session_id !== null) run.sessionId = r.session_id;
+    if (r.summary !== null) run.summary = r.summary;
+    if (r.exit_info !== null) run.exitInfo = r.exit_info;
+    if (r.log !== null) run.log = r.log;
+    if (r.started_at !== null) run.startedAt = r.started_at;
+    if (r.ended_at !== null) run.endedAt = r.ended_at;
+    return run;
+  }
+
+  queueLaneWorker(input: { laneId: string; focus?: string; requestedBy?: string }): LaneWorkerRun {
+    const focus = input.focus?.trim();
+    if (focus !== undefined && focus !== "" && focus.length > 2000) {
+      throw new KanbanError("worker focus must be at most 2000 characters", "invalid");
+    }
+    const now = Date.now();
+    const id = newId();
+    this.q(
+      "INSERT INTO lane_workers (id, lane_id, focus, status, requested_by, created_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+    ).run(id, input.laneId, focus || null, input.requestedBy?.trim() || "user", now);
+    return this.laneWorker(id)!;
+  }
+
+  laneWorkers(filter?: { status?: string; laneId?: string; limit?: number }): LaneWorkerRun[] {
+    const clauses: string[] = [];
+    const args: Array<string | number> = [];
+    if (filter?.status) {
+      clauses.push("status = ?");
+      args.push(filter.status);
+    }
+    if (filter?.laneId) {
+      clauses.push("lane_id = ?");
+      args.push(filter.laneId);
+    }
+    const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+    args.push(filter?.limit ?? 50);
+    return (
+      this.q(`SELECT * FROM lane_workers${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(...args) as never[]
+    ).map((r) => this.rowToLaneWorker(r));
+  }
+
+  laneWorker(id: string): LaneWorkerRun | null {
+    const row = this.q("SELECT * FROM lane_workers WHERE id = ?").get(id) as
+      | Parameters<KanbanDb["rowToLaneWorker"]>[0]
+      | undefined;
+    return row ? this.rowToLaneWorker(row) : null;
+  }
+
+  /** Only a queued row flips to running; a lost race (another process claimed it) returns null. */
+  claimLaneWorker(id: string, sessionId: string, now: number): LaneWorkerRun | null {
+    return this.tx((): LaneWorkerRun | null => {
+      const row = this.q("SELECT status FROM lane_workers WHERE id = ?").get(id) as { status: string } | undefined;
+      if (!row || row.status !== "queued") return null;
+      this.q("UPDATE lane_workers SET status = 'running', session_id = ?, started_at = ? WHERE id = ?").run(
+        sessionId,
+        now,
+        id,
+      );
+      return this.laneWorker(id);
+    });
+  }
+
+  /** Only a running row settles; the runner is the only caller. */
+  finishLaneWorker(
+    id: string,
+    out: { status: "done" | "failed"; summary?: string; exitInfo?: string; log?: string },
+    now: number,
+  ): LaneWorkerRun | null {
+    return this.tx((): LaneWorkerRun | null => {
+      const row = this.q("SELECT status FROM lane_workers WHERE id = ?").get(id) as { status: string } | undefined;
+      if (!row || row.status !== "running") return null;
+      this.q(
+        "UPDATE lane_workers SET status = ?, summary = ?, exit_info = ?, log = ?, ended_at = ? WHERE id = ?",
+      ).run(out.status, out.summary ?? null, out.exitInfo ?? null, out.log ?? null, now, id);
+      return this.laneWorker(id);
+    });
+  }
+
+  /** Boot-time reap: every running row is orphaned once its server is gone. Returns how many were reaped. */
+  failRunningLaneWorkers(reason: string): number {
+    return this.tx((): number => {
+      const info = this.q(
+        "UPDATE lane_workers SET status = 'failed', exit_info = ?, ended_at = ? WHERE status = 'running'",
+      ).run(reason, Date.now());
+      return info.changes;
+    });
+  }
+
+  /**
+   * What a lane worker starts from: the lane's cards in lane order, each with
+   * its park age (days since the last entry into this lane), priority, and the
+   * soft-block flag. Capped, so the prompt stays affordable.
+   */
+  laneSnapshot(laneId: string, cap = 40, now = Date.now()): LaneSnapshot {
+    const rows = this.q(
+      `SELECT t.id, t.title, t.priority,
+              COALESCE((SELECT MAX(le.created_at) FROM lane_events le
+                        WHERE le.task_id = t.id AND le.to_lane_id = t.lane_id), t.created_at) AS entry_at,
+              EXISTS(SELECT 1 FROM blocked_by b JOIN tasks blocker ON blocker.id = b.blocker_id
+                     WHERE b.card_id = t.id AND blocker.lane_id NOT IN ('done', 'archive')) AS is_blocked
+       FROM tasks t WHERE t.lane_id = ? ORDER BY t.position, t.created_at`,
+    ).all(laneId) as Array<{ id: string; title: string; priority: string; entry_at: number; is_blocked: number }>;
+    const cards = rows.slice(0, cap).map((r) => ({
+      id: r.id,
+      title: r.title.length > 80 ? r.title.slice(0, 80) : r.title,
+      ageDays: Math.max(0, Math.floor((now - r.entry_at) / 86_400_000)),
+      priority: r.priority,
+      blocked: r.is_blocked === 1,
+    }));
+    return { laneId, total: rows.length, truncated: rows.length > cap, cards };
+  }
+
+  /** The board manager's opening view: every lane except archive, aging, the longest-parked waiting cards, what's next. */
+  boardOverview(now = Date.now()): BoardOverview {
+    const lanes = this.lanes().filter((l) => l.id !== "archive");
+    const counts = new Map<string, number>();
+    const oldest = new Map<string, number>();
+    for (const lane of lanes) {
+      const snap = this.laneSnapshot(lane.id, Number.MAX_SAFE_INTEGER, now);
+      counts.set(lane.id, snap.total);
+      oldest.set(lane.id, snap.cards.reduce((m, c) => Math.max(m, c.ageDays), 0));
+    }
+    const waiting = (
+      this.q(
+        `SELECT t.id, t.title,
+                COALESCE((SELECT MAX(le.created_at) FROM lane_events le
+                          WHERE le.task_id = t.id AND le.to_lane_id = t.lane_id), t.created_at) AS entry_at
+         FROM tasks t WHERE t.lane_id = 'waiting' ORDER BY entry_at ASC, t.created_at ASC, t.id ASC LIMIT 10`,
+      ).all() as Array<{ id: string; title: string; entry_at: number }>
+    ).map((r) => ({
+      id: r.id,
+      title: r.title.length > 80 ? r.title.slice(0, 80) : r.title,
+      ageDays: Math.max(0, Math.floor((now - r.entry_at) / 86_400_000)),
+    }));
+    const next = this.nextTask();
+    return {
+      lanes: lanes.map((l) => ({ id: l.id, name: l.name, count: counts.get(l.id) ?? 0, oldestDays: oldest.get(l.id) ?? 0 })),
+      waiting,
+      next: next.task ? { id: next.task.id, title: next.task.title } : null,
+      blocked: next.blocked,
+    };
   }
 
   // ---------- lane writes ----------

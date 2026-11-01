@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { AgentConfig, AgentRole, AgentThinking } from "../../../src/db";
-  import { agents } from "./agents.svelte";
+  import type { AgentConfig, AgentThinking } from "../../../src/db";
+  import { agents, type SettingsRole } from "./agents.svelte";
   import SkillPicker from "./SkillPicker.svelte";
 
   interface AgentForm {
@@ -36,8 +36,14 @@
     timeoutMs: f.timeoutMin ? Number(f.timeoutMin) * 60_000 : undefined,
   });
 
-  let role = $state<AgentRole>("reviewer");
+  let role = $state<SettingsRole>("reviewer");
   let form = $state<AgentForm>(toForm(agents.configs.reviewer));
+
+  // lane workers section: fetch runs when the panel mounts (AgentsSettings remounts per open)
+  let workerRuns = $derived(agents.workerRuns);
+  $effect(() => {
+    void agents.loadWorkers();
+  });
 
   let providers = $derived([...new Set(agents.models.map((m) => m.provider))].sort());
   let modelGroups = $derived.by(() => {
@@ -45,6 +51,8 @@
     const groups = new Map<string, Array<{ id: string; label: string }>>();
     for (const m of forProvider) {
       const list = groups.get(m.provider) ?? [];
+      // some catalogs ship the same provider+id twice (zcode "Start") — one option each
+      if (list.some((e) => e.id === m.id)) continue;
       list.push({ id: m.id, label: `${m.id} · ${m.context}${m.thinking ? " · thinks" : ""}` });
       groups.set(m.provider, list);
     }
@@ -56,13 +64,26 @@
   }
 
   // role switch stashes edits in the store so the other role's form can load
-  async function switchRole(next: AgentRole): Promise<void> {
+  async function switchRole(next: SettingsRole): Promise<void> {
     if (next === role) return;
     const ok = await agents.flush();
     if (!ok) return;
     agents.configs[role] = toConfig(form);
     role = next;
     form = toForm(agents.configs[next]);
+  }
+
+  function ageOf(run: { createdAt: number; endedAt?: number }): string {
+    const end = run.endedAt ?? Date.now();
+    const s = Math.max(0, Math.round((end - run.createdAt) / 1000));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.round(s / 60)}m`;
+    return `${Math.round(s / 3600)}h`;
+  }
+
+  function firstLine(text: string | undefined): string | undefined {
+    const line = text?.split("\n")[0];
+    return line && line.length > 0 ? line : undefined;
   }
 </script>
 
@@ -82,7 +103,7 @@
 
   <section class="settings-general-section">
     <h3 class="settings-general-heading">Role</h3>
-    <p class="settings-general-description">Used by serve --agents: the planner writes plans for cards in Plan, the plan reviewer checks them against the template checklist before the human gate, the reviewer checks cards in Review, the builder works blocked findings or builds approved plans. Switching stashes unsaved edits.</p>
+    <p class="settings-general-description">Used by serve --agents: the planner writes plans for cards in Plan, the plan reviewer checks them against the template checklist before the human gate, the reviewer checks cards in Review, the builder works blocked findings or builds approved plans. The manager chats from the board view and dispatches lane workers; workers run per-lane charters. Switching stashes unsaved edits.</p>
     <div class="seg">
       <button type="button" class="seg-option" class:on={role === "planner"} aria-pressed={role === "planner"} onclick={() => switchRole("planner")}>
         <span class="seg-label">planner</span>
@@ -110,6 +131,24 @@
         onclick={() => switchRole("elaborator")}
       >
         <span class="seg-label">elaborator</span>
+      </button>
+      <button
+        type="button"
+        class="seg-option"
+        class:on={role === "manager"}
+        aria-pressed={role === "manager"}
+        onclick={() => switchRole("manager")}
+      >
+        <span class="seg-label">manager</span>
+      </button>
+      <button
+        type="button"
+        class="seg-option"
+        class:on={role === "worker"}
+        aria-pressed={role === "worker"}
+        onclick={() => switchRole("worker")}
+      >
+        <span class="seg-label">worker</span>
       </button>
     </div>
   </section>
@@ -235,6 +274,27 @@
         <textarea bind:value={form.extraArgs} oninput={touch} rows="2" placeholder="--no-mcp"></textarea>
       </label>
     </div>
+  </section>
+
+  <section class="settings-general-section">
+    <h3 class="settings-general-heading">lane workers</h3>
+    <p class="settings-general-description">Short-lived per-lane agents dispatched from board chat or `kanban worker run` — backlog grooms (writable), the rest report. Summaries are what the manager relays.</p>
+    {#if workerRuns === null}
+      <p class="workers-empty">loading…</p>
+    {:else if workerRuns.length === 0}
+      <p class="workers-empty">no runs — dispatch from board chat or `kanban worker run`</p>
+    {:else}
+      <div class="workers-list">
+        {#each workerRuns as run (run.id)}
+          <div class="worker-row">
+            <span class="worker-status {run.status}">{run.status}</span>
+            <span class="worker-lane">{run.laneId}</span>
+            <span class="worker-age">{ageOf(run)}</span>
+            <span class="worker-summary">{firstLine(run.summary) ?? run.focus ?? ""}</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
   </section>
 
   <div class="editor-actions">
