@@ -55,6 +55,11 @@ set when a card enters Test + Implement and cleared when it leaves, making
 "who's on this" a fact rather than a thread-read.
 _Avoid_: Assignee, claimant, holder, session binding
 
+**Anchor**:
+The card a move is positioned relative to (`mv <id> <lane> --before <anchorId>`),
+so placement survives concurrent edits instead of drifting like an index.
+_Avoid_: Reference card, pivot, position marker
+
 **Gate**:
 The human-only decision point (`approve` or `reject`) between plan review and implementation that agents are forbidden to run themselves.
 _Avoid_: Checkpoint, sign-off, auto-approval
