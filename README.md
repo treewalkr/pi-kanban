@@ -36,7 +36,7 @@ git config core.hooksPath scripts/hooks   # git gate: check + test on commits an
 ## Use
 
 ```bash
-kanban serve --auto-review --open   # web UI at http://127.0.0.1:4600
+kanban serve --agents --open        # web UI at http://127.0.0.1:4600
 bun run dev                         # hacking: api watch + vite dev server
 ```
 
@@ -72,7 +72,7 @@ everywhere; notes render GitHub-flavored markdown in the web UI.
 
 ### Auto agents (plan + review)
 
-`--auto-review` runs headless `pi` sessions over the board. Every step lands as a thread
+`--agents` runs headless `pi` sessions over the board. Every step lands as a thread
 comment (`kanban brief <id>` is the pickup context); each spawn logs to the serve terminal
 under `[autoreview]`.
 
