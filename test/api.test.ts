@@ -1176,3 +1176,42 @@ test("POST /tasks accepts tags; PATCH /tasks/:id replaces or clears; bad shape 4
     code: "invalid",
   });
 });
+
+test("PATCH /tasks/:id owner roundtrip; /board carries it", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "api owner", lane: "implement" });
+
+  const patch = async (body: Record<string, unknown>) =>
+    app.handle(
+      new Request(`http://localhost/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  const set = await patch({ owner: "ada" });
+  expect(set.status).toBe(200);
+  expect(((await set.json()) as { owner: string | null }).owner).toBe("ada");
+
+  // empty string fails validation (minLength 1)
+  expect((await patch({ owner: "" })).status).toBe(422);
+
+  // moving out of implement via PATCH clears it
+  const moved = await patch({ lane: "review", owner: "bob" });
+  expect(moved.status).toBe(200);
+  expect(((await moved.json()) as { owner: string | null }).owner).toBeNull();
+
+  // null clears explicitly
+  await patch({ owner: "ada" });
+  const cleared = await patch({ owner: null });
+  expect(cleared.status).toBe(200);
+  expect(((await cleared.json()) as { owner: string | null }).owner).toBeNull();
+
+  // /board carries owner
+  db.updateTask(task.id, { owner: "ada" });
+  const board = (await (await app.handle(new Request("http://localhost/board"))).json()) as {
+    tasks: Array<{ id: string; owner: string | null }>;
+  };
+  expect(board.tasks.find((t) => t.id === task.id)?.owner).toBe("ada");
+});

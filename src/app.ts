@@ -795,6 +795,7 @@ export const createApp = (
           lane: t.Optional(t.String()),
           parent: t.Optional(t.Nullable(t.String())),
           workspace: t.Optional(t.Nullable(t.String())),
+          owner: t.Optional(t.Nullable(t.String({ minLength: 1 }))),
           priority: t.Optional(t.Enum({ high: "high", normal: "normal", low: "low" })),
           blockedBy: t.Optional(t.Array(t.String())),
           index: t.Optional(t.Number({ minimum: 0 })),

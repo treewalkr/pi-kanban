@@ -1,10 +1,11 @@
 import { homedir } from "node:os";
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { KanbanDb, PLAN_REVIEWER_AUTHOR, type AgentConfig, type AgentRole, type AgentThinking, type LeaseOwner, type PoolSlot, type Task, type WorkerPool } from "./db";
+import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, type AgentConfig, type AgentRole, type AgentThinking, type LeaseOwner, type PoolSlot, type Task, type WorkerPool } from "./db";
 
 export type { AgentRole };
 export { PLAN_REVIEWER_AUTHOR };
+export { BUILDER_AUTHOR };
 
 /**
  * Auto-agents loop, hosted by the serve process (`KANBAN_AUTO_REVIEW=1`).
@@ -25,7 +26,6 @@ export { PLAN_REVIEWER_AUTHOR };
 
 export const PLANNER_AUTHOR = "pi-planner";
 export const REVIEWER_AUTHOR = "pi-reviewer";
-export const BUILDER_AUTHOR = "pi-builder";
 export const ELABORATOR_AUTHOR = "pi-elaborator";
 
 export const AUTHOR_BY_ROLE: Record<AgentRole, string> = {

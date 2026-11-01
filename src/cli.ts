@@ -35,8 +35,10 @@ usage:
   kanban approve <id>                       (plan gate: approve the attached plan → Implement)
   kanban reject <id> --message <feedback>   (plan gate: reject with feedback; planner re-plans)
   kanban plan-review <id> (--pass | --block --message <text> [--finding <text>]…)  (plan reviewer's verdict; --pass parks the card in "Waiting on you")
+  kanban claim <id> [--author <name>] [--force]  (record who's building it; --force takes over)
+  kanban overview [--json]                  (board shape: lane counts, WIP limits, owned cards)
   kanban brief <id>                         (pickup context: note, plan, thread)
-  kanban mv <id> <lane> [--pos <1-based>]     kanban mv <id> --next | --prev
+  kanban mv <id> <lane> [--pos <1-based> | --before <id>]   kanban mv <id> --next | --prev
   kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--tag <tag>]… [--lane <ref>]
                           [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>…]
                           [--clear-note] [--clear-parent] [--clear-blocked-by] [--clear-tags]
@@ -72,7 +74,7 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit"]);
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before"]);
 const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
@@ -337,6 +339,18 @@ async function main(): Promise<number> {
         );
         if (json) jsonOut(results);
         else out(searchResults(db, query, results));
+        return 0;
+      }
+
+      case "claim": {
+        const idRef = positional[0];
+        if (!idRef) throw new KanbanError("usage: kanban claim <id> [--author <name>] [--force]", "invalid");
+        const task = db.claimTask(idRef, { author: str(flags, "author"), force: !!flags.force });
+        if (json) jsonOut(task);
+        else {
+          out(taskLine(db, task));
+          out(c.dim(`claimed by ${task.owner}`));
+        }
         return 0;
       }
 

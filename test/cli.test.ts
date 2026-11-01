@@ -1459,3 +1459,58 @@ test("kanban undo: board-wide, card-scoped, --json, WIP warning, and error exits
   expect(helpRes.code).toBe(0);
   expect(helpRes.stdout).toContain("kanban undo [id]");
 });
+
+test("claim: set, idempotent re-claim, --force takeover, foreign conflict", async () => {
+  const added = await cli("add", "claim me", "--lane", "implement", "--json");
+  const card = JSON.parse(added.stdout) as Task;
+
+  // claim sets the owner; show prints the owner row
+  const claimed = await cli("claim", card.id, "--author", "ada");
+  expect(claimed.code).toBe(0);
+  expect(claimed.stdout).toContain("claimed by ada");
+  const shown = await cli("show", card.id);
+  expect(shown.stdout).toContain("owner:");
+  expect(shown.stdout).toContain("ada");
+  expect(JSON.parse((await cli("show", card.id, "--json")).stdout).owner).toBe("ada");
+
+  // ls --json carries owner
+  const lsRows = JSON.parse((await cli("ls", "--json")).stdout) as Array<{ id: string; owner: string | null }>;
+  expect(lsRows.find((t) => t.id === card.id)?.owner).toBe("ada");
+
+  // same-author re-claim exits 0
+  expect((await cli("claim", card.id, "--author", "ada")).code).toBe(0);
+
+  // foreign claim exits 1 with the exact conflict message
+  const foreign = await cli("claim", card.id, "--author", "bob");
+  expect(foreign.code).toBe(1);
+  expect(foreign.stderr).toContain(`card '${card.id}' is already owned by 'ada' — pass --force to take it over`);
+
+  // --force takes over
+  const forced = await cli("claim", card.id, "--author", "bob", "--force");
+  expect(forced.code).toBe(0);
+  expect(forced.stdout).toContain("claimed by bob");
+
+  // usage error
+  const noArgs = await cli("claim");
+  expect(noArgs.code).toBe(1);
+  expect(noArgs.stderr).toContain("usage: kanban claim <id> [--author <name>] [--force]");
+});
+
+test("handoff into implement sets owner; exits clear it (CLI)", async () => {
+  const added = await cli("add", "owner flow", "--json");
+  const card = JSON.parse(added.stdout) as Task;
+
+  await cli("handoff", card.id, "implement", "--message", "starting", "--author", "pi");
+  expect(JSON.parse((await cli("show", card.id, "--json")).stdout).owner).toBe("pi");
+
+  await cli("mv", card.id, "review");
+  expect(JSON.parse((await cli("show", card.id, "--json")).stdout).owner).toBeNull();
+
+  // approve arms the builder: owner becomes pi-builder
+  const gate = await cli("add", "gate card", "--lane", "plan", "--json");
+  const gateCard = JSON.parse(gate.stdout) as Task;
+  await cli("attach", gateCard.id, "README.md");
+  const approved = await cli("approve", gateCard.id, "--json");
+  expect(approved.code).toBe(0);
+  expect(JSON.parse((await cli("show", gateCard.id, "--json")).stdout).owner).toBe("pi-builder");
+});

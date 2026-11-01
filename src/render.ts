@@ -248,6 +248,11 @@ export function taskDetail(db: KanbanDb, task: Task): string {
   }
   out.push(
     `${c.dim("workspace:")} ${task.workspace ?? c.dim("—")}`,
+  );
+  if (task.owner) {
+    out.push(`${c.dim("owner:")}     ${task.owner}`);
+  }
+  out.push(
     `${c.dim("created:")} ${new Date(task.createdAt).toLocaleString()}`,
     `${c.dim("updated:")} ${new Date(task.updatedAt).toLocaleString()}`,
   );
