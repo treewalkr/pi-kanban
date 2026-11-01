@@ -42,6 +42,10 @@ _Avoid_: Summary, context dump, dossier
 The human-only decision point (`approve` or `reject`) between plan review and implementation that agents are forbidden to run themselves.
 _Avoid_: Checkpoint, sign-off, auto-approval
 
+**Git gate**:
+The `pre-commit` + `pre-merge-commit` hooks (`scripts/hooks/`, wired via `core.hooksPath` by `install.sh`) that run `bun run check` + `bun test` before a commit or workspace merge lands. Docs-only commits skip it; `git commit --no-verify` is the WIP escape hatch (merges have none).
+_Avoid_: Pre-commit hook, husky, lint gate
+
 ## Autoreview roles
 
 **Planner** (`pi-planner`):
