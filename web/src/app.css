@@ -582,6 +582,7 @@ button {
 }
 
 .tree-chevron.spacer {
+  flex: none;
   width: 10px;
 }
 
