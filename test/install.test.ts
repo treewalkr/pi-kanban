@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,6 +49,7 @@ function makeRepoSandbox(): { container: string; repo: string; home: string } {
   writeFileSync(join(repo, "skills", "pi-kanban", "plan-template.md"), "# plan template\n");
   mkdirSync(join(repo, "src"), { recursive: true });
   writeFileSync(join(repo, "src", "cli.ts"), "#!/usr/bin/env bun\n");
+  writeFileSync(join(repo, "src", "notice.ts"), "// notice extension stub\n");
   writeFileSync(join(repo, "README.md"), "# fixture\n");
   git(["add", "."]);
   git(["commit", "--no-verify", "-m", "initial commit"]);
@@ -89,6 +90,13 @@ describe("scripts/install.sh (gate wiring)", () => {
       accessSync(join(repo, "scripts", "hooks", hook), constants.X_OK);
     }
     expect(first.stdout).toContain("core.hooksPath scripts/hooks");
+
+    // Notice extension symlinked into the pi extensions dir.
+    const noticeLink = join(home, ".pi", "agent", "extensions", "kanban-notice.ts");
+    accessSync(noticeLink, constants.F_OK);
+    const target = readlinkSync(noticeLink);
+    expect(target).toBe(join(repo, "src", "notice.ts"));
+    expect(first.stdout).toContain("notice");
 
     // Idempotent: second run exits 0 with the same wiring.
     const second = runInstall(repo, home);
