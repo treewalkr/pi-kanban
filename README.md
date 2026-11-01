@@ -75,6 +75,7 @@ workflow contract: card per unit of work, advance it through lanes, never leave 
 
 | script | does |
 | --- | --- |
+| `scripts/install.sh` | `kanban` bin + pi skill + git gate wiring (`git config core.hooksPath scripts/hooks`) |
 | `bun run dev` | api (`:4600`, watch) + web (`:5174`) |
 | `bun run build` | production web build → `web/dist` |
 | `bun run start` | serve api + built web on `127.0.0.1:4600` |
