@@ -211,6 +211,14 @@
           onclick={() => (board.view = "velocity")}>velocity</button
         >
       </div>
+      <button
+        type="button"
+        class="view-chat"
+        class:active={manager.open}
+        title="board chat — the manager dispatches lane workers"
+        aria-pressed={manager.open}
+        onclick={() => void manager.toggle()}>chat</button
+      >
       <SearchBox />
       <div class="chips">
         <button

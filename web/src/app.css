@@ -1869,6 +1869,31 @@ button:focus-visible {
   color: var(--text);
 }
 
+/* board-chat toggle: sibling of the view tabs, opens the manager drawer */
+.view-chat {
+  flex: none;
+  height: 24px;
+  margin-left: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  transition: background 0.12s, color 0.12s;
+}
+
+.view-chat:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.view-chat.active {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
 .list {
   flex: 1;
   overflow-y: auto;
@@ -4754,6 +4779,55 @@ a.dep-chip.gh-link .gh-state {
   cursor: pointer;
 }
 
+/* full-view toggle: icon-only chip at the controls row's right end */
+.chat-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chat-expand:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-expand[aria-pressed="true"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+/* full view — in the card modal the panel overlays the viewport */
+.chat-panel.expanded {
+  position: fixed;
+  inset: 16px;
+  z-index: 55; /* above the card modal, below the manager drawer's backdrop (40 → drawer wins when both) */
+  height: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+/* inside the drawer the panel stays put; the drawer itself widens */
+.manager-drawer .chat-panel.expanded {
+  position: static;
+  inset: auto;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 /* picker chips + dropdowns (pi-web ModelSelector toolbar variant) */
 .chat-selectors {
   display: flex;
@@ -4940,6 +5014,12 @@ a.dep-chip.gh-link .gh-state {
   border-left: 1px solid var(--border);
   background: var(--bg);
   box-shadow: -12px 0 40px rgba(0, 0, 0, 0.22);
+  transition: width 0.18s ease;
+}
+
+/* full view (chat-panel expand): the drawer widens instead of overlaying */
+.manager-drawer.expanded {
+  width: min(1080px, calc(100vw - 32px));
 }
 
 .manager-head {

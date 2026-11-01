@@ -308,7 +308,8 @@
 
 <svelte:window
   onkeydown={(e) => {
-    if (e.key === "Escape") board.closeCard();
+    // full-view chat swallows the first Escape (ChatPanel collapses itself)
+    if (e.key === "Escape" && !chat.expanded) board.closeCard();
   }}
 />
 

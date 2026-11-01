@@ -35,6 +35,12 @@ class ChatStore {
   supportsThinking = $state(false);
   /** True while a setModel/setThinkingLevel POST is in flight — locks the picker chips. */
   switching = $state(false);
+  /** Full-view flag: widens the board drawer / overlays the card modal for focus. */
+  expanded = $state(false);
+
+  toggleExpanded(): void {
+    this.expanded = !this.expanded;
+  }
 
   /** `provider/id` for display; empty when the session has no model yet. */
   get modelLabel(): string {
@@ -212,6 +218,7 @@ class ChatStore {
     this.thinkingLevels = [];
     this.supportsThinking = false;
     this.switching = false;
+    this.expanded = false;
   }
 
   async send(message: string): Promise<void> {
