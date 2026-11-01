@@ -4,7 +4,9 @@
  * ChatPanel against the pseudo-card "board" — the resident manager session.
  */
 import { chat } from "./chat.svelte";
-import { BOARD_CHAT_ID } from "../../../src/chat";
+
+/** BOARD_CHAT_ID from src/chat — inlined so the browser bundle never imports the server module. */
+const BOARD_CHAT_ID = "board";
 
 class ManagerStore {
   open = $state(false);
