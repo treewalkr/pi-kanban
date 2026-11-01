@@ -56,7 +56,7 @@ kanban mv <id> <lane> · edit <id> … · done <id> · archive <id> · undo · r
 kanban claim <id> · ws <id> <branch> · worker run <lane> · worker ls
 kanban attach <id> <plan-file> · diff <id> <name> · approve <id> · reject <id> --message <text>
 kanban lane ls | add | rename | rm | limit <ref> <n|off>
-kanban stats [id] · check [--port <n>] · stop · help
+kanban stats [id] · check [--port <n>] · ps · stop · help
 ```
 
 Ids accept any unique prefix; lanes accept slug, prefix, name, or ordinal; `--json`
