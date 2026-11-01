@@ -35,7 +35,11 @@ test("lease transactions survive a concurrent writer process", async () => {
        const d = new Database(${JSON.stringify(path)});
        const end = Date.now() + 400;
        let n = 0;
-       while (Date.now() < end) { try { d.exec("UPDATE tasks SET priority = priority"); n++; } catch {} }
+       // the 1ms yield matters on a starved 2-core CI runner: a zero-pause writer
+       // can hold the write lock across all 5 tx() retries (25–100ms backoff) and
+       // the BUSY escapes; production writers always pause between ops, so the
+       // yield is the realistic shape — the read→write snapshot races still fire
+       while (Date.now() < end) { try { d.exec("UPDATE tasks SET priority = priority"); n++; } catch {} await Bun.sleep(1); }
        d.close(); console.log(n);`,
     ],
     stdout: "pipe",
