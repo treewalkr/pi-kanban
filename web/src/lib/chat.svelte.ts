@@ -5,7 +5,7 @@
  * half). All JSON via JSON.parse on server-projected events.
  */
 import { api, chatEventsUrl } from "../api";
-import type { ChatMessage, ChatQueued } from "../../../src/chat";
+import type { ChatMessage, ChatQueued, ChatState } from "../../../src/chat";
 import { capThinkingBlocks, INITIAL_STREAMING_STATE, normalizeStreamingBlocks, streamReducer, type StreamingState } from "./chatStream";
 
 type ClientEvent = Record<string, any>;
@@ -28,7 +28,18 @@ class ChatStore {
   streaming = $state<StreamingState>(INITIAL_STREAMING_STATE);
   tools = $state<Map<string, { toolName: string; partial?: unknown; startedAt: number }>>(new Map()); // running tool calls
   queued = $state<ChatQueued>({ steering: [], followUp: [] });
-  modelLabel = $state("");
+  model = $state<{ provider: string; id: string } | null>(null);
+  thinkingLevel = $state("off");
+  /** Levels the current model supports (canonical list when no session is live). */
+  thinkingLevels = $state<string[]>([]);
+  supportsThinking = $state(false);
+  /** True while a setModel/setThinkingLevel POST is in flight — locks the picker chips. */
+  switching = $state(false);
+
+  /** `provider/id` for display; empty when the session has no model yet. */
+  get modelLabel(): string {
+    return this.model ? `${this.model.provider}/${this.model.id}` : "";
+  }
 
   #source: EventSource | null = null;
   #lastConnectAt = 0;
@@ -40,18 +51,24 @@ class ChatStore {
     await this.#snapshotAndConnect(cardId);
   }
 
+  /** Apply a server ChatState (GET snapshot or a setModel/setThinkingLevel response). */
+  #applyState(data: ChatState): void {
+    this.messages = data.messages;
+    this.queued = data.queued;
+    this.model = data.model;
+    this.thinkingLevel = data.thinkingLevel;
+    this.thinkingLevels = data.thinkingLevels;
+    this.supportsThinking = data.supportsThinking;
+    this.streaming = data.isStreaming ? { isStreaming: true, streamingMessage: null } : INITIAL_STREAMING_STATE;
+  }
+
   /** GET state for the history, then (re)connect the SSE stream. Also the recovery path. */
   async #snapshotAndConnect(cardId: string): Promise<void> {
     if (this.openCardId !== cardId) return;
     this.status = "connecting";
     const state = await api.chat({ cardId }).get();
     if (this.openCardId !== cardId) return;
-    if (!state.error) {
-      this.messages = state.data.messages;
-      this.queued = state.data.queued;
-      this.modelLabel = state.data.model ? `${state.data.model.provider}/${state.data.model.id}` : "";
-      this.streaming = state.data.isStreaming ? { isStreaming: true, streamingMessage: null } : INITIAL_STREAMING_STATE;
-    }
+    if (!state.error) this.#applyState(state.data);
     this.#connect(cardId);
   }
 
@@ -190,7 +207,11 @@ class ChatStore {
     this.streaming = INITIAL_STREAMING_STATE;
     this.tools = new Map();
     this.queued = { steering: [], followUp: [] };
-    this.modelLabel = "";
+    this.model = null;
+    this.thinkingLevel = "off";
+    this.thinkingLevels = [];
+    this.supportsThinking = false;
+    this.switching = false;
   }
 
   async send(message: string): Promise<void> {
@@ -216,6 +237,34 @@ class ChatStore {
     const cardId = this.openCardId;
     if (!cardId) return;
     await api.chat({ cardId }).post({ type: "abort" });
+  }
+
+  /** Switch the session's model. Boots the session lazily (like prompt); the
+   *  response carries the fresh ChatState — the SDK's model_select event is
+   *  extension-only and never reaches the SSE stream. */
+  async setModel(provider: string, modelId: string): Promise<void> {
+    const cardId = this.openCardId;
+    if (!cardId || this.switching) return;
+    this.switching = true;
+    this.error = "";
+    const res = await api.chat({ cardId }).post({ type: "setModel", provider, modelId });
+    this.switching = false;
+    if (this.openCardId !== cardId) return;
+    if (res.error) this.error = errorText(res.error);
+    // Eden can't narrow the POST union per body type — the command answers with ChatState
+    else this.#applyState(res.data as ChatState);
+  }
+
+  async setThinkingLevel(level: string): Promise<void> {
+    const cardId = this.openCardId;
+    if (!cardId || this.switching) return;
+    this.switching = true;
+    this.error = "";
+    const res = await api.chat({ cardId }).post({ type: "setThinkingLevel", level: level as "off" });
+    this.switching = false;
+    if (this.openCardId !== cardId) return;
+    if (res.error) this.error = errorText(res.error);
+    else this.#applyState(res.data as ChatState);
   }
 }
 

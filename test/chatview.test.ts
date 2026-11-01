@@ -24,6 +24,13 @@ function mockChatFetch(state: { get: Record<string, unknown>; postStatus?: numbe
     }
     if (method === "POST" && url.pathname.startsWith("/chat/")) {
       if (state.postStatus !== undefined) return jsonResponse(state.postStatus, state.postBody);
+      // model switches answer with the fresh ChatState, not the accepted shape
+      if (body?.type === "setModel") {
+        return jsonResponse(200, { ...emptyChatState(), model: { provider: body.provider, id: body.modelId } });
+      }
+      if (body?.type === "setThinkingLevel") {
+        return jsonResponse(200, { ...emptyChatState(), thinkingLevel: body.level });
+      }
       return jsonResponse(200, body?.type === "abort" ? { stopped: true } : { accepted: true, disposition: "started" });
     }
     return jsonResponse(404, { error: "not found", code: "not-found" });
@@ -39,6 +46,8 @@ function emptyChatState() {
     queued: { steering: [], followUp: [] },
     model: { provider: "zai", id: "glm-5.3" },
     thinkingLevel: "off",
+    thinkingLevels: ["off", "low", "medium", "high"],
+    supportsThinking: true,
     messages: [],
     messagesTruncated: false,
   };
@@ -271,6 +280,22 @@ test("close resets every field and detaches the source", async () => {
   expect(chat.streaming.isStreaming).toBe(false);
   expect(chat.tools.size).toBe(0);
   expect(chat.modelLabel).toBe("");
+});
+
+test("setModel/setThinkingLevel post the command and apply the returned state", async () => {
+  (globalThis as any).fetch = mockChatFetch({ get: {} });
+  await chat.open("t1");
+
+  await chat.setModel("antigravity", "gemini-3-pro");
+  expect(fetchCalls.at(-1)).toMatchObject({ method: "POST", path: "/chat/t1", body: { type: "setModel", provider: "antigravity", modelId: "gemini-3-pro" } });
+  expect(chat.model).toEqual({ provider: "antigravity", id: "gemini-3-pro" });
+  expect(chat.modelLabel).toBe("antigravity/gemini-3-pro");
+  expect(chat.switching).toBe(false);
+
+  await chat.setThinkingLevel("high");
+  expect(fetchCalls.at(-1)).toMatchObject({ method: "POST", path: "/chat/t1", body: { type: "setThinkingLevel", level: "high" } });
+  expect(chat.thinkingLevel).toBe("high");
+  expect(chat.switching).toBe(false);
 });
 
 // ── source contracts (panel wiring) ─────────────────────────────────────────

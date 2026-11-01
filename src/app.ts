@@ -10,7 +10,7 @@ import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
 import { contentTypeFor, listFiles, rawFilePath, readFile, searchFiles, type FileEntry } from "./files";
-import { BOARD_CHAT_ID, ChatManager, PROMPT_MAX_CHARS, type ChatState, type ChatSessionFactory } from "./chat";
+import { BOARD_CHAT_ID, ChatManager, PROMPT_MAX_CHARS, THINKING_LEVELS, type ChatState, type ChatSessionFactory } from "./chat";
 import { createChatEventStream, type ChatStreamSession } from "./chat-events";
 
 /** POST /chat/:cardId success shapes (Eden infers them for the web client). */
@@ -559,6 +559,8 @@ export const createApp = (
             queued: { steering: [], followUp: [] },
             model: null,
             thinkingLevel: "off",
+            thinkingLevels: [...THINKING_LEVELS],
+            supportsThinking: false,
             messages: disk.messages,
             messagesTruncated: disk.messagesTruncated,
           };
@@ -570,13 +572,15 @@ export const createApp = (
     )
     .post(
       "/chat/:cardId",
-      async ({ params, body, status }): Promise<ChatAccepted | ChatStopped> => {
+      async ({ params, body, status }): Promise<ChatAccepted | ChatStopped | ChatState> => {
         try {
           const handle = await chatManager.get(params.cardId);
           if (body.type === "abort") return (await handle.send({ type: "abort" })) as ChatStopped;
-          return (await handle.send(body)) as ChatAccepted;
+          // setModel/setThinkingLevel answer with the fresh ChatState (the SDK's
+          // model_select event is extension-only and never reaches the SSE stream)
+          return (await handle.send(body)) as ChatAccepted | ChatState;
         } catch (e) {
-          return fail<ChatAccepted | ChatStopped>(e, status);
+          return fail<ChatAccepted | ChatStopped | ChatState>(e, status);
         }
       },
       {
@@ -586,6 +590,25 @@ export const createApp = (
             type: t.Literal("prompt"),
             message: t.String({ minLength: 1, maxLength: PROMPT_MAX_CHARS }),
             streamingBehavior: t.Optional(t.Union([t.Literal("steer"), t.Literal("followUp")])),
+          }),
+          t.Object({
+            type: t.Literal("setModel"),
+            provider: t.String({ minLength: 1 }),
+            modelId: t.String({ minLength: 1 }),
+          }),
+          t.Object({
+            type: t.Literal("setThinkingLevel"),
+            // inline literals (not THINKING_LEVELS.map): a mapped array collapses
+            // TypeBox's static union to never and Eden rejects every valid level
+            level: t.Union([
+              t.Literal("off"),
+              t.Literal("minimal"),
+              t.Literal("low"),
+              t.Literal("medium"),
+              t.Literal("high"),
+              t.Literal("xhigh"),
+              t.Literal("max"),
+            ]),
           }),
           t.Object({ type: t.Literal("abort") }),
         ]),
