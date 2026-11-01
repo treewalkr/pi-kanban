@@ -22,6 +22,7 @@
   import { files } from "./lib/files.svelte";
   import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu, Hash } from "@lucide/svelte";
   import { wheelPan } from "./lib/wheel";
+  import { service, pollServe, restartService } from "./lib/service.svelte";
 
   let boardEl = $state<HTMLElement | null>(null);
   let tagMenu = $state(false);
@@ -100,6 +101,23 @@
     const timer = setInterval(poll, 2000);
     return () => clearInterval(timer);
   });
+
+  // serve runs old code until restarted (src changes don't hot-swap) — surface staleness
+  $effect(() => {
+    const poll = () => {
+      if (!document.hidden) void pollServe();
+    };
+    poll();
+    const timer = setInterval(poll, 30_000);
+    return () => clearInterval(timer);
+  });
+
+  async function restartFromChip(): Promise<void> {
+    if (service.restarting) return;
+    const result = await restartService();
+    if (result.ok) location.reload(); // fresh bundle, fresh SSE wiring
+    else if (result.failed) alert(result.note); // refusals already spoke via confirm
+  }
 
   // the branch row reads the serving repo's git state; checkouts can happen in a terminal too
   $effect(() => {
@@ -278,6 +296,15 @@
           </div>
         {/if}
       </div>
+      {#if service.stale || service.restarting}
+        <button
+          class="stale-chip"
+          onclick={() => void restartFromChip()}
+          title={service.detail ?? "rebuilding + restarting the server…"}
+        >
+          ⟳ {service.restarting ? "restarting…" : "stale"}
+        </button>
+      {/if}
       <div class="meta">{board.activeCount} tasks</div>
       <button
         class="theme-toggle"

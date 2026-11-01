@@ -2,6 +2,7 @@
   import { theme, setTheme } from "./theme.svelte";
   import { notify } from "./notify.svelte";
   import { api } from "../api";
+  import { restartService, service } from "./service.svelte";
 
   let restarting = $state(false);
   let note = $state("");
@@ -48,60 +49,18 @@
   }
 
   // null while the server is down (restarting) — callers treat that as "keep waiting"
-  async function healthBooted(): Promise<number | null> {
-    try {
-      const res = await api.health.get();
-      return typeof res.data?.booted === "number" ? res.data.booted : null;
-    } catch {
-      return null;
-    }
-  }
-
-  async function restartService(): Promise<void> {
+  async function restart(): Promise<void> {
     if (restarting) return;
     restarting = true;
     failed = false;
     note = "restarting — waiting for the server…";
-    try {
-      const before = (await healthBooted()) ?? 0;
-      let res = await api.restart.post();
-      // in-flight agent sessions: the server refuses unless forced — ask once
-      const conflict = res.error?.value as { code?: string; sessions?: number } | undefined;
-      if (res.error && conflict?.code === "sessions-in-flight") {
-        const n = conflict.sessions ?? 0;
-        if (!confirm(`${n} agent session${n === 1 ? "" : "s"} running — restarting kills ${n === 1 ? "it" : "them"}. Restart anyway?`)) {
-          note = "restart cancelled — agent sessions left running";
-          return;
-        }
-        res = await api.restart.post(null, { query: { force: "true" } });
-      }
-      if (res.error) {
-        failed = true;
-        const value = res.error.value;
-        note =
-          typeof value === "object" && value !== null && "error" in value && typeof value.error === "string"
-            ? value.error
-            : "restart unavailable";
-        return;
-      }
-      // vite build can take a while; poll until a server with a newer boot stamp answers
-      const deadline = Date.now() + 120_000;
-      while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        const booted = await healthBooted();
-        if (booted !== null && booted > before) {
-          location.reload(); // fresh bundle, fresh SSE wiring
-          return;
-        }
-      }
-      failed = true;
-      note = "server didn't come back — check the serve log (build errors?).";
-    } catch {
-      failed = true;
-      note = "cannot reach the API — is it running?";
-    } finally {
-      restarting = false;
+    const result = await restartService();
+    if (result.ok) {
+      location.reload(); // fresh bundle, fresh SSE wiring
+      return;
     }
+    failed = result.failed;
+    note = result.note;
   }
 </script>
 
@@ -175,8 +134,8 @@
       server is back. Local pages only; remote sites cannot trigger it.
     </p>
     <div class="settings-dev-restart">
-      <button type="button" class="ghost" onclick={restartService} disabled={restarting}>
-        {restarting ? "restarting…" : "restart service"}
+      <button type="button" class="ghost" onclick={restart} disabled={restarting || service.restarting}>
+        {restarting || service.restarting ? "restarting…" : "restart service"}
       </button>
       {#if note}
         <span class="settings-dev-note" class:err={failed}>{note}</span>

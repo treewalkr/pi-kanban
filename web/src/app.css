@@ -22,6 +22,7 @@
   --user-bg: #292929; /* chat user bubble (pi-web) */
   --error: #f87171;
   --error-border: color-mix(in srgb, #f87171 35%, var(--border));
+  --warn: #d29922; /* stale-serve chip — same amber as the CLI's ⚠ lines */
   /* lane accents: pi-web theme accents, pastel on dark */
   --lane-0: #a4a4a4;
   --lane-1: #a4c2f4;
@@ -50,6 +51,7 @@
   --user-bg: #eff6ff; /* chat user bubble (pi-web) */
   --error: #dc2626;
   --error-border: color-mix(in srgb, #dc2626 35%, var(--border));
+  --warn: #9a6700;
   /* lane accents: pi-web light-theme accents, deeper for white surfaces */
   --lane-0: #6e7480;
   --lane-1: #245bce;
@@ -1368,6 +1370,17 @@ button {
   background: var(--bg-selected);
   border-color: color-mix(in srgb, var(--border) 60%, var(--text-muted));
   color: var(--text);
+}
+
+/* stale serve: label + border + tooltip carry the state, color only reinforces */
+.chips button.stale-chip,
+.chips button.stale-chip:hover {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.chips button.stale-chip:hover {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
 .meta,
