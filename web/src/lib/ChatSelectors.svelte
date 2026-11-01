@@ -38,11 +38,14 @@
   const locked = $derived(chat.switching || chat.streaming.isStreaming);
   const showFilter = $derived(catalog.length > 8);
 
-  // catalog order is preserved (pi-web #783: never re-sort a provider's models)
+  // catalog order is preserved (pi-web #783: never re-sort a provider's models);
+  // duplicate provider/id rows are dropped (pi's table repeats ids across tiers)
   const groups = $derived.by(() => {
     const q = filter.trim().toLowerCase();
+    const seen = new Set<string>();
     const out: { provider: string; items: CatalogModel[] }[] = [];
     for (const m of catalog) {
+      if (seen.has(`${m.provider}:${m.id}`)) continue;
       if (q && !`${m.id} ${m.provider}/${m.id}`.toLowerCase().includes(q)) continue;
       let group = out.at(-1);
       if (!group || group.provider !== m.provider) {
@@ -50,6 +53,7 @@
         out.push(group);
       }
       group.items.push(m);
+      seen.add(`${m.provider}:${m.id}`);
     }
     return out;
   });
