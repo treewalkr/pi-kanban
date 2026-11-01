@@ -9,12 +9,21 @@ export interface CatalogModel {
   images: boolean;
 }
 
-/** Parse the fixed six-column table `pi --list-models` prints (every cell is one token). */
+/**
+ * Parse the fixed six-column table `pi --list-models` prints (every cell is one token).
+ * Rows repeating a provider/id pair (e.g. a provider's plan tiers sharing a display
+ * id) keep the first — pickers key options by id, and duplicate ids crash their
+ * keyed {#each} blocks (Svelte `each_key_duplicate`).
+ */
 export function parseModelsTable(text: string): CatalogModel[] {
   const out: CatalogModel[] = [];
+  const seen = new Set<string>();
   for (const line of text.split("\n").slice(1)) {
     const cols = line.trim().split(/\s+/);
     if (cols.length < 6 || cols[0] === "provider") continue;
+    const key = `${cols[0]}/${cols[1]}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push({
       provider: cols[0],
       id: cols[1],

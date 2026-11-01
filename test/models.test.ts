@@ -19,6 +19,26 @@ test("skips blank, header and ragged lines", () => {
   expect(parseModelsTable("x\nprovider       model …\nzai glm-5.3 1M 131.1K yes no")).toHaveLength(1);
 });
 
+// regression: pi listed zcode's plan tiers as three rows all id "Start" (the
+// tier name lives in context), and the settings panels' keyed {#each ms as m
+// (m.id)} crashed the whole dialog with each_key_duplicate
+test("drops rows repeating a provider/id pair, keeping the first", () => {
+  const text = `provider       model                                    context  max-out  thinking  images
+zcode          Start                                    Plan/GLM-5-Turbo  200K  no  yes
+zcode          Start                                    Plan/GLM-5.2      1M    no  yes
+zcode          Start                                    Plan/GLM-5.3-Flash 1M   no  yes
+zai            glm-5.3                                  1M       131.1K   yes       no
+zcode          glm-5.3-flash                            1M       131.1K   yes      yes
+otherprov      Start                                    1M       128K     yes       yes`;
+  expect(parseModelsTable(text)).toEqual([
+    { provider: "zcode", id: "Start", context: "Plan/GLM-5-Turbo", maxOut: "200K", thinking: false, images: true },
+    { provider: "zai", id: "glm-5.3", context: "1M", maxOut: "131.1K", thinking: true, images: false },
+    { provider: "zcode", id: "glm-5.3-flash", context: "1M", maxOut: "131.1K", thinking: true, images: true },
+    // same id under another provider is a different key and survives
+    { provider: "otherprov", id: "Start", context: "1M", maxOut: "128K", thinking: true, images: true },
+  ]);
+});
+
 test("runtimeModelsToCatalog: authed providers only, grouped, deduped, formatted", () => {
   const models = [
     { provider: "zai", id: "glm-5.3", contextWindow: 1_000_000, maxTokens: 131_072, reasoning: true, input: ["text", "image"] },
