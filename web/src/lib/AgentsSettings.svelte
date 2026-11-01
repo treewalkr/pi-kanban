@@ -51,6 +51,8 @@
     const groups = new Map<string, Array<{ id: string; label: string }>>();
     for (const m of forProvider) {
       const list = groups.get(m.provider) ?? [];
+      // some catalogs ship the same provider+id twice (zcode "Start") — one option each
+      if (list.some((e) => e.id === m.id)) continue;
       list.push({ id: m.id, label: `${m.id} · ${m.context}${m.thinking ? " · thinks" : ""}` });
       groups.set(m.provider, list);
     }
