@@ -14,7 +14,7 @@ const HELP = `kanban ${VERSION} — task board for the pi agent
 usage:
   kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--tag <tag>]… [--parent <id>]
                       [--priority <high|normal|low>] [--blocked-by <id>]… [--top] [--elaborate]
-  kanban ls [lane] [--project <tag>] [--tag <tag>]… [--json]
+  kanban ls [lane] [--project <tag>] [--tag <tag>]… [--owner <name>] [--json]
   kanban next [--project <tag>] [--json]  (what's next: lane priority, then card priority, then oldest; skips blocked)
   kanban search <query…> [--project <tag>] [--tag <tag>]… [--json]
   kanban show <id>
@@ -74,7 +74,7 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before"]);
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner"]);
 const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
@@ -288,14 +288,18 @@ async function main(): Promise<number> {
         const laneRef = positional[0];
         if (laneRef) db.resolveLane(laneRef); // validate before filtering
         const tagFilter = arr(flags, "tag");
+        const ownerFilter = str(flags, "owner");
         const tasks = db
           .tasks()
           .filter((t) => (laneRef ? t.laneId === db.resolveLane(laneRef).id : true))
           .filter((t) => (project ? t.project === project : true))
-          .filter((t) => (tagFilter.length > 0 ? tagFilter.every((tag) => t.tags.includes(tag)) : true));
+          .filter((t) => (tagFilter.length > 0 ? tagFilter.every((tag) => t.tags.includes(tag)) : true))
+          .filter((t) => (ownerFilter ? t.owner === ownerFilter : true));
         if (json) {
           const map = db.blockedByMap();
           jsonOut(tasks.map((t) => ({ ...t, blockedBy: map[t.id] ?? [] })));
+        } else if (ownerFilter) {
+          for (const t of tasks) out(taskLine(db, t)); // flat: one line per owned card
         } else {
           out(listLanes(db, laneRef, project, tagFilter));
         }

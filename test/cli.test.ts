@@ -1182,10 +1182,12 @@ test("ls --tag filters AND across repeats in text output and --json alike", asyn
   expect(text.stdout).not.toContain(none.title);
   expect(text.stdout).toContain("● Backlog  1");
 
-  const all = await cli("ls");
-  expect(all.stdout).toContain(ui.title);
-  expect(all.stdout).toContain(both.title);
-  expect(all.stdout).toContain(none.title);
+  // full-board --json is uncapped — the caps only trim the human render
+  const all = await cli("ls", "--json");
+  const allTitles = (JSON.parse(all.stdout) as Task[]).map((t) => t.title);
+  expect(allTitles).toContain(ui.title);
+  expect(allTitles).toContain(both.title);
+  expect(allTitles).toContain(none.title);
 
   const json = await cli("ls", "--tag", "ui", "--tag", "review-loop", "--json");
   expect(json.code).toBe(0);
@@ -1606,4 +1608,78 @@ test("reads never write: overview/ls/search leave data_version unchanged", async
   await run("search", "needle", "--json");
 
   expect(dataVersion()).toBe(before);
+});
+
+test("ls: per-lane caps with overflow; single-lane cap; --owner flat filter", async () => {
+  const lDb = join(dir, "ls-caps.db");
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: lDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    return { stdout, code };
+  };
+
+  // 12 top-level backlog cards: full-board ls caps at 10 with an overflow line
+  {
+    const seed = new KanbanDb(lDb);
+    for (let i = 0; i < 12; i++) seed.createTask({ title: `cap card ${i}`, lane: "backlog" });
+    seed.close();
+  }
+  const boardLs = await run("ls");
+  expect(boardLs.code).toBe(0);
+  const backlogSection = boardLs.stdout.split(/\n● /).find((s) => s.includes("Backlog"))!;
+  const rows = backlogSection.split("\n").filter((l) => l.startsWith("  ") && !l.includes("… +"));
+  expect(rows).toHaveLength(10);
+  expect(boardLs.stdout).toContain("… +2 more — kanban ls backlog --json");
+
+  // single-lane view caps at 50: 55 cards → 50 rows + overflow of 5
+  {
+    const seed = new KanbanDb(lDb);
+    for (let i = 0; i < 55; i++) seed.createTask({ title: `detail card ${i}`, lane: "plan" });
+    seed.close();
+  }
+  const laneLs = await run("ls", "plan");
+  expect(laneLs.code).toBe(0);
+  const laneRows = laneLs.stdout.split("\n").filter((l) => l.startsWith("  ") && !l.includes("… +") && l.trim().length > 0 && !l.includes("●"));
+  expect(laneRows).toHaveLength(50);
+  expect(laneLs.stdout).toContain("… +5 more — kanban ls plan --json");
+
+  // --json is uncapped: 67 total
+  const jsonRows = JSON.parse((await run("ls", "--json")).stdout) as unknown[];
+  expect(jsonRows).toHaveLength(12 + 55);
+
+  // children of shown parents always render (cap counts top-level only)
+  {
+    const seed = new KanbanDb(lDb);
+    const parent = seed.createTask({ title: "capped parent", lane: "review" });
+    seed.createTask({ title: "child a", parent: parent.id });
+    seed.createTask({ title: "child b", parent: parent.id });
+    seed.close();
+  }
+  const nested = await run("ls", "review");
+  expect(nested.stdout).toContain("capped parent");
+  expect(nested.stdout).toContain("child a");
+  expect(nested.stdout).toContain("child b");
+
+  // --owner filter: flat taskLines, no lane groups
+  {
+    const seed = new KanbanDb(lDb);
+    const mine = seed.createTask({ title: "ada's card", lane: "implement" });
+    seed.claimTask(mine.id, { author: "ada" });
+    const other = seed.createTask({ title: "bob's card", lane: "implement" });
+    seed.claimTask(other.id, { author: "bob" });
+    seed.close();
+  }
+  const owned = await run("ls", "--owner", "ada");
+  expect(owned.code).toBe(0);
+  expect(owned.stdout).toContain("ada's card");
+  expect(owned.stdout).not.toContain("bob's card");
+  expect(owned.stdout).not.toContain("●"); // no lane group headers
+  const ownedJson = JSON.parse((await run("ls", "--owner", "ada", "--json")).stdout) as Array<{ title: string }>;
+  expect(ownedJson).toHaveLength(1);
+  expect(ownedJson[0]!.title).toBe("ada's card");
 });
