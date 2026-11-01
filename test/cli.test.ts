@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Task } from "../src/db";
-import { applyServeEnv, parse, serveWarnings } from "../src/cli";
+import { applyServeEnv, parse, scanServes, serveWarnings } from "../src/cli";
 import { VERSION, headState } from "../src/version";
 
 const root = join(import.meta.dir, "..");
@@ -53,12 +53,19 @@ async function cliIn(cwd: string, ...args: string[]): Promise<CliResult> {
   return { code, stdout, stderr };
 }
 
-/** Fake kanban /health on an ephemeral port — lets `check` tests pin --port away from the real 4600. */
-function fakeServe(health: Record<string, unknown>): { port: number; stop: () => void } {
+/** Fake kanban /health on an ephemeral port — lets `check` tests pin --port away from the real 4600.
+ * With `activity`, /activity is served too (what `ps` reads for live sessions). */
+function fakeServe(
+  health: Record<string, unknown>,
+  activity?: { sessions: unknown[]; queued: unknown[] },
+): { port: number; stop: () => void } {
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch: () => new Response(JSON.stringify({ ok: true, booted: Date.now(), ...health })),
+    fetch: (req) =>
+      req.url.endsWith("/activity") && activity
+        ? new Response(JSON.stringify(activity))
+        : new Response(JSON.stringify({ ok: true, booted: Date.now(), ...health })),
   });
   if (server.port === undefined) throw new Error("ephemeral port not assigned");
   return { port: server.port, stop: () => server.stop(true) };
@@ -1071,6 +1078,76 @@ test("serveWarnings: down, stale, head-split, dirty, version-split, healthy", as
   expect(await kinds(gonePort)).toEqual(["serve-down"]);
 });
 
+test("scanServes: vouched serves on any port; ok-only look-alikes rejected", async () => {
+  // a real-shaped serve: /health with ok, pid, version
+  const serve = fakeServe({ pid: 4242, version: VERSION, git: null });
+  // a look-alike: answers ok:true but no pid/version (e.g. docker program-tracker on :4000)
+  const lookalike = fakeServe({ service: "some-other-api" });
+  try {
+    const found = await scanServes();
+    const hit = found.find((s) => s.port === serve.port);
+    expect(hit?.pid).toBe(4242);
+    expect(hit?.version).toBe(VERSION);
+    expect(found.some((s) => s.port === lookalike.port)).toBe(false);
+  } finally {
+    serve.stop();
+    lookalike.stop();
+  }
+});
+
+test("ps lists serves with their live agent sessions; --json round-trips", async () => {
+  const serve = fakeServe(
+    { pid: 4242, version: VERSION, git: { commit: headState()?.head ?? "", head: headState()?.head ?? "", dirty: false } },
+    {
+      sessions: [{ taskId: "ab12cd", role: "builder", startedAt: Date.now() - 60_000, modelLabel: "glm-5.3" }],
+      queued: [{ taskId: "ef34ab", role: "reviewer", enqueuedAt: Date.now() - 5_000 }],
+    },
+  );
+  try {
+    const res = await cli("ps");
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain(`:${serve.port}`);
+    expect(res.stdout).toContain("pid 4242");
+    expect(res.stdout).toContain("ab12cd");
+    expect(res.stdout).toContain("builder");
+    expect(res.stdout).toContain("queued  ef34ab");
+
+    const jsonRes = await cli("ps", "--json");
+    expect(jsonRes.code).toBe(0);
+    const data = JSON.parse(jsonRes.stdout) as {
+      serves: { port: number; pid: number; sessions: { taskId: string }[]; queued: { taskId: string }[] }[];
+      abandonedLeases: unknown[];
+    };
+    const entry = data.serves.find((s) => s.port === serve.port);
+    expect(entry?.pid).toBe(4242);
+    expect(entry?.sessions.map((s) => s.taskId)).toEqual(["ab12cd"]);
+    expect(entry?.queued.map((q) => q.taskId)).toEqual(["ef34ab"]);
+    expect(data.abandonedLeases).toEqual([]);
+  } finally {
+    serve.stop();
+  }
+});
+
+test("ps flags a lease whose serve died mid-build", async () => {
+  const shortLived = Bun.spawn(["sleep", "0"]);
+  await shortLived.exited;
+  const deadPid = shortLived.pid as number;
+  const db = new KanbanDb(dbFile);
+  try {
+    db.tryTakeLease("zzps1", "builder", { pid: deadPid, bootId: Date.now() }, 60_000);
+  } finally {
+    db.close();
+  }
+  const res = await cli("ps");
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain("abandoned lease  zzps1");
+  expect(res.stdout).toContain("resume manually");
+
+  const jsonRes = await cli("ps", "--json");
+  const data = JSON.parse(jsonRes.stdout) as { abandonedLeases: { taskId: string; role: string }[] };
+  expect(data.abandonedLeases.some((l) => l.taskId === "zzps1" && l.role === "builder")).toBe(true);
+});
+
 test("mv promotes a backlog card to plan; show and ls confirm", async () => {
   const added = await cli("add", "promote me", "--lane", "backlog", "--json");
   expect(added.code).toBe(0);
@@ -1456,6 +1533,12 @@ test("help: serve line shows --agents with --auto-review as deprecated alias", a
   expect(res.stdout).toContain("kanban serve [--port <n>] [--open] [--agents]");
   expect(res.stdout).toContain("agents: serve --agents (deprecated alias: --auto-review)");
   expect(res.stdout).not.toContain("auto-review: serve --auto-review");
+});
+
+test("help: ps line lists serves, sessions, abandoned leases", async () => {
+  const res = await cli("help");
+  expect(res.code).toBe(0);
+  expect(res.stdout).toContain("kanban ps [--json]");
 });
 
 test("docs: AGENTS.md and SKILL.md reference --agents", () => {

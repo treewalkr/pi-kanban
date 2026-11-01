@@ -54,6 +54,7 @@ usage:
   kanban worker ls [--lane <ref>] [--json]     (lane worker runs: id · lane · status · age · summary)
   kanban serve [--port <n>] [--open] [--agents]
   kanban stop [--port <n>]                     (SIGTERM the kanban server; graceful — traces in-flight agents)
+  kanban ps [--json]                           (running serves on any port + their live agent sessions + abandoned leases)
   kanban help | version
 
 lane refs: slug (backlog), prefix (imp), name prefix (Rev), or ordinal (1..n)
@@ -211,6 +212,94 @@ export interface ServeWarning {
 
 const short = (sha: string): string => sha.slice(0, 7);
 
+interface Health {
+  ok?: boolean;
+  version?: string;
+  pid?: number;
+  booted?: number;
+  git?: { commit: string | null; head: string | null; dirty: boolean } | null;
+}
+
+/** Loopback TCP listener ports on this machine (lsof, like listenerPids but every
+ * port — a serve may run anywhere: default 4600, repro scratch ports, --port). */
+function listenPorts(): number[] {
+  const res = Bun.spawnSync(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"]);
+  const ports = new Set<number>();
+  for (const line of res.stdout.toString().split("\n")) {
+    const m = line.match(/\bTCP\s+(\S+)\s+\(LISTEN\)/i);
+    if (!m) continue;
+    const name = m[1]; // "127.0.0.1:4600", "[::1]:4600", "*:5174"
+    const idx = name.lastIndexOf(":");
+    if (idx === -1) continue;
+    const host = name.slice(0, idx).replace(/^\[/, "").replace(/\]$/, "");
+    const port = Number(name.slice(idx + 1));
+    if (!Number.isInteger(port) || port <= 0) continue;
+    if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost" && host !== "*") continue;
+    ports.add(port);
+  }
+  return [...ports];
+}
+
+export interface ServeInstance {
+  port: number;
+  pid: number | null;
+  version: string | null;
+  booted: number | null;
+  git: Health["git"];
+}
+
+interface ActivitySession {
+  taskId: string;
+  role: string;
+  startedAt: number;
+  model?: string;
+  modelLabel?: string;
+  pool?: string;
+}
+interface ActivityQueued {
+  taskId: string;
+  role: string;
+  enqueuedAt: number;
+}
+interface ActivitySnapshot {
+  sessions: ActivitySession[];
+  queued: ActivityQueued[];
+}
+
+/** pid liveness via signal 0 — EPERM (alive but not ours) still counts; ESRCH means gone. */
+function pidAlive(pid: number): boolean {
+  if (pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as { code?: string }).code !== "ESRCH";
+  }
+}
+
+/** Every kanban serve on this machine, any port: loopback listeners probed with
+ * /health, kept only when it vouches ok:true with a numeric pid and string
+ * version — kanban's /health always carries both, while look-alikes (a docker
+ * program-tracker answering {"ok":true} on :4000) do not. */
+export async function scanServes(): Promise<ServeInstance[]> {
+  const found = await Promise.all(
+    listenPorts().map(async (port): Promise<ServeInstance | null> => {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(500) });
+        const body = (await res.json().catch(() => null)) as Health | null;
+        if (!body || body.ok !== true) return null;
+        if (typeof body.pid !== "number" || typeof body.version !== "string") return null;
+        return { port, pid: body.pid, version: body.version, booted: body.booted ?? null, git: body.git ?? null };
+      } catch {
+        return null; // down or not kanban
+      }
+    }),
+  );
+  return found
+    .filter((s): s is ServeInstance => s !== null)
+    .sort((a, b) => a.port - b.port);
+}
+
 /**
  * Serve-side health for `kanban check`: is the board's server up, current, and
  * the same build as this CLI? /health reports its boot commit, live HEAD, and
@@ -219,11 +308,6 @@ const short = (sha: string): string => sha.slice(0, 7);
  * head split (serve running from a different tree, e.g. a worktree).
  */
 export async function serveWarnings(port: number): Promise<ServeWarning[]> {
-  interface Health {
-    ok?: boolean;
-    version?: string;
-    git?: { commit: string | null; head: string | null; dirty: boolean } | null;
-  }
   let health: Health | null = null;
   try {
     const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) });
@@ -976,6 +1060,77 @@ async function main(): Promise<number> {
         for (const w of serve) {
           out(c.hex("#d29922", `⚠ ${w.message}`));
         }
+        return 0;
+      }
+
+      case "ps": {
+        const serves = await scanServes();
+        const activity = await Promise.all(
+          serves.map(async (s) => {
+            try {
+              const res = await fetch(`http://127.0.0.1:${s.port}/activity`, { signal: AbortSignal.timeout(1500) });
+              const parsed = (await res.json().catch(() => null)) as Partial<ActivitySnapshot> | null;
+              // look-alike servers answer /activity with their health body — arrays normalize to empty
+              return parsed ? { sessions: parsed.sessions ?? [], queued: parsed.queued ?? [] } : null;
+            } catch {
+              return null; // serve gone mid-scan — treat as no sessions
+            }
+          }),
+        );
+        // abandoned mid-build: heartbeat is recent but its serve pid is gone
+        const abandoned = db
+          .listLeases()
+          .filter((l) => Date.now() - l.heartbeatAt < 10 * 60_000)
+          .filter((l) => !serves.some((s) => s.pid === l.ownerPid))
+          .filter((l) => !pidAlive(l.ownerPid));
+        const titleFor = (id: string): string => {
+          try {
+            const t = db.resolveTask(id);
+            return t.id === id ? t.title : ""; // exact id only — a worker-run id must not resolve to some other card
+          } catch {
+            return "";
+          }
+        };
+        if (json) {
+          jsonOut({
+            serves: serves.map((s, i) => ({
+              ...s,
+              versionSplit: !!s.version && s.version !== VERSION,
+              sessions: activity[i]?.sessions ?? [],
+              queued: activity[i]?.queued ?? [],
+            })),
+            abandonedLeases: abandoned,
+          });
+          return 0;
+        }
+        if (serves.length === 0) out(c.dim("no kanban serve running"));
+        for (const [i, s] of serves.entries()) {
+          const git = s.git?.commit ? short(s.git.commit) + (s.git.dirty ? "*" : "") : "n/a";
+          const bits = [`pid ${s.pid ?? "?"}`, `:${s.port}`, `v${s.version ?? "?"}`, git];
+          if (s.booted) bits.push(`up ${ageShort(Date.now() - s.booted)}`);
+          let line = `serve  ${bits.join("  ")}`;
+          if (s.version && s.version !== VERSION) line += c.red(`  ⟳ serve ${s.version} ≠ cli ${VERSION}`);
+          out(line);
+          const act = activity[i];
+          for (const sess of act?.sessions ?? []) {
+            const title = titleFor(sess.taskId);
+            out(
+              `  ${sess.taskId}  ${sess.role.padEnd(13)}  ${ageShort(Date.now() - sess.startedAt).padStart(4)}  ${(
+                sess.modelLabel ?? sess.model ?? ""
+              ).padEnd(16)}${title ? `  ${title}` : ""}`,
+            );
+          }
+          for (const q of act?.queued ?? [])
+            out(c.dim(`  queued  ${q.taskId}  ${q.role}  ${ageShort(Date.now() - q.enqueuedAt)}`));
+          if (act && act.sessions.length === 0 && (act.queued?.length ?? 0) === 0)
+            out(c.dim("  no live agent sessions"));
+        }
+        for (const l of abandoned)
+          out(
+            c.red(
+              `abandoned lease  ${l.taskId}  ${l.role}  heartbeat ${ageShort(Date.now() - l.heartbeatAt)} ago  (owner pid ${l.ownerPid} dead) — resume manually, never respawn`,
+            ),
+          );
         return 0;
       }
 

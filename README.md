@@ -56,7 +56,7 @@ kanban mv <id> <lane> · edit <id> … · done <id> · archive <id> · undo · r
 kanban claim <id> · ws <id> <branch> · worker run <lane> · worker ls
 kanban attach <id> <plan-file> · diff <id> <name> · approve <id> · reject <id> --message <text>
 kanban lane ls | add | rename | rm | limit <ref> <n|off>
-kanban stats [id] · check [--port <n>] · stop · help
+kanban stats [id] · check [--port <n>] · ps · stop · help
 ```
 
 Ids accept any unique prefix; lanes accept slug, prefix, name, or ordinal; `--json`
@@ -75,6 +75,7 @@ workflow contract: card per unit of work, advance it through lanes, never leave 
 
 | script | does |
 | --- | --- |
+| `scripts/install.sh` | `kanban` bin + pi skill + git gate wiring (`git config core.hooksPath scripts/hooks`) |
 | `bun run dev` | api (`:4600`, watch) + web (`:5174`) |
 | `bun run build` | production web build → `web/dist` |
 | `bun run start` | serve api + built web on `127.0.0.1:4600` |
