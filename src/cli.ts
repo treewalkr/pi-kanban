@@ -7,8 +7,7 @@ import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listL
 import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
 import { searchBoard, HARD_RESULT_LIMIT, MAX_RESULTS } from "./search";
 import { cardFileDiff } from "./diff";
-
-const VERSION = "0.7.0";
+import { VERSION, headState } from "./version";
 
 export const HELP = `kanban ${VERSION} — task board for the pi agent
 
@@ -47,7 +46,7 @@ usage:
   kanban done <id>
   kanban archive <id> | auto [<n>|off]        (card → Archive; auto: done cards archive after N days — off disables, default 7; undo: kanban undo, or mv <id> <lane>)
   kanban undo [id]                           (revert the last lane move on the board, or on one card)
-  kanban check [--json]                     (board-health lint: done parents w/ active children, children behind parent, planless build cards, lanes over WIP limit; advisory, exit 0)
+  kanban check [--json] [--port <n>]        (board-health lint: done parents w/ active children, children behind parent, planless build cards, lanes over WIP limit, stale/down serve; advisory, exit 0)
   kanban stats [id]                     (board summary, or one card's lane times / cycle / gate metrics)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
   kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force] | limit <ref> <n|off>
@@ -203,6 +202,66 @@ function ageShort(ms: number): string {
   const h = Math.round(m / 60);
   if (h < 48) return `${h}h`;
   return `${Math.round(h / 24)}d`;
+}
+
+export interface ServeWarning {
+  kind: "serve-down" | "serve-stale" | "serve-dirty" | "serve-version-split" | "serve-head-split";
+  message: string;
+}
+
+const short = (sha: string): string => sha.slice(0, 7);
+
+/**
+ * Serve-side health for `kanban check`: is the board's server up, current, and
+ * the same build as this CLI? /health reports its boot commit, live HEAD, and
+ * version — compare against this checkout to catch a stale serve (src changed,
+ * no restart), a version split (symlinked CLI ahead of an old serve), and a
+ * head split (serve running from a different tree, e.g. a worktree).
+ */
+export async function serveWarnings(port: number): Promise<ServeWarning[]> {
+  interface Health {
+    ok?: boolean;
+    version?: string;
+    git?: { commit: string | null; head: string | null; dirty: boolean } | null;
+  }
+  let health: Health | null = null;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) });
+    const body = (await res.json().catch(() => null)) as Health | null;
+    if (body && body.ok === true) health = body;
+  } catch {
+    /* down — reported below */
+  }
+  if (!health) {
+    return [{ kind: "serve-down", message: `no kanban server on port ${port} — kanban serve` }];
+  }
+  const out: ServeWarning[] = [];
+  const git = health.git ?? null;
+  if (git?.commit && git.head) {
+    if (git.commit !== git.head) {
+      out.push({
+        kind: "serve-stale",
+        message: `serve booted at ${short(git.commit)}, HEAD is ${short(git.head)} — restart it (board header ⟳ stale chip or settings → restart service)`,
+      });
+    }
+    const local = headState();
+    if (local?.head && local.head !== git.head) {
+      out.push({
+        kind: "serve-head-split",
+        message: `serve HEAD ${short(git.head)} ≠ this checkout ${short(local.head)} — serve runs a different tree`,
+      });
+    }
+  }
+  if (git?.dirty) {
+    out.push({ kind: "serve-dirty", message: "serve tree has uncommitted edits — running code may not match HEAD" });
+  }
+  if (health.version && health.version !== VERSION) {
+    out.push({
+      kind: "serve-version-split",
+      message: `serve ${health.version} ≠ cli ${VERSION} — restart serve (symlinked cli runs new code against an old server)`,
+    });
+  }
+  return out;
 }
 
 async function main(): Promise<number> {
@@ -895,9 +954,10 @@ async function main(): Promise<number> {
       }
 
       case "check": {
-        const violations = db.boardViolations();
+        const port = Number(str(flags, "port") ?? process.env.PORT ?? 4600);
+        const [violations, serve] = await Promise.all([db.boardViolations(), serveWarnings(port)]);
         if (json) {
-          jsonOut(violations);
+          jsonOut([...violations, ...serve]);
           return 0;
         }
         for (const v of violations) {
@@ -912,6 +972,9 @@ async function main(): Promise<number> {
             line = `⚠ ${v.laneId} over WIP limit: ${v.count}/${v.limit}`;
           }
           out(c.hex("#d29922", line));
+        }
+        for (const w of serve) {
+          out(c.hex("#d29922", `⚠ ${w.message}`));
         }
         return 0;
       }

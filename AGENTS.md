@@ -15,6 +15,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 - `worker_pools` table (`src/db.ts`) + `/pools` routes (`src/app.ts`) — parallel worker pools for the serve --agents loop
 - `lane_events` table (`src/db.ts`) + `/stats` route (`src/app.ts`) + `kanban stats` — audit trail and board analytics
 - WIP limits — `lanes.wip_limit` column (`src/db.ts`), `kanban lane limit` (`src/cli.ts`), `wip-over-limit` in `kanban check`, lane count chip in the web UI
+- Serve staleness — `/health` reports `version`, `pid`, `git {commit, head, dirty}` (`src/version.ts`); header `⟳ stale` chip (`web/src/lib/service.svelte.ts`) and `kanban check [--port <n>]` flag a lagging, down, or version-split serve; the chip and settings → restart service rebuild + self-respawn it
 
 ## Rules
 

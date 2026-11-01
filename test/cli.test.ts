@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Task } from "../src/db";
-import { applyServeEnv, parse } from "../src/cli";
+import { applyServeEnv, parse, serveWarnings } from "../src/cli";
+import { VERSION, headState } from "../src/version";
 
 const root = join(import.meta.dir, "..");
 let dir = "";
@@ -50,6 +51,23 @@ async function cliIn(cwd: string, ...args: string[]): Promise<CliResult> {
     proc.exited,
   ]);
   return { code, stdout, stderr };
+}
+
+/** Fake kanban /health on an ephemeral port — lets `check` tests pin --port away from the real 4600. */
+function fakeServe(health: Record<string, unknown>): { port: number; stop: () => void } {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response(JSON.stringify({ ok: true, booted: Date.now(), ...health })),
+  });
+  if (server.port === undefined) throw new Error("ephemeral port not assigned");
+  return { port: server.port, stop: () => server.stop(true) };
+}
+
+/** A healthy serve: version matches this CLI, boot commit matches this checkout's HEAD. */
+function healthyServe(): { port: number; stop: () => void } {
+  const head = headState()?.head ?? "";
+  return fakeServe({ version: VERSION, git: { commit: head, head, dirty: false } });
 }
 
 test("add → ls --json → mv → done → rm roundtrip", async () => {
@@ -953,33 +971,39 @@ test("kanban check reports seeded violations and exits 0", async () => {
   // 3. (c) card in implement with no attached plan
   const card3 = JSON.parse((await run("add", "card-3", "--lane", "implement", "--json")).stdout) as Task;
 
-  const res = await run("check");
-  expect(res.code).toBe(0);
-  expect(res.stdout).toContain(`⚠ ${p1.id} done with active children: ${c1.id}`);
-  expect(res.stdout).toContain(`⚠ ${c2.id} in backlog behind parent ${p2.id} (implement)`);
-  expect(res.stdout).toContain(`⚠ ${card3.id} in implement with no attached plan`);
+  // pin --port at a fake healthy serve so check's serve checks stay quiet and deterministic
+  const fake = healthyServe();
+  try {
+    const res = await run("check", "--port", String(fake.port));
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain(`⚠ ${p1.id} done with active children: ${c1.id}`);
+    expect(res.stdout).toContain(`⚠ ${c2.id} in backlog behind parent ${p2.id} (implement)`);
+    expect(res.stdout).toContain(`⚠ ${card3.id} in implement with no attached plan`);
 
-  const jsonRes = await run("check", "--json");
-  expect(jsonRes.code).toBe(0);
-  expect(JSON.parse(jsonRes.stdout)).toEqual([
-    {
-      kind: "done-parent-active-children",
-      cardId: p1.id,
-      childIds: [c1.id],
-    },
-    {
-      kind: "child-behind-parent",
-      cardId: c2.id,
-      parentId: p2.id,
-      cardLaneId: "backlog",
-      parentLaneId: "implement",
-    },
-    {
-      kind: "missing-plan",
-      cardId: card3.id,
-      laneId: "implement",
-    },
-  ]);
+    const jsonRes = await run("check", "--json", "--port", String(fake.port));
+    expect(jsonRes.code).toBe(0);
+    expect(JSON.parse(jsonRes.stdout)).toEqual([
+      {
+        kind: "done-parent-active-children",
+        cardId: p1.id,
+        childIds: [c1.id],
+      },
+      {
+        kind: "child-behind-parent",
+        cardId: c2.id,
+        parentId: p2.id,
+        cardLaneId: "backlog",
+        parentLaneId: "implement",
+      },
+      {
+        kind: "missing-plan",
+        cardId: card3.id,
+        laneId: "implement",
+      },
+    ]);
+  } finally {
+    fake.stop();
+  }
 });
 
 test("kanban check on a clean board prints nothing and exits 0", async () => {
@@ -998,13 +1022,53 @@ test("kanban check on a clean board prints nothing and exits 0", async () => {
     ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code }));
   };
 
-  const res = await run("check");
-  expect(res.code).toBe(0);
-  expect(res.stdout).toBe("");
+  // healthy fake serve keeps the serve checks quiet — the clean-board promise holds
+  const fake = healthyServe();
+  try {
+    const res = await run("check", "--port", String(fake.port));
+    expect(res.code).toBe(0);
+    expect(res.stdout).toBe("");
 
-  const jsonRes = await run("check", "--json");
-  expect(jsonRes.code).toBe(0);
-  expect(JSON.parse(jsonRes.stdout)).toEqual([]);
+    const jsonRes = await run("check", "--json", "--port", String(fake.port));
+    expect(jsonRes.code).toBe(0);
+    expect(JSON.parse(jsonRes.stdout)).toEqual([]);
+  } finally {
+    fake.stop();
+  }
+});
+
+test("serveWarnings: down, stale, head-split, dirty, version-split, healthy", async () => {
+  const local = headState()?.head;
+  expect(local).toMatch(/^[0-9a-f]{40}$/); // tests run from the repo checkout
+  const sha = "e".repeat(40);
+  const kinds = async (port: number) => (await serveWarnings(port)).map((w) => w.kind);
+
+  // healthy: boot commit === HEAD === this checkout → quiet
+  const ok = healthyServe();
+  expect(await kinds(ok.port)).toEqual([]);
+  ok.stop();
+
+  // stale: commits landed since boot (serve isn't this checkout's HEAD either → both fire)
+  const stale = fakeServe({ version: VERSION, git: { commit: local, head: sha, dirty: false } });
+  expect(await kinds(stale.port)).toEqual(["serve-stale", "serve-head-split"]);
+  stale.stop();
+
+  // dirty: uncommitted edits — running code may not match HEAD
+  const dirty = fakeServe({ version: VERSION, git: { commit: local, head: local, dirty: true } });
+  expect(await kinds(dirty.port)).toEqual(["serve-dirty"]);
+  dirty.stop();
+
+  // version split: symlinked cli newer than the running serve
+  const split = fakeServe({ version: "0.0.1", git: { commit: local, head: local, dirty: false } });
+  expect(await kinds(split.port)).toEqual(["serve-version-split"]);
+  split.stop();
+
+  // down: nothing listening
+  const gone = healthyServe();
+  const gonePort = gone.port;
+  gone.stop();
+  await new Promise((r) => setTimeout(r, 50));
+  expect(await kinds(gonePort)).toEqual(["serve-down"]);
 });
 
 test("mv promotes a backlog card to plan; show and ls confirm", async () => {

@@ -10,10 +10,15 @@ export interface CatalogModel {
 }
 
 /**
- * Parse the fixed six-column table `pi --list-models` prints (every cell is one token).
- * Rows repeating a provider/id pair (e.g. a provider's plan tiers sharing a display
- * id) keep the first — pickers key options by id, and duplicate ids crash their
- * keyed {#each} blocks (Svelte `each_key_duplicate`).
+ * Parse the six-column table `pi --list-models` prints. The provider column and
+ * the last four columns (context, max-out, thinking, images) are single tokens,
+ * but model ids may contain spaces (e.g. zcode's "Start Plan/GLM-5.2") — so
+ * rows are parsed right-anchored and the middle tokens join back into the id.
+ * Rows whose thinking/images cells aren't yes/no are malformed (pi changed its
+ * column layout?) and are skipped rather than parsed into garbage fields.
+ * Rows repeating a provider/id pair keep the first — pickers key options by
+ * id, and duplicate ids crash their keyed {#each} blocks (Svelte
+ * `each_key_duplicate`).
  */
 export function parseModelsTable(text: string): CatalogModel[] {
   const out: CatalogModel[] = [];
@@ -21,19 +26,26 @@ export function parseModelsTable(text: string): CatalogModel[] {
   for (const line of text.split("\n").slice(1)) {
     const cols = line.trim().split(/\s+/);
     if (cols.length < 6 || cols[0] === "provider") continue;
-    const key = `${cols[0]}/${cols[1]}`;
+    const [context, maxOut, thinking, images] = cols.slice(-4);
+    if (!isYesNo(thinking) || !isYesNo(images)) continue;
+    const id = cols.slice(1, -4).join(" ");
+    const key = `${cols[0]}/${id}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({
       provider: cols[0],
-      id: cols[1],
-      context: cols[2],
-      maxOut: cols[3],
-      thinking: cols[4] === "yes",
-      images: cols[5] === "yes",
+      id,
+      context,
+      maxOut,
+      thinking: thinking === "yes",
+      images: images === "yes",
     });
   }
   return out;
+}
+
+function isYesNo(cell: string): boolean {
+  return cell === "yes" || cell === "no";
 }
 
 const TTL_MS = 10 * 60_000;
