@@ -38,6 +38,23 @@ _Avoid_: Touchpoint, integration point, test surface
 The complete pickup view of a card combining its note, latest plan, attached file inventory, and full thread in one read.
 _Avoid_: Summary, context dump, dossier
 
+**Notice**:
+The `display:false` board message a pi session receives at start and again
+only when the board's shape changes, so keeping the board truthful is enforced
+by context rather than prompt discipline.
+_Avoid_: Ping, reminder, board feed, injection
+
+**Overview**:
+The cheap one-read board shape — lane counts, WIP limits, and owned cards,
+never card bodies — the orientation companion to Brief.
+_Avoid_: Dashboard, board summary, digest, glance
+
+**Owner**:
+The actor currently responsible for a card, recorded as a `tasks.owner` value
+set when a card enters Test + Implement and cleared when it leaves, making
+"who's on this" a fact rather than a thread-read.
+_Avoid_: Assignee, claimant, holder, session binding
+
 **Gate**:
 The human-only decision point (`approve` or `reject`) between plan review and implementation that agents are forbidden to run themselves.
 _Avoid_: Checkpoint, sign-off, auto-approval
