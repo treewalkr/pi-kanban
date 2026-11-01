@@ -2835,10 +2835,36 @@ a.dep-chip.gh-link .gh-state {
   border-color: color-mix(in srgb, #bc8cff 40%, var(--border));
 }
 
-/* header tag filter chips — same hue as card tag chips, active state via .chips button.active */
+/* header tag filter — one compact summary button opening a popover of tag chips */
+.tag-filter {
+  position: relative;
+  display: inline-flex;
+}
+
+.tag-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: min(320px, 80vw);
+  padding: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* tag chips inside the menu — same hue as card tag chips, active state via .chips button.active */
 .chips button.tag {
   color: #bc8cff;
   border-color: color-mix(in srgb, #bc8cff 35%, var(--border));
+}
+
+.tag-menu button.tag-clear {
+  color: var(--text-muted);
 }
 
 .card.blocked {

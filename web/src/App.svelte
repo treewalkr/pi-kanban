@@ -20,10 +20,18 @@
   import { theme, setTheme } from "./lib/theme.svelte";
   import { notify } from "./lib/notify.svelte";
   import { files } from "./lib/files.svelte";
-  import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu } from "@lucide/svelte";
+  import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu, Hash } from "@lucide/svelte";
   import { wheelPan } from "./lib/wheel";
 
   let boardEl = $state<HTMLElement | null>(null);
+  let tagMenu = $state(false);
+  let tagWrap = $state<HTMLElement | null>(null);
+
+  function toggleTag(tag: string): void {
+    board.tagFilter = board.tagFilter.includes(tag)
+      ? board.tagFilter.filter((t) => t !== tag)
+      : [...board.tagFilter, tag];
+  }
 
   // sidebar width drag: pointer events on the thin handle between panel and board
   let resizing = $state(false);
@@ -131,7 +139,19 @@
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   });
+
+  /** close the tag filter menu on Escape or any click outside it (SearchBox pattern) */
+  function onWindowEvent(e: MouseEvent | KeyboardEvent): void {
+    if (!tagMenu) return;
+    if (e instanceof KeyboardEvent) {
+      if (e.key === "Escape") tagMenu = false;
+      return;
+    }
+    if (tagWrap && !tagWrap.contains(e.target as Node)) tagMenu = false;
+  }
 </script>
+
+<svelte:window onkeydown={onWindowEvent} onclick={onWindowEvent} />
 
 <div class="app" class:resizing>
   <aside
@@ -215,20 +235,32 @@
           ☉ {board.waitingCount} waiting
         </button>
         {#if board.tags.length > 0}
-          {#each board.tags as tag (tag)}
+          <div class="tag-filter" bind:this={tagWrap}>
             <button
-              class="tag"
-              class:active={board.tagFilter.includes(tag)}
-              title="filter tag (AND)"
-              onclick={() => {
-                board.tagFilter = board.tagFilter.includes(tag)
-                  ? board.tagFilter.filter((t) => t !== tag)
-                  : [...board.tagFilter, tag];
-              }}
+              class:active={board.tagFilter.length > 0 || tagMenu}
+              onclick={() => (tagMenu = !tagMenu)}
+              title="filter by tag (AND)"
             >
-              #{tag}
+              <Hash size={12} strokeWidth={1.75} /> tags{board.tagFilter.length > 0 ? ` ${board.tagFilter.length}` : ""}
             </button>
-          {/each}
+            {#if tagMenu}
+              <div class="tag-menu" role="menu">
+                {#each board.tags as tag (tag)}
+                  <button
+                    class="tag"
+                    class:active={board.tagFilter.includes(tag)}
+                    title="filter tag (AND)"
+                    onclick={() => toggleTag(tag)}
+                  >
+                    #{tag}
+                  </button>
+                {/each}
+                {#if board.tagFilter.length > 0}
+                  <button class="tag-clear" onclick={() => (board.tagFilter = [])}>clear</button>
+                {/if}
+              </div>
+            {/if}
+          </div>
         {/if}
       </div>
       <div class="meta">{board.activeCount} tasks</div>
