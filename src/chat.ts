@@ -47,8 +47,14 @@ export type ChatCommand =
   | { type: "prompt"; message: string; streamingBehavior?: "steer" | "followUp" }
   | { type: "steer"; message: string }
   | { type: "followUp"; message: string }
+  | { type: "setModel"; provider: string; modelId: string }
+  | { type: "setThinkingLevel"; level: ChatThinkingLevel }
   | { type: "abort" }
   | { type: "get_state" };
+
+/** The pi-agent-core ThinkingLevel union (types.d.ts), for route validation + UI. */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ChatThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 export interface ChatQueued { steering: string[]; followUp: string[] }
 
@@ -70,6 +76,9 @@ export interface ChatState {
   queued: ChatQueued;
   model: { provider: string; id: string } | null;
   thinkingLevel: string;
+  /** Levels the CURRENT model supports (clamped by the SDK); canonical list when no session is live. */
+  thinkingLevels: string[];
+  supportsThinking: boolean;
   messages: ChatMessage[]; // display projection, oldest first, last HISTORY_MESSAGE_CAP
   messagesTruncated: boolean; // true when older entries were cut
 }
@@ -416,6 +425,23 @@ class ChatHandleImpl implements ChatHandle {
           throw new KanbanError(e instanceof Error ? e.message : String(e), "conflict");
         }
       }
+      case "setModel": {
+        // The runtime catalog honors models.json + configured auth; getModel
+        // resolves undefined (not throws) for unknown ids, setModel throws when
+        // no auth is configured. Both land as 409 conflict.
+        const model = this.session.modelRuntime.getModel(command.provider, command.modelId);
+        if (!model) throw new KanbanError(`unknown model '${command.provider}/${command.modelId}'`, "conflict");
+        try {
+          await this.session.setModel(model); // session-scoped: persists to the transcript, not global defaults
+        } catch (e) {
+          throw new KanbanError(e instanceof Error ? e.message : String(e), "conflict");
+        }
+        return this.state();
+      }
+      case "setThinkingLevel": {
+        this.session.setThinkingLevel(command.level); // clamps to model capabilities
+        return this.state();
+      }
       case "abort":
         await this.session.abort();
         return { stopped: true };
@@ -435,6 +461,8 @@ class ChatHandleImpl implements ChatHandle {
       queued: { steering: [...this.session.getSteeringMessages()], followUp: [...this.session.getFollowUpMessages()] },
       model: model ? { provider: String(model.provider), id: String(model.id) } : null,
       thinkingLevel: String(this.session.thinkingLevel ?? "off"),
+      thinkingLevels: this.session.getAvailableThinkingLevels().map(String),
+      supportsThinking: this.session.supportsThinking(),
       messages,
       messagesTruncated: truncated,
     };

@@ -32,6 +32,16 @@ function fakeSession(overrides: Record<string, unknown> = {}) {
     isCompacting: false,
     model: null,
     thinkingLevel: "off",
+    getAvailableThinkingLevels: () => ["off", "low", "medium", "high"] as string[],
+    supportsThinking: () => true,
+    setModel: async function (this: { model: unknown }, model: unknown) {
+      this.model = model;
+    },
+    setThinkingLevel: function (this: { thinkingLevel: string }, level: string) {
+      this.thinkingLevel = level;
+    },
+    // catalog stand-in: resolves anything but provider "nope" (the unknown-model miss)
+    modelRuntime: { getModel: (provider: string, id: string) => (provider === "nope" ? undefined : { provider, id }) },
     getSteeringMessages: () => [] as string[],
     getFollowUpMessages: () => [] as string[],
     agent: { state: {} },
@@ -141,6 +151,37 @@ test("POST prompt accepted; streaming refusal 409; abort stops; invalid body 422
   const missing = await client.chat({ cardId: "zzzzz" }).post({ type: "prompt", message: "hi" });
   expect(missing.status).toBe(404);
   expect(errorValue(missing.error)).toMatchObject({ code: "not-found" });
+});
+
+test("POST setModel/setThinkingLevel: state round-trip, unknown model 409, invalid level 422", async () => {
+  const task = db.createTask({ title: "picky" });
+  const sessions: unknown[] = [];
+  const client = treaty(appWithChat(sessions));
+
+  // unknown model: the fake runtime catalog resolves nothing → 409 with the id echoed
+  const unknown = await client.chat({ cardId: task.id }).post({ type: "setModel", provider: "nope", modelId: "nope" });
+  expect(unknown.status).toBe(409);
+  expect(errorValue(unknown.error)).toEqual({ error: "unknown model 'nope/nope'", code: "conflict" });
+
+  // a setModel POST boots the session lazily (same as prompt) — happy path answers
+  // with the fresh ChatState, incl. the thinking surface the picker needs
+  const applied = await client.chat({ cardId: task.id }).post({ type: "setModel", provider: "zai", modelId: "glm-5.3" });
+  expect(applied.error).toBeNull();
+  expect(applied.data).toMatchObject({
+    running: true,
+    model: { provider: "zai", id: "glm-5.3" },
+    thinkingLevel: "off",
+    thinkingLevels: ["off", "low", "medium", "high"],
+    supportsThinking: true,
+  });
+
+  const level = await client.chat({ cardId: task.id }).post({ type: "setThinkingLevel", level: "high" });
+  expect(level.error).toBeNull();
+  expect(level.data).toMatchObject({ thinkingLevel: "high" });
+
+  // @ts-expect-error probing the validation boundary with a non-level string
+  const bogus = await client.chat({ cardId: task.id }).post({ type: "setThinkingLevel", level: "ultra" });
+  expect(bogus.status).toBe(422);
 });
 
 test("GET /chat/:id/events opens transport, sends connected, heartbeats as data events", async () => {
