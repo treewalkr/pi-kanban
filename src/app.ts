@@ -5,7 +5,7 @@ import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentCo
 import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
-import { listPiModels } from "./models";
+import { listChatModels, listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
@@ -908,6 +908,11 @@ export const createApp = (
     )
     .get("/pi-models", async (): Promise<{ models: Awaited<ReturnType<typeof listPiModels>> }> => ({
       models: await listPiModels(),
+    }))
+    // chat sessions run noExtensions: the picker must offer the runtime's authed
+    // catalog, not the CLI's (extension providers like antigravity can't resolve)
+    .get("/chat-models", async (): Promise<{ models: Awaited<ReturnType<typeof listChatModels>> }> => ({
+      models: await listChatModels(),
     }))
     .get("/pi-skills", (): { skills: CatalogSkill[] } => ({
       skills: listPiSkills(),
