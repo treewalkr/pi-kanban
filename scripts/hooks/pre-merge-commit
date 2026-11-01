@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Gate merges: `git merge --no-ff` fires this hook, not pre-commit — the
+# workspace.sh done merge lands here. Every merge runs the full gate.
+set -euo pipefail
+
+exec "$(dirname "$0")/gate.sh" pre-merge-commit

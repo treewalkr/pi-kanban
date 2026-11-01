@@ -28,6 +28,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 - Commit often: one small, focused commit per logical change; never batch unrelated work
 - Prefix with a type: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`
 - One line, imperative, no body, no Co-Authored-By
+- Every code commit and every workspace merge passes the git gate (scripts/hooks/ via core.hooksPath, wired by install.sh): docs-only commits skip it; WIP escapes with git commit --no-verify
 
 ## Git workspaces
 

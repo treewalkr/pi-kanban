@@ -21,7 +21,12 @@ mkdir -p "$SKILL_DIR"
 cp skills/pi-kanban/SKILL.md "$SKILL_DIR/SKILL.md"
 cp skills/pi-kanban/plan-template.md "$SKILL_DIR/plan-template.md"
 
+# Git gate: check + test must pass on commits and merges.
+chmod +x scripts/hooks/pre-commit scripts/hooks/pre-merge-commit scripts/hooks/gate.sh
+git config core.hooksPath scripts/hooks
+
 echo "installed:"
 echo "  cli    → $BIN_DIR/kanban"
 echo "  skill  → $SKILL_DIR/SKILL.md"
+echo "  hooks  → core.hooksPath scripts/hooks (pre-commit + pre-merge-commit: check + test)"
 echo "web ui  → kanban serve --open   (or: bun run dev)"

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Gate commits: docs-only changes skip; anything else runs check + test.
+set -euo pipefail
+
+# Fail closed: if the staged list itself fails, run the gate instead of skipping.
+staged="$(git diff --cached --name-only)" || exec "$(dirname "$0")/gate.sh" pre-commit
+
+# Fast path: every staged path matches the docs allowlist (or nothing staged).
+# src/ test/ web/ scripts/ skills/ and root configs are all code (tests run
+# scripts and read skills/ directly), so they are deliberately not exempt.
+# Anything unknown runs the gate — the wrong failure direction is a silent skip.
+if [ -z "$staged" ] || ! printf '%s\n' "$staged" | grep -Evq '^(docs/|[^/]+\.md$|LICENSE$|\.gitignore$)'; then
+  echo "pre-commit: docs-only change, skipping check + test"
+  exit 0
+fi
+
+exec "$(dirname "$0")/gate.sh" pre-commit
