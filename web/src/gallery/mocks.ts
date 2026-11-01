@@ -349,11 +349,19 @@ function stubMutations(): void {
     if (patch.priority !== undefined) t.priority = patch.priority;
     t.updatedAt = now();
     if (patch.index !== undefined) reposition(t, patch.index);
+    if (patch.before !== undefined) {
+      const anchorId = taskRef(patch.before);
+      const siblings = board.tasks
+        .filter((o) => o.laneId === t.laneId && o.id !== t.id)
+        .sort((a, b) => a.position - b.position);
+      const at = siblings.findIndex((o) => o.id === anchorId);
+      reposition(t, at >= 0 ? at : siblings.length);
+    }
     board.tasks = [...board.tasks];
   };
 
-  board.moveTask = async (id: string, laneId: string, index?: number): Promise<void> => {
-    await board.updateTask(id, { lane: laneId, index });
+  board.moveTask = async (id: string, laneId: string, placement?: { before?: string }): Promise<void> => {
+    await board.updateTask(id, placement?.before ? { lane: laneId, before: placement.before } : { lane: laneId });
   };
 
   board.deleteTask = async (id: string, _force = false): Promise<void> => {

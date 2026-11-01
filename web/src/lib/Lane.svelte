@@ -25,29 +25,42 @@
   let isArchive = $derived(lane.id === "archive");
   let collapsed = $derived(board.collapsedLanes.has(lane.id) && !board.laneSearchHit(lane.id));
 
-  function hintIndex(e: DragEvent): number {
-    if (!el) return 0;
-    const card = (e.target as HTMLElement).closest("[data-card]");
-    const cards = [...el.querySelectorAll("[data-card]")];
-    if (!card) return cards.length;
-    const i = cards.indexOf(card as HTMLElement);
-    const r = (card as HTMLElement).getBoundingClientRect();
-    return i + (e.clientY > r.top + r.height / 2 ? 1 : 0);
+  /** Where a drop at this cursor lands, as an anchor rather than a number: the
+   * server resolves numeric indexes against the lane's full flat order, where
+   * hidden nested children (and filtered-out cards) shift every slot. Top-level
+   * blocks split at the block's midpoint so a nest behaves as one unit; a
+   * nested card being dragged inside its own nest anchors to the sibling under
+   * the cursor. Empty space below the cards appends (before: undefined). */
+  function hintFor(e: DragEvent): { index: number; before?: string } {
+    if (!el) return { index: -1 };
+    const tops = [...el.querySelectorAll(".cards > [data-card]")] as HTMLElement[];
+    const hovered = (e.target as HTMLElement).closest("[data-card]") as HTMLElement | null;
+    if (!hovered) return { index: tops.length };
+    const hoveredNested = !!hovered.closest(".card-children");
+    const dragged = board.dragging ? board.taskById(board.dragging) : undefined;
+    if (hoveredNested && dragged && board.nestsUnder(dragged)) {
+      return { index: -1, before: hovered.getAttribute("data-card")! }; // sibling anchor, no gap line
+    }
+    const block = hoveredNested ? (tops.find((t) => t.contains(hovered)) ?? hovered) : hovered;
+    const i = Math.max(0, tops.indexOf(block));
+    const r = block.getBoundingClientRect();
+    const at = i + (e.clientY > r.top + r.height / 2 ? 1 : 0);
+    return { index: at, before: tops[at]?.getAttribute("data-card") ?? undefined };
   }
 
   function ondragover(e: DragEvent) {
     e.preventDefault();
     e.dataTransfer!.dropEffect = "move";
-    board.dropHint = { laneId: lane.id, index: hintIndex(e) };
+    board.dropHint = { laneId: lane.id, ...hintFor(e) };
   }
 
   function ondrop(e: DragEvent) {
     e.preventDefault();
     const id = e.dataTransfer!.getData("text/plain");
-    const at = hint >= 0 ? hint : undefined;
+    const before = board.dropHint && board.dropHint.laneId === lane.id ? board.dropHint.before : undefined;
     board.dropHint = null;
     board.dragging = null;
-    if (id) board.moveTask(id, lane.id, at);
+    if (id && id !== before) board.moveTask(id, lane.id, before ? { before } : undefined);
   }
 
   function ondragleave(e: DragEvent) {

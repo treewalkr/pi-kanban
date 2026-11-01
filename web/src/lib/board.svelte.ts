@@ -262,7 +262,10 @@ class BoardStore {
   editing = $state<Task | null>(null);
   editMode = $state(false);
   dragging = $state<string | null>(null);
-  dropHint = $state<{ laneId: string; index: number } | null>(null);
+  /** index counts the lane's top-level cards (gap rendering); before is the
+   * anchor card id the drop inserts ahead of — undefined means append. The
+   * anchor survives hidden nested children shifting the server's flat order. */
+  dropHint = $state<{ laneId: string; index: number; before?: string } | null>(null);
   expanded = $state<Set<string>>(new Set());
   /** Card to scroll to and flash once the detail modal closes (search jumps). */
   flashId = $state<string | null>(null);
@@ -557,8 +560,12 @@ class BoardStore {
     return null;
   }
 
-  async moveTask(id: string, laneId: string, index?: number): Promise<void> {
-    await this.updateTask(id, { lane: laneId, index });
+  /** Move a card to a lane. `before` anchors it directly ahead of another card
+   * in that lane (exact placement); without an anchor the card appends. Never
+   * send a numeric index from the board — the server resolves it against the
+   * lane's full flat order, where hidden nested children shift every index. */
+  async moveTask(id: string, laneId: string, placement?: { before?: string }): Promise<void> {
+    await this.updateTask(id, placement?.before ? { lane: laneId, before: placement.before } : { lane: laneId });
   }
 
   async deleteTask(id: string, force = false): Promise<void> {
