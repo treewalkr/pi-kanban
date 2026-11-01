@@ -17,6 +17,11 @@ case "${1:-}" in
 esac
 name="$1"
 
+# Git runs hooks with GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE set to this repo —
+# but the check/test runs (and the git calls test suites make in sandboxed
+# temp repos) must resolve the repo from their own cwd. Strip them.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
+
 # Check first: type errors fail fast in ~7s before the ~51s suite.
 echo "$name: running check (svelte-check + tsc)"
 if ! bun run check; then

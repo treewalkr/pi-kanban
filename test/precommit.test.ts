@@ -61,6 +61,8 @@ interface SandboxOpts {
   testFails?: boolean;
   /** false: leave the repo with no commits (for the initial-commit test). */
   initialCommit?: boolean;
+  /** Override the stub check script (defaults to appending "check" to gate.log). */
+  checkCmd?: string;
 }
 
 /**
@@ -69,7 +71,7 @@ interface SandboxOpts {
  * Follows the run-the-real-script pattern from test/workspace.test.ts.
  */
 function makeSandbox(opts: SandboxOpts = {}): Sandbox {
-  const { checkFails = false, testFails = false, initialCommit = true } = opts;
+  const { checkFails = false, testFails = false, initialCommit = true, checkCmd } = opts;
   const container = realpathSync(mkdtempSync(join(tmpdir(), "kanban-gate-test-")));
   containers.push(container);
   const repo = join(container, "repo");
@@ -86,12 +88,13 @@ function makeSandbox(opts: SandboxOpts = {}): Sandbox {
   }
   runGit(repo, ["config", "core.hooksPath", "scripts/hooks"]);
 
-  const checkCmd = checkFails ? "echo check >> gate.log && exit 1" : "echo check >> gate.log";
+  const resolvedCheckCmd =
+    checkCmd ?? (checkFails ? "echo check >> gate.log && exit 1" : "echo check >> gate.log");
   const testCmd = "echo test >> gate.log";
   writeFileSync(
     join(repo, "package.json"),
     JSON.stringify(
-      { name: "sandbox", private: true, type: "module", scripts: { check: checkCmd, test: testCmd } },
+      { name: "sandbox", private: true, type: "module", scripts: { check: resolvedCheckCmd, test: testCmd } },
       null,
       2,
     ) + "\n",
@@ -276,6 +279,22 @@ describe("scripts/hooks (git gate)", () => {
 
     expect(res.code).toBe(0);
     expect(gateLogLines(sandbox)).toEqual(["check", "test"]);
+  });
+
+  test("gate strips git env vars before running the suite", () => {
+    // git invokes hooks with GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE set to the
+    // hooking repo; leaked into `bun test`, sandboxed git calls in suites hit
+    // the wrong repo. The gate must unset them (real bug caught by dogfood).
+    sandbox = makeSandbox({
+      checkCmd: 'echo "GIT_DIR=${GIT_DIR-unset} GIT_INDEX_FILE=${GIT_INDEX_FILE-unset} GIT_WORK_TREE=${GIT_WORK_TREE-unset}" >> gate.log',
+    });
+    writeFileSync(join(sandbox.repo, "src-a.ts"), "export const a = 1;\n");
+    runGit(sandbox.repo, ["add", "src-a.ts"]);
+
+    const res = runGit(sandbox.repo, ["commit", "-m", "env probe"]);
+
+    expect(res.code).toBe(0);
+    expect(gateLogLines(sandbox)[0]).toBe("GIT_DIR=unset GIT_INDEX_FILE=unset GIT_WORK_TREE=unset");
   });
 
   test("docs-only commit skips the gate", () => {
