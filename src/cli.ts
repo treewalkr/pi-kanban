@@ -8,7 +8,7 @@ import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
 import { searchBoard, HARD_RESULT_LIMIT, MAX_RESULTS } from "./search";
 import { cardFileDiff } from "./diff";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 export const HELP = `kanban ${VERSION} — task board for the pi agent
 
