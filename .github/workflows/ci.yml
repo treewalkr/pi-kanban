@@ -13,4 +13,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun test
+      # 30s per test, matching the pre-review gate: subprocess-heavy CLI tests
+      # exceed bun's 5s default on a 2-core runner
+      - run: bun test --timeout 30000
