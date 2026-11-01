@@ -1215,3 +1215,45 @@ test("PATCH /tasks/:id owner roundtrip; /board carries it", async () => {
   };
   expect(board.tasks.find((t) => t.id === task.id)?.owner).toBe("ada");
 });
+
+test("PATCH /tasks/:id before anchors the move; bad anchor 409s", async () => {
+  const app = createApp(db);
+  const a = db.createTask({ title: "alpha", lane: "backlog" });
+  const b = db.createTask({ title: "beta", lane: "backlog" });
+  const c = db.createTask({ title: "gamma", lane: "backlog" });
+  const p = db.createTask({ title: "plan anchor", lane: "plan" });
+
+  const patch = (id: string, body: Record<string, unknown>) =>
+    app.handle(
+      new Request(`http://localhost/tasks/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  // c before a within the lane
+  const moved = await patch(c.id, { before: a.id });
+  expect(moved.status).toBe(200);
+  expect(db.laneTasks("backlog").map((t) => t.id)).toEqual([c.id, a.id, b.id]);
+
+  // cross-lane anchor: b into plan before p
+  const cross = await patch(b.id, { lane: "plan", before: p.id });
+  expect(cross.status).toBe(200);
+  expect(db.laneTasks("plan").map((t) => t.id)).toEqual([b.id, p.id]);
+
+  // anchor in the wrong lane → 409 conflict
+  const wrongLane = await patch(a.id, { lane: "plan", before: c.id });
+  expect(wrongLane.status).toBe(409);
+  expect(((await wrongLane.json()) as { error?: string }).error ?? "").toContain(
+    `anchor card '${c.id}' is not in lane 'plan'`,
+  );
+
+  // unknown anchor → 404
+  const unknown = await patch(a.id, { before: "zzzzz" });
+  expect(unknown.status).toBe(404);
+
+  // self anchor → 400 invalid
+  const self = await patch(a.id, { before: a.id });
+  expect(self.status).toBe(400);
+});

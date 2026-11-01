@@ -1792,3 +1792,59 @@ test("claimTask: set, idempotent re-claim, foreign owner refuses without force, 
   expect(() => db.claimTask(card.id)).toThrow(/already owned by 'bob'/);
   expect(db.claimTask(card.id, { force: true }).owner).toBe("user");
 });
+
+test("moveTaskBefore: anchor placement, wrong-lane and self errors", () => {
+  const a = db.createTask({ title: "A", lane: "backlog" });
+  const b = db.createTask({ title: "B", lane: "backlog" });
+  const c = db.createTask({ title: "C", lane: "backlog" });
+  // board order: A, B, C (positions 200, 300, 400 after the seeded waiting lane)
+
+  // place C before A → order: C, A, B
+  db.moveTaskBefore(c.id, undefined, a.id);
+  expect(db.laneTasks("backlog").map((t) => t.id)).toEqual([c.id, a.id, b.id]);
+
+  // cross-lane move + anchor: move C into plan directly before a plan anchor
+  const p1 = db.createTask({ title: "P1", lane: "plan" });
+  const p2 = db.createTask({ title: "P2", lane: "plan" });
+  db.moveTaskBefore(c.id, "plan", p2.id);
+  expect(db.laneTasks("plan").map((t) => t.id)).toEqual([p1.id, c.id, p2.id]);
+  expect(db.resolveTask(c.id).laneId).toBe("plan");
+
+  // self anchor
+  expect(() => db.moveTaskBefore(a.id, "backlog", a.id)).toThrow(
+    new KanbanError("cannot move a card before itself", "invalid"),
+  );
+
+  // anchor outside the target lane
+  expect(() => db.moveTaskBefore(a.id, "review", p1.id)).toThrow(
+    new KanbanError(`anchor card '${p1.id}' is not in lane 'review'`, "conflict"),
+  );
+
+  // same-lane reorder keeps the owner (no lane change, no clear)
+  db.updateTask(a.id, { owner: "ada" });
+  db.moveTaskBefore(a.id, undefined, b.id);
+  expect(db.resolveTask(a.id).owner).toBe("ada");
+});
+
+test("same-lane moveTask without index/before writes nothing", () => {
+  const a = db.createTask({ title: "A", lane: "backlog" });
+  const b = db.createTask({ title: "B", lane: "backlog" });
+  const c = db.createTask({ title: "C", lane: "backlog" });
+  const before = db.resolveTask(b.id);
+  const eventsBefore = db.laneEvents(b.id).length;
+  const orderBefore = db.laneTasks("backlog").map((t) => t.id);
+
+  const result = db.moveTask(b.id, "backlog");
+  expect(result.id).toBe(b.id);
+
+  const after = db.resolveTask(b.id);
+  expect(after.position).toBe(before.position);
+  expect(after.updatedAt).toBe(before.updatedAt);
+  expect(db.laneEvents(b.id)).toHaveLength(eventsBefore);
+  expect(db.laneTasks("backlog").map((t) => t.id)).toEqual(orderBefore); // not re-appended
+  expect(a.id && c.id).toBeTruthy();
+
+  // --pos still reorders within the same lane
+  db.moveTask(b.id, "backlog", 0);
+  expect(db.laneTasks("backlog").map((t) => t.id)).toEqual([b.id, a.id, c.id]);
+});

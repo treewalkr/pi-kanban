@@ -1763,3 +1763,77 @@ test("search: --limit default and 50 cap, compact rows, matched/hasMore/hint", a
   expect(empty.code).toBe(1);
   expect(empty.stderr).toContain("usage: kanban search <query…> [--project <tag>] [--tag <tag>]… [--limit <n>] [--json]");
 });
+
+test("mv --before: cross-lane anchor, same-lane reorder, --pos conflict", async () => {
+  const mDb = join(dir, "mv-before.db");
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: mDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, code };
+  };
+  // human ls renders lane position order (ls --json is creation order)
+  const order = async (lane: string) => {
+    const out = await run("ls", lane);
+    return out.stdout
+      .split("\n")
+      .filter((l) => /^  \S/.test(l))
+      .map((l) => l.trim().split(/\s+/).slice(1).join(" "));
+  };
+
+  let ids: Record<string, string> = {};
+  {
+    const seed = new KanbanDb(mDb);
+    for (const title of ["alpha", "beta", "gamma"]) {
+      ids[title] = seed.createTask({ title, lane: "backlog" }).id;
+    }
+    ids.delta = seed.createTask({ title: "delta", lane: "plan" }).id;
+    seed.close();
+  }
+
+  // cross-lane anchor: mv gamma plan --before delta → plan: gamma, delta
+  const cross = await run("mv", ids.gamma!, "plan", "--before", ids.delta!);
+  expect(cross.code).toBe(0);
+  expect(await order("plan")).toEqual(["gamma", "delta"]);
+
+  // same-lane reorder: mv gamma backlog --before alpha → backlog: gamma, alpha, beta
+  const same = await run("mv", ids.gamma!, "backlog", "--before", ids.alpha!);
+  expect(same.code).toBe(0);
+  expect(await order("backlog")).toEqual(["gamma", "alpha", "beta"]);
+
+  // bare form: mv gamma --before beta (no lane) reorders within the current lane
+  const bare = await run("mv", ids.gamma!, "--before", ids.beta!);
+  expect(bare.code).toBe(0);
+  expect(await order("backlog")).toEqual(["alpha", "gamma", "beta"]);
+
+  // --pos and --before together exit 1
+  const combined = await run("mv", ids.alpha!, "backlog", "--pos", "2", "--before", ids.beta!);
+  expect(combined.code).toBe(1);
+  expect(combined.stderr).toContain("cannot combine --pos and --before");
+
+  // --next/--prev with --before exits 1
+  const rel = await run("mv", ids.alpha!, "--next", "--before", ids.beta!);
+  expect(rel.code).toBe(1);
+  expect(rel.stderr).toContain("cannot combine --next/--prev with --before");
+
+  // self anchor exits 1 with the exact message
+  const self = await run("mv", ids.alpha!, "--before", ids.alpha!);
+  expect(self.code).toBe(1);
+  expect(self.stderr).toContain("cannot move a card before itself");
+
+  // anchor outside the target lane exits 1
+  const wrong = await run("mv", ids.alpha!, "review", "--before", ids.beta!);
+  expect(wrong.code).toBe(1);
+  expect(wrong.stderr).toContain(`anchor card '${ids.beta}' is not in lane 'review'`);
+
+  // help carries the flag
+  expect((await run("help")).stdout).toContain("--before <id>");
+});

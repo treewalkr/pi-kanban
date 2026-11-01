@@ -1291,8 +1291,23 @@ export class KanbanDb {
   updateTask(prefix: string, patch: TaskPatch, meta?: { cause?: LaneEventCause; actor?: string }): Task {
     const task = this.resolveTask(prefix);
     const laneId = patch.lane ? this.resolveLane(patch.lane).id : task.laneId;
+    // Anchor placement: --before resolves to the anchor's index among the target lane's
+    // other cards, so insertPosition lands the card strictly between the anchor's
+    // predecessor and the anchor — concurrent-safe, unlike a numeric index.
+    let beforeIndex: number | undefined;
+    if (patch.before !== undefined) {
+      const anchor = this.resolveTask(patch.before);
+      if (anchor.id === task.id) throw new KanbanError("cannot move a card before itself", "invalid");
+      if (anchor.laneId !== laneId) {
+        throw new KanbanError(`anchor card '${anchor.id}' is not in lane '${laneId}'`, "conflict");
+      }
+      beforeIndex = this.laneTasks(laneId).filter((t) => t.id !== task.id).findIndex((t) => t.id === anchor.id);
+    }
     const hasIndex = patch.index !== undefined;
-    const position = patch.lane || hasIndex ? this.insertPosition(laneId, patch.index, task.id) : task.position;
+    const position =
+      patch.lane || hasIndex || beforeIndex !== undefined
+        ? this.insertPosition(laneId, beforeIndex ?? patch.index, task.id)
+        : task.position;
     const parentId =
       patch.parent === undefined ? task.parentId : (this.resolveParent(task.id, patch.parent)?.id ?? null);
 
@@ -1367,7 +1382,30 @@ export class KanbanDb {
   }
 
   moveTask(prefix: string, laneRef: string, index?: number, meta?: { cause?: LaneEventCause; actor?: string }): Task {
+    // Same-lane move with no ordering intent is a free no-op: no write, no updated_at
+    // bump, no lane event, no re-append (pi-web lesson #4 — no-op writes don't move anything).
+    const task = this.resolveTask(prefix);
+    if (index === undefined && this.resolveLane(laneRef).id === task.laneId) return task;
     return this.updateTask(prefix, { lane: laneRef, index }, { cause: "mv", ...meta });
+  }
+
+  /** Anchor move: place the card directly before `beforeRef` (unique prefix ok), in
+   *  `laneRef` when given, else the card's current lane. Survives concurrent edits
+   *  where an index would drift (pi-web lesson #5). */
+  moveTaskBefore(
+    taskRef: string,
+    laneRef: string | undefined,
+    beforeRef: string,
+    meta?: { cause?: LaneEventCause; actor?: string },
+  ): Task {
+    const task = this.resolveTask(taskRef);
+    const anchor = this.resolveTask(beforeRef);
+    if (anchor.id === task.id) throw new KanbanError("cannot move a card before itself", "invalid");
+    const targetLaneId = laneRef !== undefined ? this.resolveLane(laneRef).id : task.laneId;
+    if (anchor.laneId !== targetLaneId) {
+      throw new KanbanError(`anchor card '${anchor.id}' is not in lane '${targetLaneId}'`, "conflict");
+    }
+    return this.updateTask(task.id, { lane: targetLaneId, before: anchor.id }, { cause: "mv", ...meta });
   }
 
   /** Set the card's owner (the actor currently responsible). Idempotent for the same

@@ -39,6 +39,7 @@ usage:
   kanban overview [--json]                  (board shape: lane counts, WIP limits, owned cards)
   kanban brief <id>                         (pickup context: note, plan, thread)
   kanban mv <id> <lane> [--pos <1-based> | --before <id>]   kanban mv <id> --next | --prev
+                          (--before <anchorId> places the card directly before the anchor)
   kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--tag <tag>]… [--lane <ref>]
                           [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>…]
                           [--clear-note] [--clear-parent] [--clear-blocked-by] [--clear-tags]
@@ -780,12 +781,19 @@ async function main(): Promise<number> {
 
       case "mv": {
         const task = db.resolveTask(positional[0] ?? "");
+        const beforeRef = str(flags, "before");
+        const pos = str(flags, "pos");
+        if (pos && beforeRef) throw new KanbanError("cannot combine --pos and --before", "invalid");
+        if (beforeRef && (flags.next || flags.prev))
+          throw new KanbanError("cannot combine --next/--prev with --before", "invalid");
         let laneRef = positional[1];
         if (flags.next) laneRef = stepLane(db, task, 1);
         else if (flags.prev) laneRef = stepLane(db, task, -1);
-        if (!laneRef) throw new KanbanError("usage: kanban mv <id> <lane | --next | --prev>", "invalid");
-        const pos = str(flags, "pos");
-        const moved = db.moveTask(task.id, laneRef, pos ? Number(pos) - 1 : undefined);
+        if (!laneRef && !beforeRef)
+          throw new KanbanError("usage: kanban mv <id> <lane | --next | --prev> [--pos <1-based> | --before <id>]", "invalid");
+        const moved = beforeRef
+          ? db.moveTaskBefore(task.id, laneRef, beforeRef)
+          : db.moveTask(task.id, laneRef!, pos ? Number(pos) - 1 : undefined);
         if (json) jsonOut(moved);
         else {
           out(taskLine(db, moved));

@@ -798,6 +798,7 @@ export const createApp = (
           owner: t.Optional(t.Nullable(t.String({ minLength: 1 }))),
           priority: t.Optional(t.Enum({ high: "high", normal: "normal", low: "low" })),
           blockedBy: t.Optional(t.Array(t.String())),
+          before: t.Optional(t.String({ minLength: 1 })),
           index: t.Optional(t.Number({ minimum: 0 })),
         }),
       },
