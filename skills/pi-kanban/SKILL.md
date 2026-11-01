@@ -109,6 +109,30 @@ review your own work in that mode unless asked.
   card to Done. If a review session failed, a comment says so — add any
   comment to the card to re-arm it.
 
+## Board manager and lane workers
+
+The board chat in the web UI (sidebar → **Board chat**) talks to the **board manager** — a
+resident agent with a board-wide view (lane counts, aging, what's parked, what's next). It
+proposes per-lane sweeps and runs them only when you say go, then relays the workers' summaries.
+
+**Lane workers** are short-lived headless agents, one charter per lane, dispatched from board
+chat or the CLI:
+
+```
+kanban worker run <lane> [--focus <text>] [--author <name>]   # queue a run; drained by serve --agents
+kanban worker ls [--lane <ref>] [--json]                      # runs: id · lane · status · age · summary
+```
+
+- **Backlog** is the only writable charter: groom titles/notes/tags, rank with `mv --next`/`--prev`,
+  ask clarifying questions (`comment --kind question` parks the card), promote at most 3 ready
+  cards to Plan per run. Never deletes; never invents scope.
+- **Waiting / Plan / Test + Implement / Review** workers are report-only: a summary for the
+  manager, nothing written to the cards (the loop owns those threads).
+- Workers read at most 12 cards (`kanban brief`), write at most 10 changes, run under a
+  15-minute timeout, always `--author pi-worker-<lane>`, and **never run `approve`, `reject`,
+  `review`, or `plan-review`** — gates stay human-only. Runs are visible in the web UI's
+  Agents settings ("lane workers") and via `worker ls`.
+
 ## Commands
 
 ```
