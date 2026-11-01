@@ -121,3 +121,60 @@ test("same-lane drops land where the gap shows, not where hidden children shift 
     "drag t4",
   ]);
 });
+
+test("a held cursor near a card's top edge keeps the gap stable (no flicker loop)", async ({ page, request }) => {
+  // The 2px drop-gap shifts the cards below it; a cursor parked just under a
+  // card's top edge lands on the gap it caused. Recomputing from that dragover
+  // flips the hint to "append" and back every event — a flickering line and
+  // 50/50 wrong drops. Such feedback dragovers must keep the previous hint.
+  for (const t of ["drag f1", "drag f2", "drag f3", "drag f4", "drag f5"]) {
+    const res = await request.post("/tasks", { data: { title: t, lane: "backlog" } });
+    ids[t] = (await res.json()).id;
+  }
+  await page.goto("/");
+  await page.waitForSelector("section.lane[aria-label='Backlog'] [data-card]");
+
+  const trace = await page.evaluate(
+    async ([srcId, tgtId]) => {
+      const dt = new DataTransfer();
+      const lane = document.querySelector("section.lane[aria-label='Backlog']")!;
+      const byId = (id: string) => lane.querySelector(`[data-card="${id}"]`) as HTMLElement;
+      byId(srcId).dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      // scroll f4 fully into view first — a card clipped by the lane's scroller
+      // has elementFromPoint hit the container, not the card (append hint)
+      byId(tgtId).scrollIntoView({ block: "center" });
+      await new Promise((res2) => setTimeout(res2, 30));
+      const r = byId(tgtId).getBoundingClientRect();
+      const x = r.left + 10;
+      const y = r.top + 1; // 1px into f4's top edge: upper half → insert before f4
+      const cards = lane.querySelector(".cards")!;
+      // where "insert before f4" renders: f4's own child index (earlier tests'
+      // cards sit above — this file shares the lane)
+      const before4 = [...cards.children].indexOf(byId(tgtId));
+      const gapAt = () => [...cards.children].findIndex((k) => k.classList.contains("drop-gap"));
+      const seq: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        // real dragovers target the element under the cursor, like elementFromPoint
+        document
+          .elementFromPoint(x, y)!
+          .dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, clientY: y, dataTransfer: dt }));
+        await new Promise((res2) => setTimeout(res2, 30)); // let Svelte flush
+        seq.push(gapAt());
+      }
+      document
+        .elementFromPoint(x, y)!
+        .dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, clientY: y, dataTransfer: dt }));
+      await new Promise((res2) => setTimeout(res2, 30));
+      return { seq, before4 };
+    },
+    [ids["drag f3"], ids["drag f4"]],
+  );
+
+  // the gap renders before f4 on EVERY read — no flipping to lane bottom
+  expect(trace.seq).toEqual(Array(6).fill(trace.before4));
+  // and the drop commits the stable hint: f3 stays ahead of f4 instead of
+  // flickering into an append-to-bottom
+  const titles = await backlogTitles(page);
+  expect(titles.indexOf("drag f3")).toBeLessThan(titles.indexOf("drag f4"));
+  expect(titles.indexOf("drag f3")).toBeGreaterThan(-1);
+});

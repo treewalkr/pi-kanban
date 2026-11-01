@@ -32,6 +32,12 @@
    * nested card being dragged inside its own nest anchors to the sibling under
    * the cursor. Empty space below the cards appends (before: undefined). */
   function hintFor(e: DragEvent): { index: number; before?: string } {
+    // A dragover landing on this lane's own drop-gap is feedback, not intent:
+    // inserting the 2px gap shifted the cards under a held cursor. Recomputing
+    // would flip the hint to "append" and flicker (gap → bottom → gap → …).
+    if (board.dropHint?.laneId === lane.id && (e.target as HTMLElement).closest?.(".drop-gap")) {
+      return { index: board.dropHint.index, before: board.dropHint.before };
+    }
     if (!el) return { index: -1 };
     const tops = [...el.querySelectorAll(".cards > [data-card]")] as HTMLElement[];
     const hovered = (e.target as HTMLElement).closest("[data-card]") as HTMLElement | null;
