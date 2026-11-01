@@ -559,26 +559,24 @@ test("search ranks titles, checklists and notes; --project scopes; empty query f
   );
   await cli("add", "unrelated card", "--project", "other", "--note", "- [ ] calibrate the flux");
 
-  const titles = JSON.parse((await cli("search", "flux", "--json")).stdout) as Array<{
-    kind: string;
-    task: Task;
-  }>;
-  expect(titles[0]!.kind).toBe("title");
-  expect(titles[0]!.task.title).toBe("flux capacitor search");
+  const titles = JSON.parse((await cli("search", "flux", "--json")).stdout) as {
+    results: Array<{ kind: string; id: string; title: string }>;
+  };
+  expect(titles.results[0]!.kind).toBe("title");
+  expect(titles.results[0]!.title).toBe("flux capacitor search");
 
   // multi-word positional args join into one query
-  const checklists = JSON.parse((await cli("search", "calibrate", "the", "flux", "--json")).stdout) as Array<{
-    kind: string;
-    task: Task;
-  }>;
-  expect(checklists).toHaveLength(2);
-  expect(checklists.every((r) => r.kind === "checklist")).toBe(true);
+  const checklists = JSON.parse((await cli("search", "calibrate", "the", "flux", "--json")).stdout) as {
+    results: Array<{ kind: string; id: string }>;
+  };
+  expect(checklists.results).toHaveLength(2);
+  expect(checklists.results.every((r) => r.kind === "checklist")).toBe(true);
 
   const scoped = JSON.parse(
     (await cli("search", "calibrate", "--project", "delorean", "--json")).stdout,
-  ) as Array<{ task: Task }>;
-  expect(scoped).toHaveLength(1);
-  expect(scoped[0]!.task.project).toBe("delorean");
+  ) as { results: Array<{ id: string }> };
+  expect(scoped.results).toHaveLength(1);
+  expect(scoped.results[0]!.id).toBeTruthy();
 
   const human = await cli("search", "plutonium");
   expect(human.stdout).toContain("note:");
@@ -1182,10 +1180,12 @@ test("ls --tag filters AND across repeats in text output and --json alike", asyn
   expect(text.stdout).not.toContain(none.title);
   expect(text.stdout).toContain("● Backlog  1");
 
-  const all = await cli("ls");
-  expect(all.stdout).toContain(ui.title);
-  expect(all.stdout).toContain(both.title);
-  expect(all.stdout).toContain(none.title);
+  // full-board --json is uncapped — the caps only trim the human render
+  const all = await cli("ls", "--json");
+  const allTitles = (JSON.parse(all.stdout) as Task[]).map((t) => t.title);
+  expect(allTitles).toContain(ui.title);
+  expect(allTitles).toContain(both.title);
+  expect(allTitles).toContain(none.title);
 
   const json = await cli("ls", "--tag", "ui", "--tag", "review-loop", "--json");
   expect(json.code).toBe(0);
@@ -1237,9 +1237,11 @@ test("search --tag scopes results to tagged cards", async () => {
   expect(scoped.stdout).not.toContain("polish the footer");
 
   const json = await cli("search", "ui", "--tag", "ui", "--json");
-  const results = JSON.parse(json.stdout) as Array<{ task: Task }>;
-  expect(results.length).toBeGreaterThan(0);
-  expect(results.every((r) => r.task.tags.includes("ui"))).toBe(true);
+  const results = JSON.parse(json.stdout) as { results: Array<{ id: string }> };
+  expect(results.results.length).toBeGreaterThan(0);
+  const board = JSON.parse((await cli("ls", "--json")).stdout) as Task[];
+  const byId = new Map(board.map((t) => [t.id, t]));
+  expect(results.results.every((r) => byId.get(r.id)?.tags.includes("ui"))).toBe(true);
 });
 
 test("lane limit sets, shows in lane ls, clears with off", async () => {
@@ -1458,4 +1460,400 @@ test("kanban undo: board-wide, card-scoped, --json, WIP warning, and error exits
   const helpRes = await run("help");
   expect(helpRes.code).toBe(0);
   expect(helpRes.stdout).toContain("kanban undo [id]");
+});
+
+test("claim: set, idempotent re-claim, --force takeover, foreign conflict", async () => {
+  const added = await cli("add", "claim me", "--lane", "implement", "--json");
+  const card = JSON.parse(added.stdout) as Task;
+
+  // claim sets the owner; show prints the owner row
+  const claimed = await cli("claim", card.id, "--author", "ada");
+  expect(claimed.code).toBe(0);
+  expect(claimed.stdout).toContain("claimed by ada");
+  const shown = await cli("show", card.id);
+  expect(shown.stdout).toContain("owner:");
+  expect(shown.stdout).toContain("ada");
+  expect(JSON.parse((await cli("show", card.id, "--json")).stdout).owner).toBe("ada");
+
+  // ls --json carries owner
+  const lsRows = JSON.parse((await cli("ls", "--json")).stdout) as Array<{ id: string; owner: string | null }>;
+  expect(lsRows.find((t) => t.id === card.id)?.owner).toBe("ada");
+
+  // same-author re-claim exits 0
+  expect((await cli("claim", card.id, "--author", "ada")).code).toBe(0);
+
+  // foreign claim exits 1 with the exact conflict message
+  const foreign = await cli("claim", card.id, "--author", "bob");
+  expect(foreign.code).toBe(1);
+  expect(foreign.stderr).toContain(`card '${card.id}' is already owned by 'ada' — pass --force to take it over`);
+
+  // --force takes over
+  const forced = await cli("claim", card.id, "--author", "bob", "--force");
+  expect(forced.code).toBe(0);
+  expect(forced.stdout).toContain("claimed by bob");
+
+  // usage error
+  const noArgs = await cli("claim");
+  expect(noArgs.code).toBe(1);
+  expect(noArgs.stderr).toContain("usage: kanban claim <id> [--author <name>] [--force]");
+});
+
+test("handoff into implement sets owner; exits clear it (CLI)", async () => {
+  const added = await cli("add", "owner flow", "--json");
+  const card = JSON.parse(added.stdout) as Task;
+
+  await cli("handoff", card.id, "implement", "--message", "starting", "--author", "pi");
+  expect(JSON.parse((await cli("show", card.id, "--json")).stdout).owner).toBe("pi");
+
+  await cli("mv", card.id, "review");
+  expect(JSON.parse((await cli("show", card.id, "--json")).stdout).owner).toBeNull();
+
+  // approve arms the builder: owner becomes pi-builder
+  const gate = await cli("add", "gate card", "--lane", "plan", "--json");
+  const gateCard = JSON.parse(gate.stdout) as Task;
+  await cli("attach", gateCard.id, "README.md");
+  const approved = await cli("approve", gateCard.id, "--json");
+  expect(approved.code).toBe(0);
+  expect(JSON.parse((await cli("show", gateCard.id, "--json")).stdout).owner).toBe("pi-builder");
+});
+
+test("overview: lane counts, wip limits, owned cards, and a 2 KB pin on a 300-card board", async () => {
+  const oDb = join(dir, "overview.db");
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: oDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, code };
+  };
+
+  // seed: 300 backlog cards with 4000-char notes, a WIP limit, one owned card
+  {
+    const seed = new KanbanDb(oDb);
+    const note = "secret note text that must never leak into the overview. ".repeat(80);
+    for (let i = 0; i < 300; i++) seed.createTask({ title: `bulk card ${i}`, note });
+    seed.updateLane("implement", { wipLimit: 3 });
+    const owned = seed.createTask({ title: "the owned one", lane: "implement" });
+    seed.claimTask(owned.id, { author: "pi-builder" });
+    seed.close();
+  }
+
+  const human = await run("overview");
+  expect(human.code).toBe(0);
+  expect(Buffer.byteLength(human.stdout)).toBeLessThanOrEqual(2048);
+  expect(human.stdout).toContain("waiting 0 · backlog 300 · plan 0 · implement 1/3 · review 0 · done 0 · archive 0");
+  expect(human.stdout).toContain("owned ");
+  expect(human.stdout).toContain("the owned one → implement · pi-builder");
+  expect(human.stdout).not.toContain("secret note text"); // no note text ever
+
+  const parsed = JSON.parse((await run("overview", "--json")).stdout) as {
+    lanes: Array<{ id: string; name: string; count: number; wipLimit: number | null }>;
+    owned: Array<{ id: string; title: string; laneId: string; owner: string | null; note?: string }>;
+  };
+  expect(parsed.lanes.map((l) => l.id)).toEqual([
+    "waiting",
+    "backlog",
+    "plan",
+    "implement",
+    "review",
+    "done",
+    "archive",
+  ]);
+  expect(parsed.lanes.find((l) => l.id === "implement")).toMatchObject({ count: 1, wipLimit: 3 });
+  expect(parsed.owned).toHaveLength(1);
+  expect(parsed.owned[0]).toMatchObject({ title: "the owned one", laneId: "implement", owner: "pi-builder" });
+  expect(parsed.owned[0].note).toBeUndefined(); // compact rows, never Task bodies
+});
+
+test("reads never write: overview/ls/search leave data_version unchanged", async () => {
+  const rDb = join(dir, "reads.db");
+  {
+    const seed = new KanbanDb(rDb);
+    seed.createTask({ title: "read only card", note: "needle for search" });
+    seed.close();
+  }
+  // Both snapshots are fresh short-lived connections (the plan's "reopen"): a
+  // long-lived witness bumps data_version when another connection merely joins and
+  // leaves the WAL — the file change counter it reads stays put when nothing wrote.
+  const { Database } = await import("bun:sqlite");
+  const dataVersion = () => {
+    const d = new Database(rDb);
+    const v = (d.query("PRAGMA data_version").get() as { data_version: number }).data_version;
+    d.close();
+    return v;
+  };
+  const before = dataVersion();
+
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: rDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await proc.exited;
+  };
+  await run("overview");
+  await run("overview", "--json");
+  await run("ls");
+  await run("ls", "--json");
+  await run("search", "needle");
+  await run("search", "needle", "--json");
+
+  expect(dataVersion()).toBe(before);
+});
+
+test("ls: per-lane caps with overflow; single-lane cap; --owner flat filter", async () => {
+  const lDb = join(dir, "ls-caps.db");
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: lDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    return { stdout, code };
+  };
+
+  // 12 top-level backlog cards: full-board ls caps at 10 with an overflow line
+  {
+    const seed = new KanbanDb(lDb);
+    for (let i = 0; i < 12; i++) seed.createTask({ title: `cap card ${i}`, lane: "backlog" });
+    seed.close();
+  }
+  const boardLs = await run("ls");
+  expect(boardLs.code).toBe(0);
+  const backlogSection = boardLs.stdout.split(/\n● /).find((s) => s.includes("Backlog"))!;
+  const rows = backlogSection.split("\n").filter((l) => l.startsWith("  ") && !l.includes("… +"));
+  expect(rows).toHaveLength(10);
+  expect(boardLs.stdout).toContain("… +2 more — kanban ls backlog --json");
+
+  // single-lane view caps at 50: 55 cards → 50 rows + overflow of 5
+  {
+    const seed = new KanbanDb(lDb);
+    for (let i = 0; i < 55; i++) seed.createTask({ title: `detail card ${i}`, lane: "plan" });
+    seed.close();
+  }
+  const laneLs = await run("ls", "plan");
+  expect(laneLs.code).toBe(0);
+  const laneRows = laneLs.stdout.split("\n").filter((l) => l.startsWith("  ") && !l.includes("… +") && l.trim().length > 0 && !l.includes("●"));
+  expect(laneRows).toHaveLength(50);
+  expect(laneLs.stdout).toContain("… +5 more — kanban ls plan --json");
+
+  // --json is uncapped: 67 total
+  const jsonRows = JSON.parse((await run("ls", "--json")).stdout) as unknown[];
+  expect(jsonRows).toHaveLength(12 + 55);
+
+  // children of shown parents always render (cap counts top-level only)
+  {
+    const seed = new KanbanDb(lDb);
+    const parent = seed.createTask({ title: "capped parent", lane: "review" });
+    seed.createTask({ title: "child a", parent: parent.id });
+    seed.createTask({ title: "child b", parent: parent.id });
+    seed.close();
+  }
+  const nested = await run("ls", "review");
+  expect(nested.stdout).toContain("capped parent");
+  expect(nested.stdout).toContain("child a");
+  expect(nested.stdout).toContain("child b");
+
+  // --owner filter: flat taskLines, no lane groups
+  {
+    const seed = new KanbanDb(lDb);
+    const mine = seed.createTask({ title: "ada's card", lane: "implement" });
+    seed.claimTask(mine.id, { author: "ada" });
+    const other = seed.createTask({ title: "bob's card", lane: "implement" });
+    seed.claimTask(other.id, { author: "bob" });
+    seed.close();
+  }
+  const owned = await run("ls", "--owner", "ada");
+  expect(owned.code).toBe(0);
+  expect(owned.stdout).toContain("ada's card");
+  expect(owned.stdout).not.toContain("bob's card");
+  expect(owned.stdout).not.toContain("●"); // no lane group headers
+  const ownedJson = JSON.parse((await run("ls", "--owner", "ada", "--json")).stdout) as Array<{ title: string }>;
+  expect(ownedJson).toHaveLength(1);
+  expect(ownedJson[0]!.title).toBe("ada's card");
+});
+
+test("search: --limit default and 50 cap, compact rows, matched/hasMore/hint", async () => {
+  const sDb = join(dir, "search-limit.db");
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: sDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, code };
+  };
+
+  {
+    const seed = new KanbanDb(sDb);
+    for (let i = 0; i < 30; i++) {
+      seed.createTask({ title: `bulk searchable ${i}`, note: `filler ${i} `.repeat(40) });
+    }
+    const check = seed.createTask({ title: "checklist source", note: "- [x] bulk searchable checkbox" });
+    void check;
+    seed.close();
+  }
+
+  // default 20 rows; matched 31; hasMore + hint on both surfaces
+  const def = JSON.parse((await run("search", "bulk", "--json")).stdout) as {
+    results: Array<{ id: string; title: string; laneId: string; kind: string; text: string; note?: string; checked?: boolean }>;
+    matched: number;
+    hasMore: boolean;
+    hint?: string;
+  };
+  expect(def.results).toHaveLength(20);
+  expect(def.matched).toBe(31);
+  expect(def.hasMore).toBe(true);
+  expect(def.hint).toBe("…+11 more matches — narrow the query, or pass --limit up to 50");
+  const row = def.results[0]!;
+  expect(Object.keys(row).sort()).toEqual(["id", "kind", "laneId", "text", "title"]);
+  expect(row.note).toBeUndefined(); // compact rows, never Task bodies
+  // checklist rows keep their checked flag (rank below titles, so raise the limit)
+  const deep = JSON.parse((await run("search", "bulk", "--limit", "50", "--json")).stdout) as {
+    results: Array<{ kind: string; checked?: boolean }>;
+  };
+  const checkRow = deep.results.find((r) => r.kind === "checklist");
+  expect(checkRow?.checked).toBe(true);
+
+  // human: rows + dim tail with the same string
+  const human = await run("search", "bulk");
+  expect(human.code).toBe(0);
+  expect(human.stdout).toContain("…+11 more matches — narrow the query, or pass --limit up to 50");
+
+  // --limit raises the transport budget up to the hard cap
+  const raised = JSON.parse((await run("search", "bulk", "--limit", "31", "--json")).stdout) as {
+    results: unknown[];
+    matched: number;
+    hasMore: boolean;
+    hint?: string;
+  };
+  expect(raised.results).toHaveLength(31);
+  expect(raised.hasMore).toBe(false);
+  expect(raised.hint).toBeUndefined();
+
+  const capped = JSON.parse((await run("search", "bulk", "--limit", "50", "--json")).stdout) as { results: unknown[] };
+  expect(capped.results).toHaveLength(31);
+
+  // out-of-range and non-numeric limits exit 1 with the exact message
+  for (const bad of ["0", "51", "abc", "-3"]) {
+    const badRes = await run("search", "bulk", "--limit", bad);
+    expect(badRes.code).toBe(1);
+    expect(badRes.stderr).toContain("--limit must be between 1 and 50");
+  }
+
+  // usage error mentions --limit
+  const empty = await run("search");
+  expect(empty.code).toBe(1);
+  expect(empty.stderr).toContain("usage: kanban search <query…> [--project <tag>] [--tag <tag>]… [--limit <n>] [--json]");
+});
+
+test("mv --before: cross-lane anchor, same-lane reorder, --pos conflict", async () => {
+  const mDb = join(dir, "mv-before.db");
+  const run = async (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: mDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, code };
+  };
+  // human ls renders lane position order (ls --json is creation order)
+  const order = async (lane: string) => {
+    const out = await run("ls", lane);
+    return out.stdout
+      .split("\n")
+      .filter((l) => /^  \S/.test(l))
+      .map((l) => l.trim().split(/\s+/).slice(1).join(" "));
+  };
+
+  let ids: Record<string, string> = {};
+  {
+    const seed = new KanbanDb(mDb);
+    for (const title of ["alpha", "beta", "gamma"]) {
+      ids[title] = seed.createTask({ title, lane: "backlog" }).id;
+    }
+    ids.delta = seed.createTask({ title: "delta", lane: "plan" }).id;
+    seed.close();
+  }
+
+  // cross-lane anchor: mv gamma plan --before delta → plan: gamma, delta
+  const cross = await run("mv", ids.gamma!, "plan", "--before", ids.delta!);
+  expect(cross.code).toBe(0);
+  expect(await order("plan")).toEqual(["gamma", "delta"]);
+
+  // same-lane reorder: mv gamma backlog --before alpha → backlog: gamma, alpha, beta
+  const same = await run("mv", ids.gamma!, "backlog", "--before", ids.alpha!);
+  expect(same.code).toBe(0);
+  expect(await order("backlog")).toEqual(["gamma", "alpha", "beta"]);
+
+  // bare form: mv gamma --before beta (no lane) reorders within the current lane
+  const bare = await run("mv", ids.gamma!, "--before", ids.beta!);
+  expect(bare.code).toBe(0);
+  expect(await order("backlog")).toEqual(["alpha", "gamma", "beta"]);
+
+  // --pos and --before together exit 1
+  const combined = await run("mv", ids.alpha!, "backlog", "--pos", "2", "--before", ids.beta!);
+  expect(combined.code).toBe(1);
+  expect(combined.stderr).toContain("cannot combine --pos and --before");
+
+  // --next/--prev with --before exits 1
+  const rel = await run("mv", ids.alpha!, "--next", "--before", ids.beta!);
+  expect(rel.code).toBe(1);
+  expect(rel.stderr).toContain("cannot combine --next/--prev with --before");
+
+  // self anchor exits 1 with the exact message
+  const self = await run("mv", ids.alpha!, "--before", ids.alpha!);
+  expect(self.code).toBe(1);
+  expect(self.stderr).toContain("cannot move a card before itself");
+
+  // anchor outside the target lane exits 1
+  const wrong = await run("mv", ids.alpha!, "review", "--before", ids.beta!);
+  expect(wrong.code).toBe(1);
+  expect(wrong.stderr).toContain(`anchor card '${ids.beta}' is not in lane 'review'`);
+
+  // help carries the flag
+  expect((await run("help")).stdout).toContain("--before <id>");
+});
+
+test("docs: HELP, SKILL.md, AGENTS.md, GLOSSARY.md carry overview/claim/--before/--limit/notice", async () => {
+  const help = (await cli("help")).stdout;
+  for (const needle of ["overview", "claim", "--before", "--limit"]) {
+    expect(help).toContain(needle);
+  }
+
+  const skillMd = readFileSync(join(root, "skills/pi-kanban/SKILL.md"), "utf8");
+  for (const needle of ["overview", "claim", "--before", "--limit", "notice"]) {
+    expect(skillMd).toContain(needle);
+  }
+
+  const agentsMd = readFileSync(join(root, "AGENTS.md"), "utf8");
+  expect(agentsMd).toContain("src/notice.ts");
+
+  const glossary = readFileSync(join(root, "GLOSSARY.md"), "utf8");
+  for (const term of ["**Owner**", "**Overview**", "**Notice**"]) {
+    expect(glossary).toContain(term);
+  }
 });

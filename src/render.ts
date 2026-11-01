@@ -48,10 +48,17 @@ function truncate(s: string, max: number): string {
   return lines.length > max ? `${lines.slice(0, max - 1)}…` : lines;
 }
 
-/** Board overview: every lane (or one) with its tasks; project and tags narrow the listing. */
+/** Per-lane render caps for `ls`: token-budget guards, never data loss (`ls --json` is uncapped). */
+export const LS_LANE_CAP = 10;
+export const LS_LANE_DETAIL_CAP = 50;
+
+/** Board overview: every lane (or one) with its tasks; project and tags narrow the listing.
+ *  Top-level card rows cap per lane (children of shown parents always render); the overflow
+ *  line points at the uncapped `ls <lane> --json` read. */
 export function listLanes(db: KanbanDb, laneRef?: string, project?: string, tags?: string[]): string {
   const all = db.lanes();
   const lanes = laneRef ? [db.resolveLane(laneRef)] : all;
+  const cap = laneRef ? LS_LANE_DETAIL_CAP : LS_LANE_CAP;
   const width = process.stdout.columns ?? 80;
   const out: string[] = [];
   lanes.forEach((lane) => {
@@ -79,11 +86,33 @@ export function listLanes(db: KanbanDb, laneRef?: string, project?: string, tags
           if (visible.has(child.id)) emit(child, depth + 1);
         }
       };
-      tasks.filter((t) => !(t.parentId && visible.has(t.parentId))).forEach((t) => emit(t, 0));
+      // the cap counts top-level cards before nesting; children of shown parents always render
+      const topLevel = tasks.filter((t) => !(t.parentId && visible.has(t.parentId)));
+      topLevel.slice(0, cap).forEach((t) => emit(t, 0));
+      const overflow = topLevel.length - Math.min(cap, topLevel.length);
+      if (overflow > 0) {
+        out.push(c.dim(`  … +${overflow} more — kanban ls ${lane.id} --json`));
+      }
     }
     out.push("");
   });
   return out.join("\n");
+}
+
+/** The overview counts line: `waiting 1 · backlog 14 · … · implement 1/3 · …` —
+ *  lane ids in board order, `count/limit` only when a WIP limit is set. */
+export function overviewLine(db: KanbanDb): string {
+  return db
+    .overview()
+    .lanes.map((l) => (l.wipLimit !== null ? `${l.id} ${l.count}/${l.wipLimit}` : `${l.id} ${l.count}`))
+    .join(" · ");
+}
+
+/** One line per owned card: `owned <id>  <title> → <laneId> · <owner>`. */
+export function ownedLines(db: KanbanDb): string[] {
+  return db
+    .overview()
+    .owned.map((t) => `owned ${c.dim(t.id)}  ${truncate(t.title, 60)} → ${t.laneId} · ${t.owner}`);
 }
 
 /** Compact single-line summary of a task, e.g. after add/mv/edit. */
@@ -248,6 +277,11 @@ export function taskDetail(db: KanbanDb, task: Task): string {
   }
   out.push(
     `${c.dim("workspace:")} ${task.workspace ?? c.dim("—")}`,
+  );
+  if (task.owner) {
+    out.push(`${c.dim("owner:")}     ${task.owner}`);
+  }
+  out.push(
     `${c.dim("created:")} ${new Date(task.createdAt).toLocaleString()}`,
     `${c.dim("updated:")} ${new Date(task.updatedAt).toLocaleString()}`,
   );

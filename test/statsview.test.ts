@@ -11,6 +11,7 @@ function task(partial: Partial<Task> & { id: string; title: string }): Task {
     parentId: null,
     previousLane: null,
     workspace: null,
+    owner: null,
     priority: "normal",
     position: 100,
     createdAt: 1,

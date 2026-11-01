@@ -2,9 +2,9 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
-import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
+import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, ownedLines, overviewLine, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
 import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
-import { searchBoard } from "./search";
+import { searchBoard, HARD_RESULT_LIMIT, MAX_RESULTS } from "./search";
 import { cardFileDiff } from "./diff";
 
 const VERSION = "0.6.0";
@@ -14,9 +14,9 @@ const HELP = `kanban ${VERSION} — task board for the pi agent
 usage:
   kanban add <title…> [--note <text>] [--lane <ref>] [--project <tag>] [--tag <tag>]… [--parent <id>]
                       [--priority <high|normal|low>] [--blocked-by <id>]… [--top] [--elaborate]
-  kanban ls [lane] [--project <tag>] [--tag <tag>]… [--json]
+  kanban ls [lane] [--project <tag>] [--tag <tag>]… [--owner <name>] [--json]
   kanban next [--project <tag>] [--json]  (what's next: lane priority, then card priority, then oldest; skips blocked)
-  kanban search <query…> [--project <tag>] [--tag <tag>]… [--json]
+  kanban search <query…> [--project <tag>] [--tag <tag>]… [--limit <n>] [--json]   (default 20 rows, --limit up to 50)
   kanban show <id>
   kanban link <id> <other>                (relate two cards; visible from both)
   kanban unlink <id> <other>
@@ -35,8 +35,11 @@ usage:
   kanban approve <id>                       (plan gate: approve the attached plan → Implement)
   kanban reject <id> --message <feedback>   (plan gate: reject with feedback; planner re-plans)
   kanban plan-review <id> (--pass | --block --message <text> [--finding <text>]…)  (plan reviewer's verdict; --pass parks the card in "Waiting on you")
+  kanban claim <id> [--author <name>] [--force]  (record who's building it; --force takes over)
+  kanban overview [--json]                  (board shape: lane counts, WIP limits, owned cards)
   kanban brief <id>                         (pickup context: note, plan, thread)
-  kanban mv <id> <lane> [--pos <1-based>]     kanban mv <id> --next | --prev
+  kanban mv <id> <lane> [--pos <1-based> | --before <id>]   kanban mv <id> --next | --prev
+                          (--before <anchorId> places the card directly before the anchor)
   kanban edit <id> [--title <t>] [--note <text>] [--project <tag>] [--tag <tag>]… [--lane <ref>]
                           [--parent <id>] [--priority <high|normal|low>] [--blocked-by <id>…]
                           [--clear-note] [--clear-parent] [--clear-blocked-by] [--clear-tags]
@@ -72,7 +75,7 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit"]);
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner"]);
 const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
@@ -286,16 +289,34 @@ async function main(): Promise<number> {
         const laneRef = positional[0];
         if (laneRef) db.resolveLane(laneRef); // validate before filtering
         const tagFilter = arr(flags, "tag");
+        const ownerFilter = str(flags, "owner");
         const tasks = db
           .tasks()
           .filter((t) => (laneRef ? t.laneId === db.resolveLane(laneRef).id : true))
           .filter((t) => (project ? t.project === project : true))
-          .filter((t) => (tagFilter.length > 0 ? tagFilter.every((tag) => t.tags.includes(tag)) : true));
+          .filter((t) => (tagFilter.length > 0 ? tagFilter.every((tag) => t.tags.includes(tag)) : true))
+          .filter((t) => (ownerFilter ? t.owner === ownerFilter : true));
         if (json) {
           const map = db.blockedByMap();
           jsonOut(tasks.map((t) => ({ ...t, blockedBy: map[t.id] ?? [] })));
+        } else if (ownerFilter) {
+          for (const t of tasks) out(taskLine(db, t)); // flat: one line per owned card
         } else {
           out(listLanes(db, laneRef, project, tagFilter));
+        }
+        return 0;
+      }
+
+      case "overview": {
+        if (json) {
+          const o = db.overview();
+          jsonOut({
+            lanes: o.lanes,
+            owned: o.owned.map((t) => ({ id: t.id, title: t.title, laneId: t.laneId, owner: t.owner })),
+          });
+        } else {
+          out(overviewLine(db));
+          for (const line of ownedLines(db)) out(line);
         }
         return 0;
       }
@@ -325,9 +346,18 @@ async function main(): Promise<number> {
 
       case "search": {
         const query = positional.join(" ").trim();
-        if (!query) throw new KanbanError("usage: kanban search <query…> [--project <tag>] [--tag <tag>]…", "invalid");
+        if (!query)
+          throw new KanbanError("usage: kanban search <query…> [--project <tag>] [--tag <tag>]… [--limit <n>] [--json]", "invalid");
         const tagFilter = arr(flags, "tag");
-        const results = searchBoard(
+        const rawLimit = str(flags, "limit");
+        let limit = MAX_RESULTS;
+        if (rawLimit !== undefined) {
+          if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > HARD_RESULT_LIMIT) {
+            throw new KanbanError("--limit must be between 1 and 50", "invalid");
+          }
+          limit = Number(rawLimit);
+        }
+        const all = searchBoard(
           db
             .tasks()
             .filter((t) => (project ? t.project === project : true))
@@ -335,8 +365,42 @@ async function main(): Promise<number> {
           query,
           db.latestPlans(),
         );
-        if (json) jsonOut(results);
-        else out(searchResults(db, query, results));
+        const results = all.slice(0, limit);
+        const hidden = all.length - results.length;
+        if (json) {
+          jsonOut({
+            results: results.map((r) => ({
+              id: r.task.id,
+              title: r.task.title,
+              laneId: r.task.laneId,
+              kind: r.kind,
+              text: r.text,
+              ...(r.checked !== undefined ? { checked: r.checked } : {}),
+            })),
+            matched: all.length,
+            hasMore: hidden > 0,
+            ...(hidden > 0
+              ? { hint: `…+${hidden} more matches — narrow the query, or pass --limit up to ${HARD_RESULT_LIMIT}` }
+              : {}),
+          });
+        } else {
+          out(searchResults(db, query, results));
+          if (hidden > 0) {
+            out(c.dim(`…+${hidden} more matches — narrow the query, or pass --limit up to ${HARD_RESULT_LIMIT}`));
+          }
+        }
+        return 0;
+      }
+
+      case "claim": {
+        const idRef = positional[0];
+        if (!idRef) throw new KanbanError("usage: kanban claim <id> [--author <name>] [--force]", "invalid");
+        const task = db.claimTask(idRef, { author: str(flags, "author"), force: !!flags.force });
+        if (json) jsonOut(task);
+        else {
+          out(taskLine(db, task));
+          out(c.dim(`claimed by ${task.owner}`));
+        }
         return 0;
       }
 
@@ -717,12 +781,19 @@ async function main(): Promise<number> {
 
       case "mv": {
         const task = db.resolveTask(positional[0] ?? "");
+        const beforeRef = str(flags, "before");
+        const pos = str(flags, "pos");
+        if (pos && beforeRef) throw new KanbanError("cannot combine --pos and --before", "invalid");
+        if (beforeRef && (flags.next || flags.prev))
+          throw new KanbanError("cannot combine --next/--prev with --before", "invalid");
         let laneRef = positional[1];
         if (flags.next) laneRef = stepLane(db, task, 1);
         else if (flags.prev) laneRef = stepLane(db, task, -1);
-        if (!laneRef) throw new KanbanError("usage: kanban mv <id> <lane | --next | --prev>", "invalid");
-        const pos = str(flags, "pos");
-        const moved = db.moveTask(task.id, laneRef, pos ? Number(pos) - 1 : undefined);
+        if (!laneRef && !beforeRef)
+          throw new KanbanError("usage: kanban mv <id> <lane | --next | --prev> [--pos <1-based> | --before <id>]", "invalid");
+        const moved = beforeRef
+          ? db.moveTaskBefore(task.id, laneRef, beforeRef)
+          : db.moveTask(task.id, laneRef!, pos ? Number(pos) - 1 : undefined);
         if (json) jsonOut(moved);
         else {
           out(taskLine(db, moved));

@@ -1176,3 +1176,84 @@ test("POST /tasks accepts tags; PATCH /tasks/:id replaces or clears; bad shape 4
     code: "invalid",
   });
 });
+
+test("PATCH /tasks/:id owner roundtrip; /board carries it", async () => {
+  const app = createApp(db);
+  const task = db.createTask({ title: "api owner", lane: "implement" });
+
+  const patch = async (body: Record<string, unknown>) =>
+    app.handle(
+      new Request(`http://localhost/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  const set = await patch({ owner: "ada" });
+  expect(set.status).toBe(200);
+  expect(((await set.json()) as { owner: string | null }).owner).toBe("ada");
+
+  // empty string fails validation (minLength 1)
+  expect((await patch({ owner: "" })).status).toBe(422);
+
+  // moving out of implement via PATCH clears it
+  const moved = await patch({ lane: "review", owner: "bob" });
+  expect(moved.status).toBe(200);
+  expect(((await moved.json()) as { owner: string | null }).owner).toBeNull();
+
+  // null clears explicitly
+  await patch({ owner: "ada" });
+  const cleared = await patch({ owner: null });
+  expect(cleared.status).toBe(200);
+  expect(((await cleared.json()) as { owner: string | null }).owner).toBeNull();
+
+  // /board carries owner
+  db.updateTask(task.id, { owner: "ada" });
+  const board = (await (await app.handle(new Request("http://localhost/board"))).json()) as {
+    tasks: Array<{ id: string; owner: string | null }>;
+  };
+  expect(board.tasks.find((t) => t.id === task.id)?.owner).toBe("ada");
+});
+
+test("PATCH /tasks/:id before anchors the move; bad anchor 409s", async () => {
+  const app = createApp(db);
+  const a = db.createTask({ title: "alpha", lane: "backlog" });
+  const b = db.createTask({ title: "beta", lane: "backlog" });
+  const c = db.createTask({ title: "gamma", lane: "backlog" });
+  const p = db.createTask({ title: "plan anchor", lane: "plan" });
+
+  const patch = (id: string, body: Record<string, unknown>) =>
+    app.handle(
+      new Request(`http://localhost/tasks/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  // c before a within the lane
+  const moved = await patch(c.id, { before: a.id });
+  expect(moved.status).toBe(200);
+  expect(db.laneTasks("backlog").map((t) => t.id)).toEqual([c.id, a.id, b.id]);
+
+  // cross-lane anchor: b into plan before p
+  const cross = await patch(b.id, { lane: "plan", before: p.id });
+  expect(cross.status).toBe(200);
+  expect(db.laneTasks("plan").map((t) => t.id)).toEqual([b.id, p.id]);
+
+  // anchor in the wrong lane → 409 conflict
+  const wrongLane = await patch(a.id, { lane: "plan", before: c.id });
+  expect(wrongLane.status).toBe(409);
+  expect(((await wrongLane.json()) as { error?: string }).error ?? "").toContain(
+    `anchor card '${c.id}' is not in lane 'plan'`,
+  );
+
+  // unknown anchor → 404
+  const unknown = await patch(a.id, { before: "zzzzz" });
+  expect(unknown.status).toBe(404);
+
+  // self anchor → 400 invalid
+  const self = await patch(a.id, { before: a.id });
+  expect(self.status).toBe(400);
+});

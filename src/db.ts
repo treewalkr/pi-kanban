@@ -38,6 +38,7 @@ export interface Task {
   parentId: string | null;
   previousLane: string | null;
   workspace: string | null;
+  owner: string | null;
   priority: Priority;
   position: number;
   createdAt: number;
@@ -260,8 +261,10 @@ export interface TaskPatch {
   lane?: string; // lane ref: id, id prefix, name prefix, or 1-based ordinal
   parent?: string | null; // task ref to attach under; null detaches
   workspace?: string | null;
+  owner?: string | null; // actor responsible for the card; null clears
   priority?: Priority;
   blockedBy?: string[];
+  before?: string; // anchor task ref: insert directly before this card
   index?: number; // 0-based position within the target lane; omit to append
 }
 
@@ -286,6 +289,10 @@ export class KanbanError extends Error {
 const GAP = 100;
 const MIN_GAP = 0.01;
 
+/** The auto-loop's builder author — also the owner `kanban approve` assigns. Lives here
+ *  (not autoreview.ts) so the ownership rules in this file can reference it. */
+export const BUILDER_AUTHOR = "pi-builder";
+
 const COMMENT_KINDS: ReadonlySet<string> = new Set(["comment", "review", "handoff", "approval", "rejection", "question"]);
 const AGENT_ROLES: ReadonlySet<string> = new Set(["reviewer", "builder", "planner", "plan-reviewer", "elaborator"]);
 
@@ -307,6 +314,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   parent_id TEXT REFERENCES tasks (id),
   previous_lane TEXT,
   workspace TEXT,
+  owner TEXT,
   tags TEXT NOT NULL DEFAULT '[]',
   priority TEXT NOT NULL DEFAULT 'normal',
   position REAL NOT NULL,
@@ -486,6 +494,7 @@ interface TaskRow {
   parent_id: string | null;
   previous_lane: string | null;
   workspace: string | null;
+  owner: string | null;
   priority: string;
   position: number;
   created_at: number;
@@ -563,6 +572,7 @@ const rowToTask = (r: TaskRow): Task => ({
   parentId: r.parent_id,
   previousLane: r.previous_lane ?? null,
   workspace: r.workspace ?? null,
+  owner: r.owner ?? null,
   priority: (r.priority ?? "normal") as Priority,
   position: r.position,
   createdAt: r.created_at,
@@ -768,14 +778,29 @@ export class KanbanDb {
     this.migratePriorityColumn();
     this.migratePreviousLaneColumn();
     this.migrateWorkspaceColumn();
+    this.migrateOwnerColumn();
     this.migrateTagsColumn();
     this.migrateWipLimitColumn();
-    this.db.exec(SCHEMA);
+    if (!this.schemaIsCurrent()) this.db.exec(SCHEMA); // fresh/old boards only — see below
     this.seedLanes();
     this.ensureWaitingLane();
     this.ensureArchiveLane();
     this.migratePlansTable();
     this.backfillLaneEvents();
+  }
+
+  /** True when every object SCHEMA creates already exists. Even a fully no-op
+   *  exec(SCHEMA) opens a write transaction, which would make every CLI read bump
+   *  the DB change counter — breaking "reads never write" (lesson #6). Names are
+   *  parsed from SCHEMA itself, so the check can never drift from the DDL. */
+  private schemaIsCurrent(): boolean {
+    const names = [...SCHEMA.matchAll(/CREATE (?:TABLE|UNIQUE INDEX|INDEX) IF NOT EXISTS (\w+)/g)].map((m) => m[1]!);
+    if (names.length === 0) return false;
+    const rows = this.q(`SELECT name FROM sqlite_master WHERE name IN (${names.map(() => "?").join(",")})`).all(
+      ...names,
+    ) as Array<{ name: string }>;
+    const present = new Set(rows.map((r) => r.name));
+    return names.every((n) => present.has(n));
   }
 
   private watchers = new Set<() => void>();
@@ -884,6 +909,16 @@ export class KanbanDb {
       this.db.exec("ALTER TABLE tasks ADD COLUMN workspace TEXT");
   }
 
+  /** Boards created before owner existed need the column added once (nullable, no backfill:
+   *  existing cards read unowned, which is truthful). */
+  private migrateOwnerColumn(): void {
+    const table = this.q("SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'").get();
+    if (!table) return; // fresh db: SCHEMA creates the table with the column
+    const cols = this.q("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    if (!cols.some((col) => col.name === "owner"))
+      this.db.exec("ALTER TABLE tasks ADD COLUMN owner TEXT");
+  }
+
   /** Boards created before tags existed need the column added once; the ALTER's
    * DEFAULT backfills '[]' on existing rows (migratePriorityColumn pattern). */
   private migrateTagsColumn(): void {
@@ -922,7 +957,10 @@ export class KanbanDb {
   private ensureWaitingLane(): void {
     const row = this.q("SELECT COUNT(*) AS n FROM lanes WHERE id = 'waiting'").get() as { n: number };
     if (row.n > 0) {
-      this.q("UPDATE lanes SET fixed = 1 WHERE id = 'waiting'").run();
+      // Repair only when needed: running the UPDATE unconditionally would make every CLI
+      // open — including pure reads like overview/ls/search — commit a write (lesson #6).
+      const lane = this.q("SELECT fixed FROM lanes WHERE id = 'waiting'").get() as { fixed: number };
+      if (lane.fixed !== 1) this.q("UPDATE lanes SET fixed = 1 WHERE id = 'waiting'").run();
       return;
     }
     const first = this.q("SELECT MIN(position) AS p FROM lanes").get() as { p: number | null };
@@ -1143,6 +1181,22 @@ export class KanbanDb {
     return row.n;
   }
 
+  /** The cheap one-read board shape: every lane with its count and WIP limit, plus the
+   *  owned cards (lane order, then position). Never card bodies — that is what brief is for. */
+  overview(): { lanes: Array<{ id: string; name: string; count: number; wipLimit: number | null }>; owned: Task[] } {
+    const lanes = this.lanes();
+    const laneOrder = new Map(lanes.map((l, i) => [l.id, i]));
+    const owned = this.tasks()
+      .filter((t) => t.owner !== null)
+      .sort(
+        (a, b) => (laneOrder.get(a.laneId) ?? 0) - (laneOrder.get(b.laneId) ?? 0) || a.position - b.position,
+      );
+    return {
+      lanes: lanes.map((l) => ({ id: l.id, name: l.name, count: this.taskCount(l.id), wipLimit: l.wipLimit })),
+      owned,
+    };
+  }
+
   childrenOf(taskId: string): Task[] {
     return (
       this.q("SELECT * FROM tasks WHERE parent_id = ? ORDER BY position, created_at").all(taskId) as TaskRow[]
@@ -1237,8 +1291,23 @@ export class KanbanDb {
   updateTask(prefix: string, patch: TaskPatch, meta?: { cause?: LaneEventCause; actor?: string }): Task {
     const task = this.resolveTask(prefix);
     const laneId = patch.lane ? this.resolveLane(patch.lane).id : task.laneId;
+    // Anchor placement: --before resolves to the anchor's index among the target lane's
+    // other cards, so insertPosition lands the card strictly between the anchor's
+    // predecessor and the anchor — concurrent-safe, unlike a numeric index.
+    let beforeIndex: number | undefined;
+    if (patch.before !== undefined) {
+      const anchor = this.resolveTask(patch.before);
+      if (anchor.id === task.id) throw new KanbanError("cannot move a card before itself", "invalid");
+      if (anchor.laneId !== laneId) {
+        throw new KanbanError(`anchor card '${anchor.id}' is not in lane '${laneId}'`, "conflict");
+      }
+      beforeIndex = this.laneTasks(laneId).filter((t) => t.id !== task.id).findIndex((t) => t.id === anchor.id);
+    }
     const hasIndex = patch.index !== undefined;
-    const position = patch.lane || hasIndex ? this.insertPosition(laneId, patch.index, task.id) : task.position;
+    const position =
+      patch.lane || hasIndex || beforeIndex !== undefined
+        ? this.insertPosition(laneId, beforeIndex ?? patch.index, task.id)
+        : task.position;
     const parentId =
       patch.parent === undefined ? task.parentId : (this.resolveParent(task.id, patch.parent)?.id ?? null);
 
@@ -1253,6 +1322,21 @@ export class KanbanDb {
     const priority = patch.priority ?? task.priority;
 
     const previousLane = laneId === WAITING_LANE_ID ? task.previousLane : null;
+
+    // Ownership: explicit patch wins (string trims, null clears); any lane change out of
+    // Test + Implement clears it regardless of the patch, so owner ≠ null ⟺ someone is
+    // building it (parking in waiting, mv to review, done, archive — every exit).
+    let owner = task.owner;
+    if (patch.owner !== undefined) {
+      if (patch.owner === null) {
+        owner = null;
+      } else {
+        const trimmed = patch.owner.trim();
+        if (!trimmed) throw new KanbanError("owner must not be empty", "invalid");
+        owner = trimmed;
+      }
+    }
+    if (laneId !== task.laneId && laneId !== "implement") owner = null;
 
     let workspace = task.workspace;
     if (patch.workspace !== undefined) {
@@ -1270,7 +1354,7 @@ export class KanbanDb {
     const now = Date.now();
     this.q(
       `UPDATE tasks SET
-        title = ?, note = ?, lane_id = ?, project = ?, tags = ?, parent_id = ?, previous_lane = ?, workspace = ?, priority = ?, position = ?, updated_at = ?
+        title = ?, note = ?, lane_id = ?, project = ?, tags = ?, parent_id = ?, previous_lane = ?, workspace = ?, owner = ?, priority = ?, position = ?, updated_at = ?
       WHERE id = ?`,
     ).run(
       title ?? task.title,
@@ -1281,6 +1365,7 @@ export class KanbanDb {
       parentId,
       previousLane,
       workspace,
+      owner,
       priority,
       position,
       now,
@@ -1297,7 +1382,44 @@ export class KanbanDb {
   }
 
   moveTask(prefix: string, laneRef: string, index?: number, meta?: { cause?: LaneEventCause; actor?: string }): Task {
+    // Same-lane move with no ordering intent is a free no-op: no write, no updated_at
+    // bump, no lane event, no re-append (pi-web lesson #4 — no-op writes don't move anything).
+    const task = this.resolveTask(prefix);
+    if (index === undefined && this.resolveLane(laneRef).id === task.laneId) return task;
     return this.updateTask(prefix, { lane: laneRef, index }, { cause: "mv", ...meta });
+  }
+
+  /** Anchor move: place the card directly before `beforeRef` (unique prefix ok), in
+   *  `laneRef` when given, else the card's current lane. Survives concurrent edits
+   *  where an index would drift (pi-web lesson #5). */
+  moveTaskBefore(
+    taskRef: string,
+    laneRef: string | undefined,
+    beforeRef: string,
+    meta?: { cause?: LaneEventCause; actor?: string },
+  ): Task {
+    const task = this.resolveTask(taskRef);
+    const anchor = this.resolveTask(beforeRef);
+    if (anchor.id === task.id) throw new KanbanError("cannot move a card before itself", "invalid");
+    const targetLaneId = laneRef !== undefined ? this.resolveLane(laneRef).id : task.laneId;
+    if (anchor.laneId !== targetLaneId) {
+      throw new KanbanError(`anchor card '${anchor.id}' is not in lane '${targetLaneId}'`, "conflict");
+    }
+    return this.updateTask(task.id, { lane: targetLaneId, before: anchor.id }, { cause: "mv", ...meta });
+  }
+
+  /** Set the card's owner (the actor currently responsible). Idempotent for the same
+   *  author; a foreign owner needs force. Ownership is advisory — no lane rules here. */
+  claimTask(taskRef: string, input: { author?: string; force?: boolean } = {}): Task {
+    const task = this.resolveTask(taskRef);
+    const author = input.author?.trim() || "user";
+    if (task.owner && task.owner !== author && !input.force) {
+      throw new KanbanError(
+        `card '${task.id}' is already owned by '${task.owner}' — pass --force to take it over`,
+        "conflict",
+      );
+    }
+    return this.updateTask(task.id, { owner: author });
   }
 
   /**
@@ -2179,9 +2301,15 @@ export class KanbanDb {
     const findings = (input.findings ?? []).map((f) => f.trim()).filter(Boolean);
     return this.tx((): { task: Task; comment: Comment } => {
       const note = findings.length > 0 ? `${task.note}\n${findings.map((f) => `- [ ] ${f}`).join("\n")}` : undefined;
+      // Entering Test + Implement assigns ownership to the handing-off actor.
+      const entersImplement = this.resolveLane(laneRef).id === "implement";
       const moved = this.updateTask(
         task.id,
-        { ...(note !== undefined ? { note } : {}), lane: laneRef },
+        {
+          ...(note !== undefined ? { note } : {}),
+          lane: laneRef,
+          ...(entersImplement ? { owner: input.author?.trim() || "user" } : {}),
+        },
         { cause: input.kind === "review" ? "review" : "handoff", actor: input.author?.trim() || "user" },
       );
       const comment = this.createComment(task.id, { author: input.author, kind, body: input.message });
@@ -2205,7 +2333,7 @@ export class KanbanDb {
     return this.tx((): { task: Task; comment: Comment } => {
       const task2 = this.updateTask(
         task.id,
-        { lane: "implement" },
+        { lane: "implement", owner: BUILDER_AUTHOR },
         { cause: "approve", actor: input.author?.trim() || "user" },
       );
       const comment = this.createComment(task.id, {

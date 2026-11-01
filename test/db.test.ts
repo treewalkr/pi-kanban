@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { DEFAULT_LANES, PLAN_REVIEWER_AUTHOR, KanbanDb, KanbanError } from "../src/db";
+import { DEFAULT_LANES, PLAN_REVIEWER_AUTHOR, BUILDER_AUTHOR, KanbanDb, KanbanError } from "../src/db";
 
 let dir = "";
 let db: KanbanDb;
@@ -1716,4 +1716,135 @@ test("undoTask refuses when only creation/backfill events exist, when from-lane 
 
   // Unknown task ref throws
   expect(() => db.undoTask("zzzz")).toThrow(new KanbanError("no task matching 'zzzz'", "not-found"));
+});
+
+test("ownership: handoff and approve set it, every exit from implement clears it", () => {
+  const card = db.createTask({ title: "owned card" });
+
+  // handoff into implement sets owner to the author (default "user")
+  db.handoff(card.id, "implement", { message: "building" });
+  expect(db.resolveTask(card.id).owner).toBe("user");
+  db.handoff(card.id, "implement", { message: "building", author: "pi" });
+  expect(db.resolveTask(card.id).owner).toBe("pi");
+
+  // same-lane reorder keeps the owner
+  const sibling = db.createTask({ title: "sibling", lane: "implement" });
+  db.moveTask(card.id, "implement", 0);
+  expect(db.resolveTask(card.id).owner).toBe("pi");
+  expect(db.resolveTask(sibling.id).owner).toBeNull();
+
+  // every exit from implement clears it, whatever the patch says
+  db.moveTask(card.id, "review");
+  expect(db.resolveTask(card.id).owner).toBeNull();
+  db.updateTask(card.id, { lane: "implement", owner: "pi" });
+  expect(db.resolveTask(card.id).owner).toBe("pi");
+  db.updateTask(card.id, { lane: "review", owner: "pi" }); // forced null despite the patch
+  expect(db.resolveTask(card.id).owner).toBeNull();
+
+  db.updateTask(card.id, { lane: "implement", owner: "pi" });
+  db.moveTask(card.id, "done");
+  expect(db.resolveTask(card.id).owner).toBeNull();
+  db.updateTask(card.id, { lane: "implement", owner: "pi" });
+  db.moveTask(card.id, "archive");
+  expect(db.resolveTask(card.id).owner).toBeNull();
+
+  // question-park (waiting) clears it too
+  db.updateTask(card.id, { lane: "implement", owner: "pi" });
+  db.comment(card.id, { author: "anyone", kind: "question", body: "stuck — which driver?" });
+  expect(db.resolveTask(card.id).laneId).toBe("waiting");
+  expect(db.resolveTask(card.id).owner).toBeNull();
+
+  // TaskPatch.owner directly: strings trim, empty throws, null clears
+  db.updateTask(card.id, { owner: "  ada  " });
+  expect(db.resolveTask(card.id).owner).toBe("ada");
+  expect(() => db.updateTask(card.id, { owner: "   " })).toThrow(
+    new KanbanError("owner must not be empty", "invalid"),
+  );
+  db.updateTask(card.id, { owner: null });
+  expect(db.resolveTask(card.id).owner).toBeNull();
+
+  // approve sets the owner to the builder author
+  const gate = db.createTask({ title: "gated card", lane: "plan" });
+  db.attach(gate.id, "plan", "# plan v1\nbuild it");
+  const { task: approved } = db.approveTask(gate.id);
+  expect(approved.laneId).toBe("implement");
+  expect(approved.owner).toBe(BUILDER_AUTHOR);
+  expect(BUILDER_AUTHOR).toBe("pi-builder");
+});
+
+test("claimTask: set, idempotent re-claim, foreign owner refuses without force, force takes over", () => {
+  const card = db.createTask({ title: "claimable" });
+
+  const claimed = db.claimTask(card.id, { author: "ada" });
+  expect(claimed.owner).toBe("ada");
+
+  // same author re-claims fine
+  expect(db.claimTask(card.id, { author: "ada" }).owner).toBe("ada");
+
+  // foreign claim refuses with the exact conflict message
+  expect(() => db.claimTask(card.id, { author: "bob" })).toThrow(
+    new KanbanError(`card '${card.id}' is already owned by 'ada' — pass --force to take it over`, "conflict"),
+  );
+  expect(db.resolveTask(card.id).owner).toBe("ada");
+
+  // force takes over; author defaults to "user" — which is then foreign to bob
+  expect(db.claimTask(card.id, { author: "bob", force: true }).owner).toBe("bob");
+  expect(() => db.claimTask(card.id)).toThrow(/already owned by 'bob'/);
+  expect(db.claimTask(card.id, { force: true }).owner).toBe("user");
+});
+
+test("moveTaskBefore: anchor placement, wrong-lane and self errors", () => {
+  const a = db.createTask({ title: "A", lane: "backlog" });
+  const b = db.createTask({ title: "B", lane: "backlog" });
+  const c = db.createTask({ title: "C", lane: "backlog" });
+  // board order: A, B, C (positions 200, 300, 400 after the seeded waiting lane)
+
+  // place C before A → order: C, A, B
+  db.moveTaskBefore(c.id, undefined, a.id);
+  expect(db.laneTasks("backlog").map((t) => t.id)).toEqual([c.id, a.id, b.id]);
+
+  // cross-lane move + anchor: move C into plan directly before a plan anchor
+  const p1 = db.createTask({ title: "P1", lane: "plan" });
+  const p2 = db.createTask({ title: "P2", lane: "plan" });
+  db.moveTaskBefore(c.id, "plan", p2.id);
+  expect(db.laneTasks("plan").map((t) => t.id)).toEqual([p1.id, c.id, p2.id]);
+  expect(db.resolveTask(c.id).laneId).toBe("plan");
+
+  // self anchor
+  expect(() => db.moveTaskBefore(a.id, "backlog", a.id)).toThrow(
+    new KanbanError("cannot move a card before itself", "invalid"),
+  );
+
+  // anchor outside the target lane
+  expect(() => db.moveTaskBefore(a.id, "review", p1.id)).toThrow(
+    new KanbanError(`anchor card '${p1.id}' is not in lane 'review'`, "conflict"),
+  );
+
+  // same-lane reorder keeps the owner (no lane change, no clear)
+  db.updateTask(a.id, { owner: "ada" });
+  db.moveTaskBefore(a.id, undefined, b.id);
+  expect(db.resolveTask(a.id).owner).toBe("ada");
+});
+
+test("same-lane moveTask without index/before writes nothing", () => {
+  const a = db.createTask({ title: "A", lane: "backlog" });
+  const b = db.createTask({ title: "B", lane: "backlog" });
+  const c = db.createTask({ title: "C", lane: "backlog" });
+  const before = db.resolveTask(b.id);
+  const eventsBefore = db.laneEvents(b.id).length;
+  const orderBefore = db.laneTasks("backlog").map((t) => t.id);
+
+  const result = db.moveTask(b.id, "backlog");
+  expect(result.id).toBe(b.id);
+
+  const after = db.resolveTask(b.id);
+  expect(after.position).toBe(before.position);
+  expect(after.updatedAt).toBe(before.updatedAt);
+  expect(db.laneEvents(b.id)).toHaveLength(eventsBefore);
+  expect(db.laneTasks("backlog").map((t) => t.id)).toEqual(orderBefore); // not re-appended
+  expect(a.id && c.id).toBeTruthy();
+
+  // --pos still reorders within the same lane
+  db.moveTask(b.id, "backlog", 0);
+  expect(db.laneTasks("backlog").map((t) => t.id)).toEqual([b.id, a.id, c.id]);
 });

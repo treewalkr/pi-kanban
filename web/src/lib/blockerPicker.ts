@@ -1,5 +1,5 @@
 import type { Task } from "../../../src/db";
-import { searchBoard } from "../../../src/search";
+import { MAX_RESULTS, searchBoard } from "../../../src/search";
 
 /** Max candidates shown in the add-blocker dropdown. */
 export const BLOCKER_PICKER_MAX = 8;
@@ -16,7 +16,7 @@ export function blockerCandidates(
   const q = query.trim();
   if (!q) return [];
   const excluded = new Set([selfId, ...currentBlockerIds]);
-  return searchBoard(tasks, q)
+  return searchBoard(tasks, q).slice(0, MAX_RESULTS)
     .filter((r) => r.kind === "title" && !excluded.has(r.task.id))
     .map((r) => r.task)
     .slice(0, BLOCKER_PICKER_MAX);

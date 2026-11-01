@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Attachment, Task } from "../src/db";
-import { checklistLines, searchBoard } from "../src/search";
+import { checklistLines, MAX_RESULTS, searchBoard } from "../src/search";
 
 function task(partial: Partial<Task> & { id: string; title: string }): Task {
   return {
@@ -11,6 +11,7 @@ function task(partial: Partial<Task> & { id: string; title: string }): Task {
     parentId: null,
     previousLane: null,
     workspace: null,
+    owner: null,
     priority: "normal",
     position: 100,
     createdAt: 1,
@@ -99,9 +100,13 @@ test("skips checklist lines when matching note body", () => {
 
 test("caps results and orders by score, ties keeping board order", () => {
   const tasks = Array.from({ length: 30 }, (_, i) => task({ id: `t${i}`, title: `sweep ${i}` }));
+  // searchBoard returns ALL ranked matches — the transport budget lives at the callers
   const results = searchBoard(tasks, "sweep");
-  expect(results).toHaveLength(20);
+  expect(results).toHaveLength(30);
   expect(results[0]!.task.id).toBe("t0"); // equal scores fall back to array order
+  expect(results[19]!.task.id).toBe("t19");
+  // the CLI/web budget: first MAX_RESULTS rows in ranking order
+  expect(results.slice(0, MAX_RESULTS)).toHaveLength(20);
 });
 
 test("matches plan text below note matches; title matches suppress the plan row", () => {

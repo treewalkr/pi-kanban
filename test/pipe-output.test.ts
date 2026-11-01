@@ -39,12 +39,20 @@ test("ls --json through a real pipe is byte-complete and valid JSON beyond 64 Ki
   expect(JSON.parse(stdout)).toHaveLength(CARDS);
 });
 
-test("search --json through a real pipe is byte-complete and valid JSON", async () => {
+test("search --json envelope is byte-complete and valid JSON through a real pipe", async () => {
   const { code, stdout } = await pipedCli("search bulk --json");
   expect(code).toBe(0);
-  const results = JSON.parse(stdout) as { task: { title: string } }[];
-  expect(results).toHaveLength(20); // MAX_RESULTS cap, src/search.ts:24
-  expect(results.every((r) => r.task.title.includes("bulk"))).toBe(true);
+  const envelope = JSON.parse(stdout) as {
+    results: Array<{ id: string; title: string; laneId: string; kind: string; text: string; checked?: boolean }>;
+    matched: number;
+    hasMore: boolean;
+    hint?: string;
+  };
+  expect(envelope.results).toHaveLength(20); // default transport budget, src/search.ts MAX_RESULTS
+  expect(envelope.results.every((r) => r.title.includes("bulk"))).toBe(true);
+  expect(envelope.matched).toBe(CARDS);
+  expect(envelope.hasMore).toBe(true);
+  expect(envelope.hint).toContain(`…+${CARDS - 20} more matches`);
 });
 
 test("next --json through a real pipe is byte-complete and valid JSON", async () => {
