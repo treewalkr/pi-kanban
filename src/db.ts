@@ -2650,6 +2650,23 @@ export class KanbanDb {
     };
   }
 
+  listLeases(): AgentLease[] {
+    const rows = this.q("SELECT * FROM agent_leases").all() as {
+      task_id: string;
+      role: string;
+      owner_pid: number;
+      boot_id: number;
+      heartbeat_at: number;
+    }[];
+    return rows.map((row) => ({
+      taskId: row.task_id,
+      role: row.role,
+      ownerPid: row.owner_pid,
+      bootId: row.boot_id,
+      heartbeatAt: row.heartbeat_at,
+    }));
+  }
+
   /** Full replace of a role's config; empty strings/arrays drop out. */
   setAgentConfig(role: string, config: AgentConfig): AgentConfig {
     if (!AGENT_CONFIG_ROLES.has(role)) {
