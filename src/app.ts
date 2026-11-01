@@ -12,6 +12,7 @@ import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveW
 import { contentTypeFor, listFiles, rawFilePath, readFile, searchFiles, type FileEntry } from "./files";
 import { BOARD_CHAT_ID, ChatManager, PROMPT_MAX_CHARS, THINKING_LEVELS, type ChatState, type ChatSessionFactory } from "./chat";
 import { createChatEventStream, type ChatStreamSession } from "./chat-events";
+import { VERSION, serveGit } from "./version";
 
 /** POST /chat/:cardId success shapes (Eden infers them for the web client). */
 export interface ChatAccepted {
@@ -218,7 +219,8 @@ export const createApp = (
       // incumbent vouches exactly once. The token itself never crosses the wire.
       const presented = headers["x-kanban-share-token"];
       const vouched = typeof presented === "string" && consumeShareToken(presented);
-      return { ok: true, booted, share: vouched ? ("granted" as const) : undefined };
+      // version/git let clients (stale chip, kanban check) tell a stale serve from a fresh one
+      return { ok: true, booted, share: vouched ? ("granted" as const) : undefined, version: VERSION, pid: process.pid, git: serveGit() };
     })
     .post(
       "/restart",

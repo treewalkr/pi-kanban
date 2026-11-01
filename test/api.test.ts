@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createApp } from "../src/app";
 import { KanbanDb } from "../src/db";
 import { startAutoReview } from "../src/autoreview";
+import { VERSION } from "../src/version";
 
 let dir = "";
 let db: KanbanDb;
@@ -528,9 +529,22 @@ test("GET /health reports a boot stamp so clients can detect restarts", async ()
   const app = createApp(db);
   const res = await app.handle(new Request("http://localhost/health"));
   expect(res.status).toBe(200);
-  const body = (await res.json()) as { ok: boolean; booted: number };
+  const body = (await res.json()) as {
+    ok: boolean;
+    booted: number;
+    version: string;
+    pid: number;
+    git: { commit: string | null; head: string | null; dirty: boolean } | null;
+  };
   expect(body.ok).toBe(true);
   expect(body.booted).toBeLessThanOrEqual(Date.now());
+  // version + git let stale-serve detectors (header chip, kanban check) do their job
+  expect(body.version).toBe(VERSION);
+  expect(typeof body.pid).toBe("number");
+  expect(body.git).not.toBeNull(); // tests run from the repo checkout
+  expect(body.git?.commit).toMatch(/^[0-9a-f]{40}$/);
+  expect(body.git?.head).toMatch(/^[0-9a-f]{40}$/);
+  expect(typeof body.git?.dirty).toBe("boolean");
 });
 
 test("POST /restart rejects cross-origin browser requests", async () => {

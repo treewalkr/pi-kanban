@@ -7,6 +7,7 @@ import { KanbanDb, defaultDbPath } from "./db";
 import { startGhSync } from "./gh";
 import { startWorkerRunner } from "./lane-workers";
 import { registerShutdown, runShutdown } from "./shutdown";
+import { VERSION, bootCommit } from "./version";
 import "./dev-reload"; // watch marker: rewritten by POST /restart to trigger a bun --watch reload
 
 const MIME: Record<string, string> = {
@@ -149,8 +150,10 @@ export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: ()
   }
 
   server.listen({ port, hostname: "127.0.0.1" });
+  bootCommit(); // warm the memo at listen — /health's commit then means boot-time HEAD, not first-request HEAD
+  const commit = bootCommit();
   console.log(
-    `kanban on http://127.0.0.1:${port}${existsSync(dist) ? "" : " (api only — run `bun run build` for the web ui)"}`,
+    `kanban ${VERSION}${commit ? ` (${commit.slice(0, 7)})` : ""} on http://127.0.0.1:${port}${existsSync(dist) ? "" : " (api only — run `bun run build` for the web ui)"}`,
   );
 
   let stopAutoReview: () => void = () => {};
