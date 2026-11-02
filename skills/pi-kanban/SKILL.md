@@ -1,6 +1,6 @@
 ---
 name: pi-kanban
-description: Track and manage task state on the Kanban board (Waiting on you → Backlog → Plan → Test + Implement → Review → Done → Archive) using the kanban CLI. Use when starting, planning, or finishing a unit of work; when the user mentions tasks, the board, kanban, backlog, "what's next", or moving work forward; and to review what's in flight.
+description: Track and manage task state on the Kanban board (Waiting on you → Backlog → Plan → Test + Implement → Review → Done → Archive) using the kanban CLI. Use when starting, planning, or finishing a unit of work; when the user mentions tasks, the board, kanban, backlog, "what's next", or moving work forward; to review what's in flight; and to set the skill up in a project ("pi-kanban init").
 ---
 > Requires the kanban CLI — install it from this repo:
 > https://github.com/treewalkr/pi-kanban (`git clone https://github.com/treewalkr/pi-kanban && cd pi-kanban && ./scripts/install.sh`)
@@ -10,6 +10,30 @@ description: Track and manage task state on the Kanban board (Waiting on you →
 One global task board stored in SQLite, shared by the `kanban` CLI and a web UI
 (`kanban serve --open` → http://127.0.0.1:4600). The CLI writes the database
 directly — the web server does **not** need to be running.
+
+## Init — wiring a project to the board
+
+Once per project, when the user asks to set up pi-kanban (`pi-kanban init`):
+make sure the CLI runs (`kanban version`; else see the install note above), then
+add a short pointer section to the project's root `AGENTS.md` — create the file
+if there is none. Insert this block, substituting the repo name for `<repo>`
+(and the actual install path if it differs):
+
+```markdown
+## Task workflow
+
+All non-trivial units of work run through the shared kanban board — follow the
+`pi-kanban` skill (`.agents/skills/pi-kanban/SKILL.md`); load it before starting,
+advancing, or finishing any task. Tag cards `--project <repo>`.
+```
+
+- **Idempotent**: if `AGENTS.md` already references this skill, don't insert a
+  second section — fix the existing pointer only if it's stale.
+- **Pointer only**: the section stays 3–4 lines; workflow detail lives in this
+  skill, never in `AGENTS.md`.
+- **Respect the file**: place the section to fit the file's structure and never
+  reformat existing content; if the project's conventions clash with the block,
+  propose an adaptation instead of forcing it in.
 
 ## Workflow contract
 
