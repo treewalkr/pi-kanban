@@ -729,7 +729,8 @@ export function defaultLaneContext(laneId: string): LaneContext | null {
             resumeEnding:
               '; then attach the plan file and hand off exactly: kanban attach {id} <plan-file> and kanban comment {id} "plan v<N> attached — over to pi-plan-reviewer" --kind handoff --author pi-planner',
             deathLabel: "auto-plan",
-            deathHint: "comment on this card to re-trigger.",
+            // death comments render `${deathLabel} ${reason}${deathHint}` — the hint carries its separator
+            deathHint: " — comment on this card to re-trigger.",
           },
           {
             id: "plan-reviewer",
@@ -738,7 +739,7 @@ export function defaultLaneContext(laneId: string): LaneContext | null {
             resumeEnding:
               '; then record exactly one verdict: kanban plan-review {id} (--pass | --block --message "<summary>" [--finding "<checklist hit>"]…) --author pi-plan-reviewer',
             deathLabel: "plan review",
-            deathHint: "approve or reject the plan directly, or comment on this card to re-run the review.",
+            deathHint: " — approve or reject the plan directly, or comment on this card to re-run the review.",
           },
         ],
         triggers: [{ kind: "on-enter" }, { kind: "human-comment" }],
@@ -791,7 +792,7 @@ export function defaultLaneContext(laneId: string): LaneContext | null {
             resumeEnding:
               '; then record exactly one verdict: kanban review {id} (--approve | --block --message "<summary>" [--finding "<file:line — issue>"]…) --author pi-reviewer',
             deathLabel: "auto-review",
-            deathHint: "comment on this card to re-trigger.",
+            deathHint: "; comment on this card to re-trigger.",
           },
         ],
         triggers: [{ kind: "on-enter" }],
@@ -1000,13 +1001,13 @@ const rowToLaneEvent = (r: LaneEventRow): LaneEvent => ({
  * reviewer pass verdict → gate; reviewer cap comment → capped; any other reviewer
  * comment (failed session, cannot evaluate) → rerun; everything else (no comments,
  * block verdicts, handoffs, human/planner comments) → null — an agent turn is coming
- * or nothing is owed. When `actorAuthors` is given (the home lane's context actors,
- * card 3n96c), the verdict states only apply to that lane's own actors — a
- * plan-review pass on an Implement card means nothing.
+ * or nothing is owed. With the home lane's `context` (card 3n96c) the verdict
+ * states belong to that lane's own actors, and a comment matching one of its
+ * park exits badges gate — a plan-review pass on an Implement card means nothing.
  */
 export function waitingFromLastComment(
   last: Pick<Comment, "author" | "kind" | "body">,
-  actorAuthors?: ReadonlySet<string>,
+  context?: LaneContext | null,
 ): WaitingState | null {
   if (last.kind === "question") {
     // a parked plan-review cap still badges as capped — its body carries the gate guidance
@@ -1014,11 +1015,33 @@ export function waitingFromLastComment(
     return "question";
   }
   if (last.kind === "comment" && last.body.startsWith(KanbanDb.SESSION_DIED_PREFIX)) return "dead";
-  if (actorAuthors && !actorAuthors.has(last.author)) return null;
-  if (last.kind === "review" && last.body.startsWith(KanbanDb.PLAN_REVIEW_PASS)) {
-    return actorAuthors || last.author === PLAN_REVIEWER_AUTHOR ? "gate" : null;
+  if (context) {
+    // a park exit's own verdict badges gate — the comment that parked the card
+    for (const exit of context.exits ?? []) {
+      if (exit.action !== "park") continue;
+      const on = exit.on;
+      if (
+        context.actors.some((a) => a.author === last.author) &&
+        (on.author === undefined || last.author === on.author) &&
+        (on.kind === undefined || last.kind === on.kind) &&
+        (on.prefix === undefined || last.body.startsWith(on.prefix))
+      ) {
+        return "gate";
+      }
+    }
+    // the pass/rerun/capped states key on the chain's verdict voice, and only a
+    // gated lane parks cards for its verdicts (plan yes; implement/review no)
+    const lastActor = context.actors[context.actors.length - 1];
+    if (!context.gate || lastActor === undefined || lastActor.author !== last.author) return null;
+    if (last.kind === "review" && last.body.startsWith(KanbanDb.PLAN_REVIEW_PASS)) return "gate";
+    if (last.kind === "comment") {
+      if (last.body.startsWith(KanbanDb.PLAN_REVIEW_CAP)) return "capped";
+      return "rerun";
+    }
+    return null;
   }
   if (last.author !== PLAN_REVIEWER_AUTHOR) return null;
+  if (last.kind === "review" && last.body.startsWith(KanbanDb.PLAN_REVIEW_PASS)) return "gate";
   if (last.kind === "comment") {
     if (last.body.startsWith(KanbanDb.PLAN_REVIEW_CAP)) return "capped";
     return "rerun";
@@ -2650,14 +2673,14 @@ export class KanbanDb {
     const last = this.comments(task.id).at(-1);
     if (!last) return null;
     if (task.laneId === WAITING_LANE_ID) {
-      // parked: classify against the home lane's own actors when it hosts a context
+      // parked: classify against the home lane's own rules when it hosts a context
       const home = task.previousLane ? this.laneContext(task.previousLane) : null;
-      return waitingFromLastComment(last, home ? new Set(home.actors.map((a) => a.author)) : undefined);
+      return waitingFromLastComment(last, home);
     }
     if (waitingFromLastComment(last) === "dead") return "dead";
     const ctx = this.laneContext(task.laneId);
     if (!ctx) return null;
-    return waitingFromLastComment(last, new Set(ctx.actors.map((a) => a.author)));
+    return waitingFromLastComment(last, ctx);
   }
 
   /** Waiting state per card (non-null only, workflow or waiting lane, or dead session), keyed by task id — the shape the board payload ships. */
@@ -2686,14 +2709,13 @@ export class KanbanDb {
         continue;
       }
       if (r.lane_id === WAITING_LANE_ID) {
-        const home = r.previous_lane ? contexts[r.previous_lane] : undefined;
-        const state = waitingFromLastComment(last, home ? new Set(home.actors.map((a) => a.author)) : undefined);
+        const state = waitingFromLastComment(last, r.previous_lane ? (contexts[r.previous_lane] ?? null) : null);
         if (state) out[r.task_id] = state;
         continue;
       }
       const ctx = contexts[r.lane_id];
       if (!ctx) continue;
-      const state = waitingFromLastComment(last, new Set(ctx.actors.map((a) => a.author)));
+      const state = waitingFromLastComment(last, ctx);
       if (state) out[r.task_id] = state;
     }
     return out;

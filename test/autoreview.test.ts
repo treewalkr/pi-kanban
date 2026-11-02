@@ -2705,3 +2705,126 @@ describe("project routing", () => {
     expect(logs).toContain(`reviewer ${skipped.id}: test gate off for project 'beta' — skipping`);
   });
 });
+
+// ---------- lane contexts: the generic interpreter (card 3n96c) ----------
+
+describe("lane contexts", () => {
+  test("roleFor has no hardcoded lane-id branches; contexts drive cleared, renamed, and custom lanes", async () => {
+    // source-level: the loop's roleFor body carries no lane-id literals
+    const src = readFileSync(new URL("../src/autoreview.ts", import.meta.url), "utf-8");
+    const body = src.slice(src.indexOf("const roleFor"), src.indexOf("const enqueue"));
+    expect(body).not.toContain('task.laneId === "plan"');
+    expect(body).not.toContain('task.laneId === "implement"');
+    expect(body).not.toContain('task.laneId === "review"');
+
+    const { dbFile, writer: w } = setup();
+    // clearing a lane's context disarms the loop on that lane
+    w.setLaneContext("review", null);
+    const card = cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+    expect(calls.length).toBe(0);
+
+    // attaching a context to the same lane arms its actors again
+    w.setLaneContext("review", {
+      actors: [{ id: "reviewer", author: REVIEWER_AUTHOR, instructions: `Review card {id} "{title}" hard.` }],
+      triggers: [{ kind: "on-enter" }],
+    });
+    await sleep(150);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("reviewer");
+    expect(calls[0].job.prompt).toContain(`Review card ${card.id} "ship it" hard.`);
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+
+    // renaming a lane keeps its workflow: contexts key on lane id, not name
+    w.updateLane("plan", { name: "Product Design" });
+    const card2 = w.createTask({ title: "plan me", lane: "plan" });
+    w.attach(card2.id, "plan", "# plan v1");
+    await sleep(150);
+    const pr = calls.find((c) => c.job.role === "plan-reviewer");
+    expect(pr).toBeDefined();
+    expect(pr!.job.task.id).toBe(card2.id);
+    pr!.finish({ code: 0 });
+  });
+
+  test("custom Design lane with own template, actor, exit rule, and gate runs end-to-end with zero code changes", async () => {
+    const { dbFile, writer: w } = setup();
+    w.createLane({ name: "Design" });
+    w.setLaneContext("design", {
+      artifact: "design",
+      template: "# Design Spec\n## Layout",
+      actors: [{ id: "designer", author: "pi-designer", instructions: `Design card {id} "{title}" against the template.` }],
+      triggers: [{ kind: "on-enter" }],
+      exits: [{ on: { author: "pi-designer", kind: "comment", prefix: "design: pass" }, action: "park" }],
+      gate: { approveTarget: "plan", requireArtifact: "design", rejectPrefix: "design rejected" },
+    });
+    const card = w.createTask({ title: "redesign header", lane: "design" });
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("designer");
+    expect(calls[0].job.prompt).toContain(`Design card ${card.id} "redesign header" against the template.`);
+    expect(calls[0].job.prompt).toContain("--- design template and review checklist ---");
+    expect(calls[0].job.prompt).toContain("## Layout");
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+
+    // the designer's pass verdict parks the card at the human gate (exit rule)
+    w.comment(card.id, { author: "pi-designer", kind: "comment", body: "design: pass — see the spec" });
+    await sleep(150);
+    expect(w.resolveTask(card.id).laneId).toBe("waiting");
+    expect(w.resolveTask(card.id).previousLane).toBe("design");
+    expect(db!.waiting(card.id)).toBe("gate");
+
+    // the human gate approves into the plan lane, arming the planner
+    w.attach(card.id, "design", "# spec");
+    w.approveTask(card.id);
+    await sleep(200);
+    const planner = calls.find((c) => c.job.role === "planner");
+    expect(planner).toBeDefined();
+    expect(planner!.job.task.id).toBe(card.id);
+    expect(w.resolveTask(card.id).laneId).toBe("plan");
+    planner!.finish({ code: 0 });
+  });
+
+  test("custom lane caps park for a human after max agent cycles", async () => {
+    const { dbFile, writer: w } = setup();
+    w.createLane({ name: "Design" });
+    w.setLaneContext("design", {
+      actors: [{ id: "designer", author: "pi-designer", instructions: "Design {id}." }],
+      triggers: [{ kind: "comment", commentKind: "review", author: "pi-design-reviewer", targetActor: "designer" }, { kind: "human-comment" }],
+      cap: { max: 2, scope: "thread", match: { author: "pi-design-reviewer", kind: "review" }, author: "pi-design-reviewer", message: "design cap: {max} cycles on {id}" },
+    });
+    const card = w.createTask({ title: "gfx", lane: "design" });
+    w.createComment(card.id, { author: "pi-design-reviewer", kind: "review", body: "review: block — first" });
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+    // cycle 1: one block since the thread started, under the cap of 2
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("designer");
+    // the fake designer leaves its own comment, then finishes — no death trace
+    w.createComment(card.id, { author: "pi-designer", kind: "handoff", body: "design v1 done" });
+    calls[0].finish({ code: 0 });
+    await sleep(20);
+
+    // the second reviewer block is cycle 2 of 2 — the cap parks the card instead of re-arming
+    w.createComment(card.id, { author: "pi-design-reviewer", kind: "review", body: "review: block — second" });
+    await sleep(150);
+    expect(calls.length).toBe(1); // capped
+    const last = w.comments(card.id).at(-1)!;
+    expect(last.author).toBe("pi-design-reviewer");
+    expect(last.kind).toBe("question");
+    expect(last.body).toBe(`design cap: 2 cycles on ${card.id}`);
+    expect(w.resolveTask(card.id).laneId).toBe("waiting"); // the cap question parks the card
+
+    // a human reply returns the card and re-arms the designer (the cap never gates a human's reply)
+    w.comment(card.id, { author: "user", body: "redo it with the new palette" });
+    await sleep(150);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.role).toBe("designer");
+    calls[1].finish({ code: 0 });
+  });
+});
