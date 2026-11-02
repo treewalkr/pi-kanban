@@ -550,15 +550,22 @@ export class ChatManager {
     this.now = opts.now ?? (() => Date.now());
   }
 
-  private async buildHandle(cardId: string, sessionId: string, appendSystemPrompt: string, firstSeed: () => string): Promise<ChatHandleImpl> {
-    const existingPath = SessionManager.findById(this.cwd, sessionId, this.sessionDir);
+  /** Where a card's chat session lives: the project route's repo if routed, else the serve cwd. The board manager always uses the fallback. */
+  private cwdFor(cardId: string): string {
+    if (cardId === BOARD_CHAT_ID) return this.cwd;
+    const task = this.db.resolveTask(cardId);
+    return this.db.projectCwd(task.project) ?? this.cwd;
+  }
+
+  private async buildHandle(cardId: string, sessionId: string, appendSystemPrompt: string, firstSeed: () => string, cwd: string): Promise<ChatHandleImpl> {
+    const existingPath = SessionManager.findById(cwd, sessionId, this.sessionDir);
     const sessionManager = existingPath
-      ? SessionManager.open(existingPath, this.sessionDir, this.cwd)
-      : SessionManager.create(this.cwd, this.sessionDir, { id: sessionId });
+      ? SessionManager.open(existingPath, this.sessionDir, cwd)
+      : SessionManager.create(cwd, this.sessionDir, { id: sessionId });
     this.log(`${cardId} ${existingPath ? "resumed" : "created"}`);
-    const session = await this.createSession({ cwd: this.cwd, sessionManager, appendSystemPrompt });
+    const session = await this.createSession({ cwd, sessionManager, appendSystemPrompt });
     return new ChatHandleImpl({
-      cwd: this.cwd,
+      cwd,
       cardId,
       sessionId,
       session,
@@ -577,14 +584,14 @@ export class ChatManager {
   /** Resolve task → get-or-create one alive handle per card (concurrent gets share one creation). */
   async get(cardId: string): Promise<ChatHandle> {
     if (cardId === BOARD_CHAT_ID) {
-      return this.getOrCreate(BOARD_CHAT_ID, () => ({
+      return this.getOrCreate(BOARD_CHAT_ID, this.cwd, () => ({
         sessionId: MANAGER_SESSION_ID,
         appendSystemPrompt: managerSystemAppend(),
         firstSeed: () => managerSeed(formatBoardOverview(this.db.boardOverview())),
       }));
     }
     const task = this.db.resolveTask(cardId); // 404 for unknown/ambiguous ids, before any map lookup
-    return this.getOrCreate(task.id, () => {
+    return this.getOrCreate(task.id, this.cwdFor(task.id), () => {
       const laneName = this.db.lanes().find((l) => l.id === task.laneId)?.name ?? task.laneId;
       return {
         sessionId: CHAT_SESSION_ID_PREFIX + task.id,
@@ -595,13 +602,13 @@ export class ChatManager {
   }
 
   /** Get-or-create one alive handle per key (concurrent gets share one creation). */
-  private async getOrCreate(key: string, spec: () => { sessionId: string; appendSystemPrompt: string; firstSeed: () => string }): Promise<ChatHandle> {
+  private async getOrCreate(key: string, cwd: string, spec: () => { sessionId: string; appendSystemPrompt: string; firstSeed: () => string }): Promise<ChatHandle> {
     const alive = this.handles.get(key);
     if (alive) return alive;
     const pending = this.inflight.get(key);
     if (pending) return pending;
     const { sessionId, appendSystemPrompt, firstSeed } = spec();
-    const creation = this.buildHandle(key, sessionId, appendSystemPrompt, firstSeed).then((handle) => {
+    const creation = this.buildHandle(key, sessionId, appendSystemPrompt, firstSeed, cwd).then((handle) => {
       this.handles.set(key, handle);
       if (!this.shutdownRegistered) {
         this.shutdownRegistered = true;
@@ -626,10 +633,11 @@ export class ChatManager {
 
   /** Disk-backed history without touching the live map (the GET route's not-running path). */
   historyFromDisk(cardId: string): { sessionId: string | null; messages: ChatState["messages"]; messagesTruncated: boolean } {
+    const cwd = this.cwdFor(cardId); // same key the live handle would use
     const sessionId = cardId === BOARD_CHAT_ID ? MANAGER_SESSION_ID : CHAT_SESSION_ID_PREFIX + this.db.resolveTask(cardId).id;
-    const path = SessionManager.findById(this.cwd, sessionId, this.sessionDir);
+    const path = SessionManager.findById(cwd, sessionId, this.sessionDir);
     if (!path) return { sessionId: null, messages: [], messagesTruncated: false };
-    const { messages, truncated } = projectSessionEntries(SessionManager.open(path, this.sessionDir, this.cwd));
+    const { messages, truncated } = projectSessionEntries(SessionManager.open(path, this.sessionDir, cwd));
     return { sessionId, messages, messagesTruncated: truncated };
   }
 
