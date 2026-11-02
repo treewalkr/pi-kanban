@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type WorkerPool } from "./db";
+import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneContext, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type WorkerPool } from "./db";
 import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
@@ -24,6 +24,96 @@ export interface ChatStopped {
 }
 
 const errorStatus = { "not-found": 404, conflict: 409, invalid: 400 } as const;
+
+/** Elysia schema for a LaneContext body (card 3n96c) — PUT /lanes/:id/context. */
+const LaneContextBody = t.Object({
+  artifact: t.Optional(t.String()),
+  template: t.Optional(t.String()),
+  actors: t.Array(
+    t.Object({
+      id: t.String({ pattern: "^[a-z0-9][a-z0-9-]{0,47}$" }),
+      author: t.String({ minLength: 1 }),
+      instructions: t.String({ minLength: 1 }),
+      approvalInstructions: t.Optional(t.String()),
+      resumeEnding: t.Optional(t.String()),
+      deathLabel: t.Optional(t.String()),
+      deathHint: t.Optional(t.String()),
+      config: t.Optional(
+        t.Object({
+          provider: t.Optional(t.String()),
+          model: t.Optional(t.String()),
+          thinking: t.Optional(
+            t.Union([
+              t.Literal(""),
+              t.Literal("off"),
+              t.Literal("minimal"),
+              t.Literal("low"),
+              t.Literal("medium"),
+              t.Literal("high"),
+              t.Literal("xhigh"),
+              t.Literal("max"),
+            ]),
+          ),
+          skills: t.Optional(t.Array(t.String({ minLength: 1 }))),
+          context: t.Optional(t.String()),
+          tools: t.Optional(t.String()),
+          extraArgs: t.Optional(t.Array(t.String({ minLength: 1 }))),
+          timeoutMs: t.Optional(t.Number({ minimum: 60_000, maximum: 86_400_000 })),
+        }),
+      ),
+    }),
+    { minItems: 1, maxItems: 4 },
+  ),
+  triggers: t.Array(
+    t.Union([
+      t.Object({ kind: t.Literal("on-enter") }),
+      t.Object({ kind: t.Literal("human-comment") }),
+      t.Object({
+        kind: t.Literal("comment"),
+        commentKind: t.Optional(t.Union([t.Literal("comment"), t.Literal("review"), t.Literal("handoff"), t.Literal("approval"), t.Literal("rejection"), t.Literal("question")])),
+        author: t.Optional(t.String()),
+        prefix: t.Optional(t.String()),
+        targetActor: t.Optional(t.String()),
+      }),
+    ]),
+    { minItems: 1 },
+  ),
+  exits: t.Optional(
+    t.Array(
+      t.Object({
+        on: t.Object({
+          author: t.Optional(t.String()),
+          kind: t.Optional(t.Union([t.Literal("comment"), t.Literal("review"), t.Literal("handoff"), t.Literal("approval"), t.Literal("rejection"), t.Literal("question")])),
+          prefix: t.Optional(t.String()),
+        }),
+        action: t.Union([t.Literal("next-actor"), t.Literal("rerun-first"), t.Literal("move"), t.Literal("park"), t.Literal("disarm")]),
+        target: t.Optional(t.String()),
+      }),
+    ),
+  ),
+  gate: t.Optional(
+    t.Object({
+      approveTarget: t.String({ minLength: 1 }),
+      approveOwner: t.Optional(t.String()),
+      requireArtifact: t.Optional(t.String()),
+      rejectPrefix: t.Optional(t.String()),
+    }),
+  ),
+  cap: t.Optional(
+    t.Object({
+      max: t.Number({ minimum: 1, maximum: 20 }),
+      scope: t.Union([t.Literal("since-human"), t.Literal("thread")]),
+      match: t.Object({
+        author: t.Optional(t.String()),
+        kind: t.Optional(t.Union([t.Literal("comment"), t.Literal("review"), t.Literal("handoff"), t.Literal("approval"), t.Literal("rejection"), t.Literal("question")])),
+        prefix: t.Optional(t.String()),
+      }),
+      author: t.String({ minLength: 1 }),
+      message: t.String({ minLength: 1 }),
+    }),
+  ),
+  testGate: t.Optional(t.Boolean()),
+});
 
 /**
  * Map KanbanError to a typed `status()` response (treaty moves it to `error.value`);
@@ -879,6 +969,46 @@ export const createApp = (
           wipLimit: t.Optional(t.Union([t.Number({ minimum: 1, maximum: 999 }), t.Null()])),
         }),
       },
+    )
+    .get(
+      "/lanes/:id/context",
+      ({ params, status }): { laneId: string; context: LaneContext | null } | unknown => {
+        try {
+          const lane = db.resolveLane(params.id);
+          return { laneId: lane.id, context: db.laneContext(lane.id) };
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      { params: t.Object({ id: t.String() }) },
+    )
+    .put(
+      "/lanes/:id/context",
+      ({ params, body, status }): { laneId: string; context: LaneContext } | unknown => {
+        try {
+          const lane = db.resolveLane(params.id);
+          return { laneId: lane.id, context: db.setLaneContext(lane.id, body) };
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        params: t.Object({ id: t.String() }),
+        body: LaneContextBody,
+      },
+    )
+    .delete(
+      "/lanes/:id/context",
+      ({ params, status }): { laneId: string; context: null } | unknown => {
+        try {
+          const lane = db.resolveLane(params.id);
+          db.setLaneContext(lane.id, null);
+          return { laneId: lane.id, context: null };
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      { params: t.Object({ id: t.String() }) },
     )
     .get(
       "/agents",

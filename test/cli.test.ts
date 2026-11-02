@@ -2096,3 +2096,56 @@ test("worker run queues a run; unknown lane prints the charter error; worker ls 
   const filtered = await cli("worker", "ls", "--lane", "review");
   expect(filtered.stdout).not.toContain("groom stale cards");
 });
+
+test("lane context subcommand views, updates via flags and --from, and clears", async () => {
+  // the seeded plan context is viewable
+  const view = await cli("lane", "context", "plan", "--json");
+  expect(view.code).toBe(0);
+  const parsed = JSON.parse(view.stdout) as { laneId: string; context: { actors: Array<{ id: string }>; gate: { approveTarget: string } } };
+  expect(parsed.laneId).toBe("plan");
+  expect(parsed.context.actors.map((a) => a.id)).toEqual(["planner", "plan-reviewer"]);
+
+  const human = await cli("lane", "context", "plan");
+  expect(human.code).toBe(0);
+  expect(human.stdout).toContain("planner (pi-planner)");
+  expect(human.stdout).toContain("gate: approve → implement");
+
+  // build a custom lane's context from flags
+  await cli("lane", "add", "Design");
+  const built = await cli(
+    "lane", "context", "design",
+    "--actor", "designer", "--author", "pi-designer", "--instructions", "Design {id}",
+    "--template", "# Spec", "--artifact", "design", "--approve-to", "plan", "--json",
+  );
+  expect(built.code).toBe(0);
+  const ctx = (JSON.parse(built.stdout) as { context: { actors: Array<{ id: string; author: string; instructions: string }>; template: string; artifact: string; gate: { approveTarget: string } } }).context;
+  expect(ctx.actors[0]).toMatchObject({ id: "designer", author: "pi-designer", instructions: "Design {id}" });
+  expect(ctx.template).toBe("# Spec");
+  expect(ctx.artifact).toBe("design");
+  expect(ctx.gate).toMatchObject({ approveTarget: "plan" });
+
+  // --from replaces the whole context from a JSON file
+  const file = join(dir, "ctx.json");
+  writeFileSync(
+    file,
+    JSON.stringify({ actors: [{ id: "designer", author: "pi-designer", instructions: "v2" }], triggers: [{ kind: "human-comment" }] }),
+  );
+  const loaded = JSON.parse((await cli("lane", "context", "design", "--from", file, "--json")).stdout) as {
+    context: { actors: Array<{ instructions: string }>; triggers: Array<{ kind: string }>; artifact?: string };
+  };
+  expect(loaded.context.actors[0].instructions).toBe("v2");
+  expect(loaded.context.triggers).toEqual([{ kind: "human-comment" }]);
+  expect(loaded.context.artifact).toBeUndefined();
+
+  // --clear resets to null
+  const cleared = JSON.parse((await cli("lane", "context", "design", "--clear", "--json")).stdout);
+  expect(cleared).toEqual({ laneId: "design", context: null });
+
+  // fixed non-workflow lanes refuse a context
+  const denied = await cli("lane", "context", "waiting", "--actor", "x");
+  expect(denied.code).toBe(1);
+  expect(denied.stderr).toContain("cannot host a workflow context");
+
+  // unknown lane subcommand names the full set
+  expect((await cli("lane", "frobnicate")).stderr).toContain("context");
+});

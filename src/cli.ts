@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
+import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type AgentConfig, type AgentThinking, type LaneActor, type LaneContext, type LaneTriggerRule, type Priority, type Task, type TaskPatch } from "./db";
 import { charterError, charterFor } from "./lane-workers";
 import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, ownedLines, overviewLine, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
 import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
@@ -50,6 +50,11 @@ usage:
   kanban stats [id]                     (board summary, or one card's lane times / cycle / gate metrics)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
   kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force] | limit <ref> <n|off>
+  kanban lane context <ref> [--json]        (a lane's workflow context: actors, triggers, exits, gate, cap)
+  kanban lane context <ref> --actor <id> --author <pi-name> --instructions <text|@file>
+                          [--template <text|@file>] [--artifact <name>] [--trigger <on-enter|human-comment>]…
+                          [--approve-to <lane>] [--cap <n>] [--provider <p>] [--model <m>] [--thinking <t>]
+                          [--test-gate | --no-test-gate]   (create or patch the context; --from <file> loads JSON; --clear removes it)
   kanban worker run <lane> [--focus <text>] [--author <name>]   (queue a lane worker run; drained by serve --agents)
   kanban worker ls [--lane <ref>] [--json]     (lane worker runs: id · lane · status · age · summary)
   kanban serve [--port <n>] [--open] [--agents] [--fg]  (backgrounds itself by default: kanban ps to check, kanban stop to stop; --fg stays foreground)
@@ -78,9 +83,9 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus"]);
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
-const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus", "actor", "instructions", "template", "artifact", "approve-to", "cap", "provider", "model", "thinking"]);
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear", "test-gate", "no-test-gate"]);
+const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag", "trigger"]); // repeatable: each occurrence appends one value
 
 export function parse(argv: string[]): Parsed {
   const flags: Record<string, string | true | string[]> = {};
@@ -124,6 +129,32 @@ const arr = (flags: Parsed["flags"], key: string): string[] => {
   const v = flags[key];
   return Array.isArray(v) ? v : [];
 };
+
+/** `@path` reads a file's contents; anything else is the literal value (lane context --instructions/--template). */
+const flagFileValue = (v: string): string => (v.startsWith("@") ? readFileSync(v.slice(1), "utf8") : v);
+
+/** Human-readable one-screen view of a lane's workflow context (`kanban lane context <ref>`). */
+function laneContextSummary(lane: { id: string; name: string }, ctx: LaneContext): string {
+  const lines: string[] = [`${lane.id}  ${lane.name}`];
+  if (ctx.artifact || ctx.template) {
+    lines.push(`  artifact: ${ctx.artifact ?? "—"}${ctx.template ? ` · template ${ctx.template.length} chars` : ""}`);
+  }
+  ctx.actors.forEach((a, i) => {
+    lines.push(`  actor ${i + 1}. ${a.id} (${a.author})${a.config?.model ? ` · ${a.config.model}` : ""}`);
+  });
+  lines.push(`  triggers: ${ctx.triggers.map((t) => t.kind).join(", ")}`);
+  if (ctx.exits?.length) {
+    lines.push(`  exits: ${ctx.exits.map((e) => `${e.action}${e.target ? `→${e.target}` : ""}`).join(", ")}`);
+  }
+  if (ctx.cap) lines.push(`  cap: ${ctx.cap.max} (${ctx.cap.scope})`);
+  if (ctx.gate) {
+    lines.push(
+      `  gate: approve → ${ctx.gate.approveTarget}${ctx.gate.requireArtifact ? ` · requires ${ctx.gate.requireArtifact}` : ""}${ctx.gate.rejectPrefix ? ` · reject "${ctx.gate.rejectPrefix}"` : ""}`,
+    );
+  }
+  if (ctx.testGate) lines.push("  test gate: on");
+  return lines.join("\n");
+}
 
 function jsonOut(value: unknown): void {
   out(JSON.stringify(value, null, 2));
@@ -1257,8 +1288,107 @@ async function main(): Promise<number> {
             else out(`${lane.id}  removed`);
             return 0;
           }
+          case "context": {
+            const ref = subRest[0] ?? "";
+            if (!ref) {
+              throw new KanbanError(
+                "usage: kanban lane context <ref> [--json] [--clear] [--from <file>] [--actor <id>] [--author <pi-name>] [--instructions <text|@file>] [--template <text|@file>] [--artifact <name>] [--trigger <on-enter|human-comment>]… [--approve-to <lane>] [--cap <n>] [--provider <p>] [--model <m>] [--thinking <t>] [--test-gate | --no-test-gate]",
+                "invalid",
+              );
+            }
+            const lane = db.resolveLane(ref);
+            if (flags.clear) {
+              db.setLaneContext(lane.id, null);
+              if (json) jsonOut({ laneId: lane.id, context: null });
+              else out(`${lane.id}  workflow context cleared`);
+              return 0;
+            }
+            const fromPath = str(flags, "from");
+            if (fromPath) {
+              let parsed: LaneContext;
+              try {
+                parsed = JSON.parse(readFileSync(fromPath, "utf8")) as LaneContext;
+              } catch (err) {
+                throw new KanbanError(`could not load a lane context from ${fromPath}: ${(err as Error).message}`, "invalid");
+              }
+              const saved = db.setLaneContext(lane.id, parsed);
+              if (json) jsonOut({ laneId: lane.id, context: saved });
+              else out(laneContextSummary(lane, saved!));
+              return 0;
+            }
+            if (str(flags, "actor") || str(flags, "instructions") || str(flags, "template") || str(flags, "artifact") || arr(flags, "trigger").length > 0 || str(flags, "approve-to") || str(flags, "cap") || str(flags, "provider") || str(flags, "model") || str(flags, "thinking") || flags["test-gate"] || flags["no-test-gate"] || flags.author !== undefined) {
+              const ctx: LaneContext = db.laneContext(lane.id) ?? { actors: [], triggers: [] };
+              ctx.actors = [...ctx.actors];
+              ctx.triggers = [...ctx.triggers];
+              // the actor the field flags patch: --actor names it (creating it when new),
+              // otherwise actors[0] when the lane already hosts one
+              const actorId = str(flags, "actor");
+              let actor: LaneActor | undefined = actorId ? ctx.actors.find((a) => a.id === actorId) : ctx.actors[0];
+              if (actorId && !actor) {
+                actor = { id: actorId, author: "", instructions: "" };
+                ctx.actors.push(actor);
+              }
+              if (!actor && (flags.author !== undefined || str(flags, "instructions") || str(flags, "provider") || str(flags, "model") || str(flags, "thinking"))) {
+                throw new KanbanError("--author/--instructions/--provider/--model/--thinking need --actor (or an existing actor on the lane)", "invalid");
+              }
+              if (actor) {
+                if (flags.author !== undefined) actor.author = str(flags, "author") ?? "";
+                const instr = str(flags, "instructions");
+                if (instr) actor.instructions = flagFileValue(instr);
+                const config: AgentConfig = { ...actor.config };
+                if (str(flags, "provider")) config.provider = str(flags, "provider");
+                if (str(flags, "model")) config.model = str(flags, "model");
+                if (str(flags, "thinking")) config.thinking = str(flags, "thinking") as AgentThinking;
+                if (Object.keys(config).length > 0) actor.config = config;
+              }
+              const template = str(flags, "template");
+              if (template) ctx.template = flagFileValue(template);
+              const artifact = str(flags, "artifact");
+              if (artifact) ctx.artifact = artifact;
+              const triggerValues = arr(flags, "trigger");
+              if (triggerValues.length > 0) {
+                ctx.triggers = triggerValues.map((t): LaneTriggerRule => {
+                  if (t !== "on-enter" && t !== "human-comment") {
+                    throw new KanbanError(`unknown trigger '${t}' (on-enter | human-comment)`, "invalid");
+                  }
+                  return { kind: t };
+                });
+              }
+              const approveTo = str(flags, "approve-to");
+              if (approveTo) ctx.gate = { ...ctx.gate, approveTarget: db.resolveLane(approveTo).id };
+              const capRaw = str(flags, "cap");
+              if (capRaw) {
+                const max = Number(capRaw);
+                if (!Number.isInteger(max) || max < 1 || max > 20) {
+                  throw new KanbanError("cap must be an integer from 1 to 20", "invalid");
+                }
+                ctx.cap = {
+                  max,
+                  scope: "thread",
+                  match: {},
+                  author: ctx.actors[0]?.author || `pi-${lane.id}`,
+                  message: "auto-cycles reached the cap of {max} — needs a human. Comment with feedback to re-run, or reject with feedback.",
+                };
+              }
+              if (flags["test-gate"]) ctx.testGate = true;
+              if (flags["no-test-gate"]) delete ctx.testGate;
+              // a fresh flag-built context arms on entry unless --trigger said otherwise
+              if (ctx.triggers.length === 0) ctx.triggers = [{ kind: "on-enter" }];
+              const saved = db.setLaneContext(lane.id, ctx);
+              if (json) jsonOut({ laneId: lane.id, context: saved });
+              else out(laneContextSummary(lane, saved!));
+              return 0;
+            }
+            const context = db.laneContext(lane.id);
+            if (json) jsonOut({ laneId: lane.id, context });
+            else if (context) out(laneContextSummary(lane, context));
+            else {
+              out(`${lane.id}  no workflow context — set one: kanban lane context ${lane.id} --actor <id> --author <pi-name> --instructions <text>`);
+            }
+            return 0;
+          }
           default:
-            throw new KanbanError(`unknown lane subcommand '${sub}' (ls | add | rename | rm | limit)`, "invalid");
+            throw new KanbanError(`unknown lane subcommand '${sub}' (ls | add | rename | rm | limit | context)`, "invalid");
         }
       }
 

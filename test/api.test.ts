@@ -1319,3 +1319,68 @@ test("PATCH /tasks/:id before anchors the move; bad anchor 409s", async () => {
   const self = await patch(a.id, { before: a.id });
   expect(self.status).toBe(400);
 });
+
+test("GET/PUT/DELETE /lanes/:id/context roundtrip and validation", async () => {
+  const app = createApp(db);
+
+  // the seeded plan context reads back
+  const get = await app.handle(new Request("http://localhost/lanes/plan/context"));
+  expect(get.status).toBe(200);
+  const seeded = (await get.json()) as { laneId: string; context: { actors: Array<{ id: string }> } | null };
+  expect(seeded.laneId).toBe("plan");
+  expect(seeded.context?.actors.map((a) => a.id)).toEqual(["planner", "plan-reviewer"]);
+
+  // PUT on a custom lane saves and surfaces in GET /board's laneContexts
+  db.createLane({ name: "Design" });
+  const body = {
+    actors: [{ id: "designer", author: "pi-designer", instructions: "Design {id}" }],
+    triggers: [{ kind: "on-enter" }],
+    artifact: "design",
+    gate: { approveTarget: "plan", requireArtifact: "design" },
+  };
+  const put = await app.handle(
+    new Request("http://localhost/lanes/design/context", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+  expect(put.status).toBe(200);
+  const saved = (await put.json()) as { laneId: string; context: { artifact: string } };
+  expect(saved.laneId).toBe("design");
+  expect(saved.context.artifact).toBe("design");
+  const board = (await (await app.handle(new Request("http://localhost/board"))).json()) as {
+    laneContexts: Record<string, { actors: Array<{ id: string }> }>;
+  };
+  expect(board.laneContexts.design?.actors[0]?.id).toBe("designer");
+
+  // empty actors fails the schema (422), a human author fails the rules (400), unknown lane 404s
+  const badSchema = await app.handle(
+    new Request("http://localhost/lanes/design/context", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actors: [] }),
+    }),
+  );
+  expect(badSchema.status).toBe(422);
+  const badAuthor = await app.handle(
+    new Request("http://localhost/lanes/design/context", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        actors: [{ id: "designer", author: "human", instructions: "x" }],
+        triggers: [{ kind: "on-enter" }],
+      }),
+    }),
+  );
+  expect(badAuthor.status).toBe(400);
+  const missing = await app.handle(new Request("http://localhost/lanes/nope/context"));
+  expect(missing.status).toBe(404);
+
+  // DELETE clears the lane back to a plain lane
+  const del = await app.handle(new Request("http://localhost/lanes/design/context", { method: "DELETE" }));
+  expect(del.status).toBe(200);
+  expect(((await del.json()) as { laneId: string; context: null }).context).toBeNull();
+  const reread = await app.handle(new Request("http://localhost/lanes/design/context"));
+  expect(((await reread.json()) as { context: null }).context).toBeNull();
+});
