@@ -14,6 +14,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 - `data/kanban.db` — SQLite DB (gitignored); `KANBAN_DB` env var overrides the path (tests use this)
 - `worker_pools` table (`src/db.ts`) + `/pools` routes (`src/app.ts`) — parallel worker pools for the serve --agents loop
 - `lane_events` table (`src/db.ts`) + `/stats` route (`src/app.ts`) + `kanban stats` — audit trail and board analytics
+- Lane workflows — `lanes.context` (`LaneContext` in `src/db.ts`, seeded by `defaultLaneContext`) drives the auto-agent loop (`src/autoreview.ts` `evaluateLaneContext`): actor chains, instructions, templates, triggers/exits/gates/caps per lane; `kanban lane context` (`src/cli.ts`) + `/lanes/:id/context` (`src/app.ts`) edit it, the web Agents panel groups by lane, `agent_configs` and lane actor configs stay bidirectionally synced
 - WIP limits — `lanes.wip_limit` column (`src/db.ts`), `kanban lane limit` (`src/cli.ts`), `wip-over-limit` in `kanban check`, lane count chip in the web UI
 - Serve staleness — `/health` reports `version`, `pid`, `git {commit, head, dirty}` (`src/version.ts`); header `⟳ stale` chip (`web/src/lib/service.svelte.ts`) and `kanban check [--port <n>]` flag a lagging, down, or version-split serve; the chip and settings → restart service rebuild + self-respawn it
 
