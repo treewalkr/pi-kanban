@@ -884,6 +884,9 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     try {
       const fresh = db.tasks().find((t) => t.id === job.task.id);
       if (!fresh) return;
+      // per-card repo routing (project route): every role and mode spawns where
+      // the card's project points; un-routed tags fall back to the serve cwd
+      const cwd = db.projectCwd(fresh.project) ?? opts.cwd;
       if (job.mode === "resume") {
         if (db.waiting(job.task.id) !== "dead") return;
       } else if (job.mode === "elaborate") {
@@ -892,25 +895,29 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         if (roleFor(fresh) !== job.role) return; // state moved on while queued
       }
       if (job.role === "reviewer" && gate) {
-        inFlight.add(job.task.id); // hold the card so a scan mid-gate can't enqueue a duplicate
-        log(`reviewer ${job.task.id}: running pre-spawn test gate`);
-        let res: GateResult;
-        try {
-          res = await gate(opts.cwd, gateTimeoutMs);
-        } catch (err) {
-          log(`reviewer ${job.task.id}: gate could not run (${(err as Error).message}) — reviewing anyway`);
-          res = { ok: true, output: "" }; // fail-open: the gate is best-effort
-        }
-        inFlight.delete(job.task.id);
-        if (stopped) return;
-        if (!res.ok) {
-          db.comment(job.task.id, {
-            author: REVIEWER_AUTHOR,
-            kind: "question",
-            body: `pre-review gate: \`bun test\` failed — no reviewer session spawned.\n\n\`\`\`\n${res.output}\n\`\`\`\nFix the tests, then comment on this card to re-trigger review.`,
-          });
-          log(`reviewer ${job.task.id}: gate red — no session spawned`);
-          return; // the question parks the card in waiting — the lane change disarms it (roleFor ignores waiting)
+        if (db.getProject(fresh.project)?.testGate === false) {
+          log(`reviewer ${fresh.id}: test gate off for project '${fresh.project}' — skipping`);
+        } else {
+          inFlight.add(job.task.id); // hold the card so a scan mid-gate can't enqueue a duplicate
+          log(`reviewer ${job.task.id}: running pre-spawn test gate`);
+          let res: GateResult;
+          try {
+            res = await gate(cwd, gateTimeoutMs);
+          } catch (err) {
+            log(`reviewer ${job.task.id}: gate could not run (${(err as Error).message}) — reviewing anyway`);
+            res = { ok: true, output: "" }; // fail-open: the gate is best-effort
+          }
+          inFlight.delete(job.task.id);
+          if (stopped) return;
+          if (!res.ok) {
+            db.comment(job.task.id, {
+              author: REVIEWER_AUTHOR,
+              kind: "question",
+              body: `pre-review gate: \`bun test\` failed — no reviewer session spawned.\n\n\`\`\`\n${res.output}\n\`\`\`\nFix the tests, then comment on this card to re-trigger review.`,
+            });
+            log(`reviewer ${job.task.id}: gate red — no session spawned`);
+            return; // the question parks the card in waiting — the lane change disarms it (roleFor ignores waiting)
+          }
         }
       }
       if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {
@@ -966,7 +973,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       };
       let result: SpawnResult = { code: 1 };
       try {
-        result = await spawnFn(job, { cwd: opts.cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, stallMs, config, log, emit, track: jobTrack });
+        result = await spawnFn(job, { cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, stallMs, config, log, emit, track: jobTrack });
         if (result.stalled) emit(`stalled — no output for ${durationFor((result.stalledAfterMs ?? 0) / 1000)}, killed`);
         if (result.timedOut) emit("timed out — killed");
         if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
@@ -1125,7 +1132,11 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   }
 
   const stopWatch = db.watch(() => scan(), opts.watchIntervalMs ?? 300);
-  log(`enabled — agents run in ${opts.cwd}, stall ${Math.round(stallMs / 60_000)} min / cap ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}, test gate ${gate ? "on" : "off"}`);
+  const routed = db.listProjects().filter((p) => p.repoPath).length;
+  log(
+    `enabled — agents run in ${opts.cwd}${routed > 0 ? ` +${routed} routed project${routed === 1 ? "" : "s"}` : ""}, ` +
+      `stall ${Math.round(stallMs / 60_000)} min / cap ${Math.round(timeoutMs / 60_000)} min, block cap ${maxBlocks}, test gate ${gate ? "on" : "off"}`,
+  );
   scan(); // cards already waiting get picked up right away
 
   return {

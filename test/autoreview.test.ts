@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2588,5 +2588,120 @@ describe("defaultGate", () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("project routing", () => {
+  function recordingSpawn() {
+    const calls: Array<{ job: AgentJob; ctx: SpawnContext; finish: (result: SpawnResult) => void }> = [];
+    const spawnFn: SpawnFn = (job, ctx) =>
+      new Promise<SpawnResult>((resolve) => calls.push({ job, ctx, finish: resolve }));
+    return { calls, spawnFn };
+  }
+
+  test("per-card spawn cwd: routed project spawns in its repo; un-routed falls back to serve cwd", async () => {
+    const { dbFile, writer: w } = setup();
+    const alphaDir = join(dir, "alpha-repo");
+    mkdirSync(alphaDir);
+    w.setProjectRepo("alpha", alphaDir);
+    const routed = w.createTask({ title: "routed", lane: "review", project: "alpha" });
+    w.createComment(routed.id, { author: BUILDER_AUTHOR, kind: "handoff", body: "done, please review" });
+
+    const { calls, spawnFn } = recordingSpawn();
+    withAgentEnv({}, () => start(spawnFn, dbFile));
+    await sleep(150);
+    expect(calls.map((c) => [c.job.task.id, c.ctx.cwd])).toEqual([[routed.id, alphaDir]]);
+
+    // an un-routed tag keeps the serve launch dir
+    const fallback = w.createTask({ title: "fallback", lane: "review", project: "beta" });
+    w.createComment(fallback.id, { author: BUILDER_AUTHOR, kind: "handoff", body: "done, please review" });
+    await sleep(150);
+    expect(calls).toHaveLength(1); // serial default slot — the routed spawn is still in flight
+    calls[0].finish({ code: 0 });
+    await sleep(200);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].job.task.id).toBe(fallback.id);
+    expect(calls[1].ctx.cwd).toBe(dir);
+
+    // resume mode routes through the same per-card cwd
+    const dead = w.createTask({ title: "dead builder", lane: "implement", project: "alpha" });
+    w.createComment(dead.id, { author: BUILDER_AUTHOR, kind: "comment", body: "session died: crash" });
+    w.setCardSession(dead.id, "builder", "kanban-x-builder-1");
+    w.queueResume(dead.id);
+    calls[1].finish({ code: 0 });
+    await sleep(200);
+    const resume = calls.find((c) => c.job.task.id === dead.id && c.job.mode === "resume");
+    expect(resume).toBeDefined();
+    expect(resume!.ctx.cwd).toBe(alphaDir);
+  });
+
+  test("startup banner reports fallback cwd and routed project count", () => {
+    const { dbFile, writer: w } = setup();
+    const { spawnFn } = fakeSpawn();
+    const boot = (): string[] => {
+      const lines: string[] = [];
+      const loopDb = new KanbanDb(dbFile);
+      const handle = startAutoReview({ db: loopDb, cwd: dir, spawnFn, watchIntervalMs: 50, gate: null, log: (m) => lines.push(m) });
+      handle.stop();
+      loopDb.close();
+      return lines;
+    };
+
+    expect(boot()[0]).toBe(
+      `enabled — agents run in ${dir}, stall 10 min / cap 120 min, block cap 3, test gate off`,
+    );
+
+    const repo1 = join(dir, "repo-1");
+    const repo2 = join(dir, "repo-2");
+    mkdirSync(repo1);
+    mkdirSync(repo2);
+    w.setProjectRepo("alpha", repo1);
+    w.setProjectRepo("beta", repo2);
+    w.setProjectGate("gamma", true); // registered but un-routed — not counted
+
+    expect(boot()[0]).toBe(
+      `enabled — agents run in ${dir} +2 routed projects, stall 10 min / cap 120 min, block cap 3, test gate off`,
+    );
+  });
+
+  test("pre-review gate runs in the card's repo and skips on test_gate=0", async () => {
+    const { dbFile, writer: w } = setup();
+    const alphaDir = join(dir, "alpha-repo");
+    mkdirSync(alphaDir);
+    w.setProjectRepo("alpha", alphaDir);
+    const routed = w.createTask({ title: "gated routed", lane: "review", project: "alpha" });
+    w.createComment(routed.id, { author: BUILDER_AUTHOR, kind: "handoff", body: "done, please review" });
+
+    const gateCalls: string[] = [];
+    const gateFn: GateFn = async (cwd) => {
+      gateCalls.push(cwd);
+      return { ok: true, output: "" };
+    };
+    const logs: string[] = [];
+    const { calls, spawnFn } = recordingSpawn();
+    withAgentEnv({}, () => start(spawnFn, dbFile, { gate: gateFn, log: (m) => logs.push(m) }));
+    await sleep(150);
+    expect(gateCalls).toEqual([alphaDir]);
+    expect(calls).toHaveLength(1);
+    calls[0].finish({ code: 0 });
+    await sleep(150);
+
+    // an un-routed tag gates on the serve cwd
+    const fallback = w.createTask({ title: "gated fallback", lane: "review", project: "beta" });
+    w.createComment(fallback.id, { author: BUILDER_AUTHOR, kind: "handoff", body: "done, please review" });
+    await sleep(200);
+    expect(gateCalls).toEqual([alphaDir, dir]);
+    calls[1].finish({ code: 0 });
+    await sleep(150);
+
+    // test_gate=0 skips the gate; the reviewer still spawns
+    w.setProjectGate("beta", false);
+    const skipped = w.createTask({ title: "gate skipped", lane: "review", project: "beta" });
+    w.createComment(skipped.id, { author: BUILDER_AUTHOR, kind: "handoff", body: "done, please review" });
+    await sleep(200);
+    expect(gateCalls).toHaveLength(2);
+    const skipSpawn = calls.find((c) => c.job.task.id === skipped.id);
+    expect(skipSpawn).toBeDefined();
+    expect(logs).toContain(`reviewer ${skipped.id}: test gate off for project 'beta' — skipping`);
   });
 });
