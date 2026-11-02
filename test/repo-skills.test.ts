@@ -90,4 +90,25 @@ test("each skill teaches its pinned procedure points", () => {
   expect(release).toContain("gh release create");
 });
 
+test("AGENTS.md carries the split rule and Layout points at skills/", () => {
+  const agents = readFileSync(join(root, "AGENTS.md"), "utf8");
 
+  const section = agents.split("## Where knowledge lives")[1]?.split("## ")[0];
+  expect(section, "## Where knowledge lives section present").toBeDefined();
+  expect(section).toContain("`AGENTS.md`");
+  expect(section).toContain("`skills/<name>/SKILL.md`");
+  expect(section).toContain("`REVIEW.md`");
+  expect(section).toMatch(/memory/i);
+
+  const layout = agents.split("## Layout")[1].split("## ")[0];
+  expect(layout).toContain("`skills/`");
+  expect(layout).toContain("~/.agents/skills");
+});
+
+test("GLOSSARY.md defines Repo skill with avoid-terms", () => {
+  const glossary = readFileSync(join(root, "GLOSSARY.md"), "utf8");
+  const term = glossary.split("**Repo skill**:")[1]?.split(/\n\*\*/)[0] ?? "";
+  expect(term, "**Repo skill** term present").toBeDefined();
+  expect(term).toContain("skills/<name>/");
+  expect(term).toContain("Avoid");
+});
