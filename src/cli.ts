@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
 import { charterError, charterFor } from "./lane-workers";
@@ -52,7 +52,7 @@ usage:
   kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force] | limit <ref> <n|off>
   kanban worker run <lane> [--focus <text>] [--author <name>]   (queue a lane worker run; drained by serve --agents)
   kanban worker ls [--lane <ref>] [--json]     (lane worker runs: id · lane · status · age · summary)
-  kanban serve [--port <n>] [--open] [--agents]
+  kanban serve [--port <n>] [--open] [--agents] [--fg]  (backgrounds itself by default: kanban ps to check, kanban stop to stop; --fg stays foreground)
   kanban stop [--port <n>]                     (SIGTERM the kanban server; graceful — traces in-flight agents)
   kanban ps [--json]                           (running serves on any port + their live agent sessions + abandoned leases)
   kanban help | version
@@ -79,7 +79,7 @@ export interface Parsed {
 }
 
 const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus"]);
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
 export function parse(argv: string[]): Parsed {
@@ -277,22 +277,30 @@ function pidAlive(pid: number): boolean {
   }
 }
 
+/** /health vouched as kanban: ok:true with a numeric pid and string version.
+ * Kanban's /health always carries both; look-alikes (a docker program-tracker
+ * answering {"ok":true} on :4000) do not. */
+async function vouchedHealth(port: number, timeoutMs = 1000): Promise<Health | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    const body = (await res.json().catch(() => null)) as Health | null;
+    if (body && body.ok === true && typeof body.pid === "number" && typeof body.version === "string") {
+      return body;
+    }
+  } catch {
+    /* down */
+  }
+  return null;
+}
+
 /** Every kanban serve on this machine, any port: loopback listeners probed with
- * /health, kept only when it vouches ok:true with a numeric pid and string
- * version — kanban's /health always carries both, while look-alikes (a docker
- * program-tracker answering {"ok":true} on :4000) do not. */
+ * a vouched /health (see vouchedHealth). */
 export async function scanServes(): Promise<ServeInstance[]> {
   const found = await Promise.all(
     listenPorts().map(async (port): Promise<ServeInstance | null> => {
-      try {
-        const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(500) });
-        const body = (await res.json().catch(() => null)) as Health | null;
-        if (!body || body.ok !== true) return null;
-        if (typeof body.pid !== "number" || typeof body.version !== "string") return null;
-        return { port, pid: body.pid, version: body.version, booted: body.booted ?? null, git: body.git ?? null };
-      } catch {
-        return null; // down or not kanban
-      }
+      const body = await vouchedHealth(port, 500);
+      if (!body) return null;
+      return { port, pid: body.pid!, version: body.version!, booted: body.booted ?? null, git: body.git ?? null };
     }),
   );
   return found
@@ -368,14 +376,60 @@ async function main(): Promise<number> {
 
   if (cmd === "serve") {
     const port = Number(str(flags, "port") ?? process.env.PORT ?? 4600);
-    if (flags.open) setTimeout(() => Bun.spawn(["open", `http://127.0.0.1:${port}`]), 800);
-    // serve in-process: one process, one cmdline — killing `kanban serve` kills
-    // the server and its agent loop, no orphaned wrapper children
-    process.env.PORT = String(port);
-    applyServeEnv(flags);
-    const { boot } = await import("./index");
-    await boot(); // resolves after listen; the listener keeps the process alive
-    return 0;
+    if (flags.fg) {
+      // --fg: run in-process — the daemon child's body and the restart respawn
+      // target. One process, one cmdline: killing it kills the server and its
+      // agent loop, no orphaned wrapper children.
+      if (flags.open) setTimeout(() => Bun.spawn(["open", `http://127.0.0.1:${port}`]), 800);
+      process.env.PORT = String(port);
+      applyServeEnv(flags);
+      const { boot } = await import("./index");
+      await boot(); // resolves after listen; the listener keeps the process alive
+      return 0;
+    }
+    // background by default: detach an --fg child and report. Idempotent — a
+    // serve already on the port is success, not an error.
+    if (listenerPids(port).length > 0) {
+      const health = await vouchedHealth(port);
+      if (health) {
+        out(`serve already running — pid ${health.pid} :${port}  (kanban ps | kanban stop)`);
+        return 0;
+      }
+      throw new KanbanError(
+        `port ${port} is held by a non-kanban server — stop it yourself (lsof -nP -iTCP:${port} -sTCP:LISTEN)`,
+        "conflict",
+      );
+    }
+    const log = `/tmp/kanban-serve-${port}.log`;
+    const logFd = openSync(log, "a");
+    // --open stays with the wrapper: it opens only after /health is up, not on a
+    // blind 800ms timer
+    const childArgs = ["serve", "--fg", ...rest.filter((a) => a !== "--open")];
+    const child = Bun.spawn([process.execPath, import.meta.path, ...childArgs], {
+      detached: true,
+      stdin: "ignore",
+      stdout: logFd,
+      stderr: logFd,
+      env: { ...process.env, PORT: String(port) },
+    });
+    child.unref();
+    closeSync(logFd);
+    const childPid = child.pid ?? 0;
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      const health = await vouchedHealth(port, 400);
+      if (health) {
+        if (flags.open) Bun.spawn(["open", `http://127.0.0.1:${port}`]);
+        out(`${c.green("✓")} serve running in background — pid ${health.pid} :${port}`);
+        out(c.dim(`  log ${log} · kanban ps · kanban stop`));
+        return 0;
+      }
+      if (!pidAlive(childPid)) break; // child died — report from its log below
+    }
+    out(c.red(`serve failed to boot on :${port} — last log lines (${log}):`));
+    const tail = readFileSync(log, "utf8").split("\n").filter(Boolean).slice(-5);
+    for (const line of tail) out(c.dim(line));
+    return 1;
   }
 
   if (cmd === "stop") {

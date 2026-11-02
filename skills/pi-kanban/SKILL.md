@@ -179,7 +179,7 @@ kanban check [--json]                                                 # board-he
 kanban stats [id] [--json]                                           # board summary, or one card's lane times / cycle / gate metrics
 kanban rm <id> [--force]                                              # delete card (a parent needs --force; cascades)
 kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force]  # manage lanes
-kanban serve [--port <n>] [--open] [--agents]                 # start web UI (default 127.0.0.1:4600); --agents: pi plans Plan-lane cards and reviews Review-lane cards
+kanban serve [--port <n>] [--open] [--agents] [--fg]  # start web UI (default 127.0.0.1:4600); backgrounds itself (kanban ps / kanban stop); --agents: pi plans Plan-lane cards and reviews Review-lane cards
 kanban ps [--json]                                                    # running serves on any port + their live agent sessions + abandoned leases
 kanban help | version                                                 # CLI help / version
 ```

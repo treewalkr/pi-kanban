@@ -1148,6 +1148,53 @@ test("ps flags a lease whose serve died mid-build", async () => {
   expect(data.abandonedLeases.some((l) => l.taskId === "zzps1" && l.role === "builder")).toBe(true);
 });
 
+/** A free scratch port for serve tests — above the repro range, never 4600. */
+function freePort(): number {
+  for (let p = 4641; p <= 4660; p++) {
+    const out = Bun.spawnSync(["lsof", "-nP", `-iTCP:${p}`, "-sTCP:LISTEN"]);
+    if (out.stdout.toString().trim() === "") return p;
+  }
+  throw new Error("no free port in 4641-4660 for serve test");
+}
+
+test("serve backgrounds itself; second serve is idempotent; stop kills it", async () => {
+  const port = freePort();
+  const log = `/tmp/kanban-serve-${port}.log`;
+  try {
+    const res = await cli("serve", "--port", String(port));
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("serve running in background");
+    expect(res.stdout).toContain(`:${port}`);
+    expect(res.stdout).toContain(log);
+
+    const health = (await (
+      await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) })
+    ).json()) as { ok: boolean; pid: number };
+    expect(health.ok).toBe(true);
+    expect(res.stdout).toContain(`pid ${health.pid}`);
+
+    // idempotent: starting again reports the running serve, exits 0
+    const again = await cli("serve", "--port", String(port));
+    expect(again.code).toBe(0);
+    expect(again.stdout).toContain("already running");
+    expect(again.stdout).toContain(`pid ${health.pid}`);
+  } finally {
+    const stopped = await cli("stop", "--port", String(port));
+    expect(stopped.code).toBe(0);
+  }
+});
+
+test("serve refuses a port held by a non-kanban server", async () => {
+  const squatter = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("hi") });
+  try {
+    const res = await cli("serve", "--port", String(squatter.port));
+    expect(res.code).toBe(1);
+    expect(res.stderr).toContain("non-kanban");
+  } finally {
+    squatter.stop(true);
+  }
+});
+
 test("mv promotes a backlog card to plan; show and ls confirm", async () => {
   const added = await cli("add", "promote me", "--lane", "backlog", "--json");
   expect(added.code).toBe(0);
