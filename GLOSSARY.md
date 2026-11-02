@@ -65,6 +65,18 @@ The card a move is positioned relative to (`mv <id> <lane> --before <anchorId>`)
 so placement survives concurrent edits instead of drifting like an index.
 _Avoid_: Reference card, pivot, position marker
 
+**Slot**:
+The card-sized opening rendered at the drop hint while dragging — the dragged
+card's own element shown at the target position while a lifted clone follows
+the cursor. Replaces the old 2px drop-gap line.
+_Avoid_: Drop gap, placeholder, spacer
+
+**Ghost**:
+The inert DOM clone of the dragged card that follows the cursor during a
+pointer drag, removed on settle or cancel; `pointer-events: none` keeps hit
+testing honest.
+_Avoid_: Drag image, browser ghost, floating card
+
 **Gate**:
 The human-only decision point (`approve` or `reject`) between plan review and implementation that agents are forbidden to run themselves.
 _Avoid_: Checkpoint, sign-off, auto-approval
