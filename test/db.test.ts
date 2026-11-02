@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { DEFAULT_LANES, PLAN_REVIEWER_AUTHOR, BUILDER_AUTHOR, KanbanDb, KanbanError } from "../src/db";
+import { DEFAULT_LANES, PLAN_REVIEWER_AUTHOR, BUILDER_AUTHOR, KanbanDb, KanbanError, type LaneContext } from "../src/db";
 
 let dir = "";
 let db: KanbanDb;
@@ -2066,4 +2066,215 @@ test("projects: setProjectRepo rejects relative, missing, and non-directory path
   }
   // names are trimmed, not rejected for surrounding space
   expect(db.setProjectRepo("  a  ", dir).name).toBe("a");
+});
+
+// ---------- lane contexts (card 3n96c) ----------
+
+test("laneContext: seeded defaults reproduce the pipeline shape; plain lanes read null", () => {
+  const plan = db.laneContext("plan")!;
+  expect(plan.artifact).toBe("plan");
+  expect(plan.template).toContain("### Goal");
+  expect(plan.actors.map((a) => a.id)).toEqual(["planner", "plan-reviewer"]);
+  expect(plan.actors.map((a) => a.author)).toEqual(["pi-planner", PLAN_REVIEWER_AUTHOR]);
+  expect(plan.actors[0].instructions).toContain("You are pi-planner. Kanban card {id}");
+  expect(plan.actors[0].resumeEnding).toContain("kanban attach {id} <plan-file>");
+  expect(plan.actors[0].deathLabel).toBe("auto-plan");
+  expect(plan.triggers).toEqual([{ kind: "on-enter" }, { kind: "human-comment" }]);
+  expect(plan.exits?.map((e) => e.action)).toEqual(["next-actor", "rerun-first", "disarm"]);
+  expect(plan.cap).toMatchObject({ max: 2, scope: "since-human", author: PLAN_REVIEWER_AUTHOR });
+  expect(plan.gate).toEqual({
+    approveTarget: "implement",
+    approveOwner: BUILDER_AUTHOR,
+    requireArtifact: "plan",
+    rejectPrefix: "plan rejected",
+  });
+
+  const impl = db.laneContext("implement")!;
+  expect(impl.actors.map((a) => a.id)).toEqual(["builder"]);
+  expect(impl.actors[0].approvalInstructions).toContain("had its plan approved");
+  expect(impl.triggers).toEqual([
+    { kind: "comment", commentKind: "review", author: "pi-reviewer", targetActor: "builder" },
+    { kind: "human-comment" },
+  ]);
+  expect(impl.cap).toMatchObject({ max: 3, scope: "thread", author: "pi-reviewer" });
+  expect(impl.testGate).toBeUndefined();
+
+  const review = db.laneContext("review")!;
+  expect(review.actors.map((a) => a.id)).toEqual(["reviewer"]);
+  expect(review.triggers).toEqual([{ kind: "on-enter" }]);
+  expect(review.testGate).toBe(true);
+  expect(review.gate).toBeUndefined();
+
+  for (const plain of ["waiting", "backlog", "done", "archive", "no-such-lane"]) {
+    expect(db.laneContext(plain)).toBeNull();
+  }
+  expect(Object.keys(db.laneContexts()).sort()).toEqual(["implement", "plan", "review"]);
+  expect(db.board().laneContexts).toEqual(db.laneContexts());
+});
+
+test("setLaneContext: custom lane roundtrip, clear, and validation rejections", () => {
+  const lane = db.createLane({ name: "Design" });
+  expect(db.laneContext(lane.id)).toBeNull();
+
+  const ctx: LaneContext = {
+    artifact: "design",
+    template: "# Design Spec",
+    actors: [{ id: "designer", author: "pi-designer", instructions: 'Design {id} "{title}"' }],
+    triggers: [{ kind: "on-enter" }],
+    gate: { approveTarget: "plan" },
+  };
+  const saved = db.setLaneContext(lane.id, ctx);
+  expect(saved).toMatchObject({ artifact: "design", template: "# Design Spec" });
+  expect(db.laneContext("design")?.actors[0]?.id).toBe("designer");
+  expect(db.laneContexts()).toHaveProperty("design");
+
+  expect(db.setLaneContext(lane.id, null)).toBeNull();
+  expect(db.laneContext(lane.id)).toBeNull();
+  expect(db.laneContexts()).not.toHaveProperty("design");
+
+  for (const fixed of ["waiting", "done", "archive"]) {
+    expect(() => db.setLaneContext(fixed, { ...ctx })).toThrow(`lane '${fixed}' cannot host a workflow context`);
+  }
+
+  const actor = { id: "designer", author: "pi-designer", instructions: "d" };
+  const onEnter = [{ kind: "on-enter" as const }];
+  expect(() => db.setLaneContext(lane.id, { actors: [], triggers: onEnter })).toThrow("1-4 actors");
+  expect(() => db.setLaneContext(lane.id, { actors: [{ ...actor, id: "Bad Actor" }], triggers: onEnter })).toThrow(
+    "lowercase kebab",
+  );
+  expect(() =>
+    db.setLaneContext(lane.id, { actors: [actor, { ...actor, author: "pi-two" }], triggers: onEnter }),
+  ).toThrow("duplicate actor id 'designer'");
+  expect(() => db.setLaneContext(lane.id, { actors: [{ ...actor, author: "human" }], triggers: onEnter })).toThrow(
+    "actor author must start with 'pi-'",
+  );
+  expect(() => db.setLaneContext(lane.id, { actors: [{ ...actor, instructions: "   " }], triggers: onEnter })).toThrow(
+    "actor instructions must not be empty",
+  );
+  expect(() => db.setLaneContext(lane.id, { actors: [actor], triggers: [] })).toThrow("at least one trigger");
+  expect(() => db.setLaneContext(lane.id, { actors: [actor], triggers: onEnter, artifact: "session" })).toThrow(
+    "invalid artifact name 'session'",
+  );
+  expect(() =>
+    db.setLaneContext(lane.id, {
+      actors: [actor],
+      triggers: onEnter,
+      cap: { max: 0, scope: "thread", match: {}, author: "pi-designer", message: "m" },
+    }),
+  ).toThrow("cap max must be an integer from 1 to 20");
+  expect(() =>
+    db.setLaneContext(lane.id, {
+      actors: [actor],
+      triggers: onEnter,
+      cap: { max: 3, scope: "thread", match: {}, author: "human", message: "m" },
+    }),
+  ).toThrow("cap author must start with 'pi-'");
+  expect(() => db.setLaneContext(lane.id, { actors: [actor], triggers: onEnter, gate: { approveTarget: "  " } })).toThrow(
+    "gate needs an approve target lane",
+  );
+});
+
+test("setLaneContext and setAgentConfig keep agent_configs and lane actor configs in sync", () => {
+  // loop roles fold into the seeded lane actors (both surfaces, one state)
+  db.setAgentConfig("planner", { model: "p-model", thinking: "max" });
+  expect(db.laneContext("plan")!.actors[0].config).toEqual({ model: "p-model", thinking: "max" });
+  expect(db.agentConfig("planner")).toEqual({ model: "p-model", thinking: "max" });
+
+  // setLaneContext writes actor configs back to agent_configs
+  const ctx = db.laneContext("plan")!;
+  ctx.actors[1]!.config = { model: "pr-model" };
+  db.setLaneContext("plan", ctx);
+  expect(db.agentConfig("plan-reviewer")).toEqual({ model: "pr-model" });
+  expect(db.agentConfig("planner")).toEqual({ model: "p-model", thinking: "max" }); // untouched actors persist
+
+  // custom lane actors are valid agent-config roles
+  const lane = db.createLane({ name: "Design" });
+  db.setLaneContext(lane.id, { actors: [{ id: "designer", author: "pi-designer", instructions: "d" }], triggers: [{ kind: "on-enter" }] });
+  db.setAgentConfig("designer", { model: "d-model" });
+  expect(db.laneContext(lane.id)!.actors[0].config).toEqual({ model: "d-model" });
+  expect(db.agentConfig("designer")).toEqual({ model: "d-model" });
+
+  // utility roles stay in agent_configs; truly unknown roles still refuse
+  expect(db.agentConfig("manager")).toBeNull();
+  expect(() => db.setAgentConfig("chief", {})).toThrow(KanbanError);
+});
+
+test("custom gated lane: planReview and approve/reject route by context", () => {
+  const lane = db.createLane({ name: "Design" });
+  db.setLaneContext(lane.id, {
+    artifact: "design",
+    actors: [
+      { id: "designer", author: "pi-designer", instructions: "d" },
+      { id: "design-reviewer", author: "pi-design-reviewer", instructions: "dr" },
+    ],
+    triggers: [{ kind: "on-enter" }],
+    gate: { approveTarget: "plan", approveOwner: BUILDER_AUTHOR, requireArtifact: "design", rejectPrefix: "design rejected" },
+  });
+  const task = db.createTask({ title: "gfx", lane: lane.id });
+  expect(() => db.approveTask(task.id)).toThrow(/no attached design to approve/);
+  db.attach(task.id, "design", "# spec");
+  expect(() => db.planReview(task.id, { verdict: "pass" })).toThrow(/needs a message/);
+
+  const { task: parked } = db.planReview(task.id, { verdict: "pass", message: "solid", author: "pi-design-reviewer" });
+  expect(parked.laneId).toBe("waiting");
+  expect(parked.previousLane).toBe(lane.id);
+  expect(db.waiting(task.id)).toBe("gate");
+
+  const { task: moved, comment } = db.approveTask(task.id);
+  expect(moved.laneId).toBe("plan");
+  expect(moved.owner).toBe(BUILDER_AUTHOR);
+  expect(comment.body).toBe("design v1 approved — build it");
+
+  const t2 = db.createTask({ title: "gfx2", lane: lane.id });
+  db.attach(t2.id, "design", "# spec v2");
+  db.planReview(t2.id, { verdict: "pass", message: "ok", author: "pi-design-reviewer" });
+  const { task: returned, comment: rejection } = db.rejectTask(t2.id, "redo the layout");
+  expect(returned.laneId).toBe(lane.id);
+  expect(returned.previousLane).toBeNull();
+  expect(rejection.body).toBe("design rejected: redo the layout");
+
+  // a lane without a gate context still refuses the gate (message pinned by earlier tests)
+  const plain = db.createTask({ title: "plain", lane: lane.id });
+  db.setLaneContext(lane.id, null);
+  expect(() => db.approveTask(plain.id)).toThrow(/not in the plan lane/);
+});
+
+test("migrates a pre-context board: adds lanes.context, seeds defaults folding agent_configs, reads stay write-free", () => {
+  const file = join(dir, "legacy.db");
+  {
+    const w = new KanbanDb(file);
+    w.setAgentConfig("planner", { model: "p-model", thinking: "max" });
+    w.setAgentConfig("plan-reviewer", { model: "pr-model" });
+    w.setAgentConfig("builder", { model: "b-model" });
+    w.setAgentConfig("reviewer", { model: "r-model" });
+    w.setAgentConfig("elaborator", { model: "e-model" });
+    w.close();
+    // rewind to the pre-context shape: drop the column and the one-time guard
+    const raw = new Database(file);
+    raw.exec("ALTER TABLE lanes DROP COLUMN context");
+    raw.exec("DELETE FROM board_state WHERE key = 'lane_contexts_seeded'");
+    raw.close();
+  }
+  const legacy = new KanbanDb(file);
+  const plan = legacy.laneContext("plan")!;
+  expect(plan.actors.map((a) => a.id)).toEqual(["planner", "plan-reviewer"]);
+  expect(plan.actors[0].config).toEqual({ model: "p-model", thinking: "max" });
+  expect(plan.actors[1].config).toEqual({ model: "pr-model" });
+  expect(legacy.laneContext("implement")!.actors[0].config).toEqual({ model: "b-model" });
+  expect(legacy.laneContext("review")!.actors[0].config).toEqual({ model: "r-model" });
+  expect(legacy.agentConfig("elaborator")).toEqual({ model: "e-model" });
+  legacy.close();
+
+  // the seeded flag makes later opens (even pure reads) write-free
+  const dataVersion = () => {
+    const d = new Database(file);
+    const v = (d.query("PRAGMA data_version").get() as { data_version: number }).data_version;
+    d.close();
+    return v;
+  };
+  const before = dataVersion();
+  const reader = new KanbanDb(file);
+  expect(reader.laneContext("plan")).not.toBeNull();
+  reader.close();
+  expect(dataVersion()).toBe(before);
 });
