@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -461,5 +461,45 @@ test("manager handle idle-expires and resumes with a fresh overview seed", async
   expect(prompts2[0]).toContain("Snapshot of the board as this session starts:");
   expect(prompts2[0]).toContain("later card");
   expect(prompts2[0]).toContain("Review 1");
+  await manager.disposeAll();
+});
+
+test("per-card chat cwd: routed card spawns in its project repo; board manager on fallback", async () => {
+  const alphaDir = join(dir, "alpha-repo");
+  mkdirSync(alphaDir);
+  db.setProjectRepo("alpha", alphaDir);
+  const routed = db.createTask({ title: "routed card", project: "alpha" });
+  const fallback = db.createTask({ title: "fallback card", project: "beta" }); // un-routed tag
+
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const sessionDir = join(dir, "sessions");
+  const manager = new ChatManager({ cwd: dir, db, sessionDir, createSession: factory });
+
+  await manager.get(routed.id);
+  await manager.get(fallback.id);
+  await manager.get("board");
+
+  const cwdOf = (sessionId: string): string => {
+    const hit = sessions.find(
+      (s) => (s as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId() === sessionId,
+    );
+    expect(hit).toBeDefined();
+    return (hit as { cwd: string }).cwd;
+  };
+
+  expect(cwdOf(CHAT_SESSION_ID_PREFIX + routed.id)).toBe(alphaDir); // routed card builds in its repo
+  expect(cwdOf(CHAT_SESSION_ID_PREFIX + fallback.id)).toBe(dir); // un-routed tag → serve cwd
+  expect(cwdOf(MANAGER_SESSION_ID)).toBe(dir); // board manager stays on the fallback
+
+  // disk-history lookup is keyed by the same per-card cwd: a session file written
+  // in the routed repo is found there, and the fallback cwd does not see it
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const routedSessionId = CHAT_SESSION_ID_PREFIX + routed.id;
+  const pre = SessionManager.create(alphaDir, sessionDir, { id: routedSessionId });
+  pre.appendMessage({ role: "user", content: "hello from the routed repo", timestamp: 1 });
+  expect(manager.historyFromDisk(routed.id).sessionId).toBe(routedSessionId);
+  expect(manager.historyFromDisk(fallback.id).sessionId).toBeNull();
+
   await manager.disposeAll();
 });
