@@ -18,7 +18,9 @@ test.describe("settings: projects section", () => {
     // un-routed tag: empty repo input with the fallback hint
     const input = page.locator("input[aria-label='repo path e2e-proj']");
     await expect(input).toHaveValue("");
-    await expect(page.locator(".fallback-hint")).toBeVisible();
+    // row-scoped: earlier specs (palette AC3's pal-one, …) seed other unrouted
+    // projects on the shared board, each rendering its own hint
+    await expect(page.locator(".project-row", { hasText: "e2e-proj" }).locator(".fallback-hint")).toBeVisible();
 
     await input.fill("/tmp");
     await page.locator("input[aria-label='test gate e2e-proj']").uncheck();
