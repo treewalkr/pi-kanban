@@ -15,6 +15,36 @@ let currentContainer: HTMLElement | null = null;
 let grabOffsetX = 0;
 let grabOffsetY = 0;
 let ghostWidth = 0;
+let isReleasing = $state(false);
+
+function releaseGhost(ghost: HTMLElement | null, onDone?: () => void): void {
+  if (!ghost) {
+    onDone?.();
+    return;
+  }
+  if (typeof ghost.animate === "function") {
+    const curTransform = ghost.style.transform || "none";
+    const anim = ghost.animate(
+      [
+        { opacity: 0.96, transform: curTransform },
+        {
+          opacity: 0,
+          transform: curTransform
+            .replace(/rotate\([^)]+\)/, "rotate(0deg)")
+            .replace(/scale\([^)]+\)/, "scale(1)"),
+        },
+      ],
+      { duration: 120, easing: "ease-out" },
+    );
+    anim.onfinish = () => {
+      ghost.remove();
+      onDone?.();
+    };
+  } else {
+    ghost.remove();
+    onDone?.();
+  }
+}
 
 function swallowNextClick(): void {
   if (typeof window === "undefined") return;
@@ -34,7 +64,7 @@ class DragStore {
   hint = $state<DropHint | null>(null);
 
   get lifted(): boolean {
-    return this.taskId !== null;
+    return this.taskId !== null || isReleasing;
   }
 
   press(task: Task, e: PointerEvent): void {
@@ -210,35 +240,47 @@ class DragStore {
     const tops = ([...(cardsContainer?.querySelectorAll(":scope > [data-card]") ?? [])] as HTMLElement[])
       .filter((el) => el.getAttribute("data-card") !== this.taskId);
 
-    if (!hovered) {
+    if (tops.length === 0) {
+      this.hint = { kind: "top", laneId, index: 0, before: undefined };
+      return;
+    }
+
+    const lastBlock = tops[tops.length - 1];
+    if (clientY > lastBlock.getBoundingClientRect().bottom) {
       this.hint = { kind: "top", laneId, index: tops.length, before: undefined };
       return;
     }
 
-    const block = tops.find((t) => t === hovered || t.contains(hovered));
-    if (!block) {
-      this.hint = { kind: "top", laneId, index: tops.length, before: undefined };
-      return;
+    for (let i = 0; i < tops.length; i++) {
+      const block = tops[i];
+      const r = block.getBoundingClientRect();
+      const midY = r.top + r.height / 2;
+      if (clientY < midY) {
+        this.hint = { kind: "top", laneId, index: i, before: block.getAttribute("data-card")! };
+        return;
+      }
+      if (clientY <= r.bottom) {
+        const next = tops[i + 1];
+        this.hint = { kind: "top", laneId, index: i + 1, before: next ? next.getAttribute("data-card")! : undefined };
+        return;
+      }
     }
 
-    const r = block.getBoundingClientRect();
-    const midY = r.top + r.height / 2;
-    const i = tops.indexOf(block);
-    if (clientY < midY) {
-      this.hint = { kind: "top", laneId, index: i, before: block.getAttribute("data-card")! };
-    } else {
-      const next = tops[i + 1];
-      this.hint = { kind: "top", laneId, index: i + 1, before: next ? next.getAttribute("data-card")! : undefined };
-    }
+    this.hint = { kind: "top", laneId, index: tops.length, before: undefined };
   }
 
   async commit(): Promise<void> {
     const id = this.taskId;
     const hint = this.hint;
 
-    if (currentGhost) {
-      currentGhost.remove();
-      currentGhost = null;
+    const ghost = currentGhost;
+    currentGhost = null;
+
+    if (ghost) {
+      isReleasing = true;
+      releaseGhost(ghost, () => {
+        isReleasing = false;
+      });
     }
 
     if (!id || !hint) {
@@ -279,6 +321,7 @@ class DragStore {
       currentGhost.remove();
       currentGhost = null;
     }
+    isReleasing = false;
     this.taskId = null;
     this.hint = null;
     if (typeof document !== "undefined") {

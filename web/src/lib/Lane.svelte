@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { flip } from "svelte/animate";
   import type { Lane } from "../../../src/db";
   import { board } from "./board.svelte";
-  import { drag } from "./drag.svelte";
+  import { drag, FLIP_DURATION_MS } from "./drag.svelte";
   import CardView from "./Card.svelte";
   import Composer from "./Composer.svelte";
   import { laneDwellLabel } from "./statsview";
@@ -126,7 +127,9 @@
 
     <div class="cards">
       {#each drag.displayTasks(lane.id) as task (task.id)}
-        <CardView {task} />
+        <div class="card-wrap" class:drag-slot={drag.taskId === task.id} data-card={task.id} animate:flip={{ duration: FLIP_DURATION_MS }}>
+          <CardView {task} />
+        </div>
       {/each}
     </div>
 

@@ -25,13 +25,28 @@ async function pointerDrag(
   const tBox = await tgt.boundingBox();
   if (!tBox) throw new Error(`target ${targetSel} not found`);
 
-  const destX = tBox.x + tBox.width / 2;
-  const destY =
-    place === "top"
-      ? tBox.y + 4
-      : place === "bottom"
-        ? tBox.y + tBox.height - 4
-        : tBox.y + tBox.height - 8;
+  let destX: number;
+  let destY: number;
+
+  if (place === "none") {
+    const lastCard = page.locator(`${targetSel} [data-card]`).last();
+    if ((await lastCard.count()) > 0) {
+      const lBox = await lastCard.boundingBox();
+      if (lBox) {
+        destX = lBox.x + lBox.width / 2;
+        destY = lBox.y + lBox.height + 15;
+      } else {
+        destX = tBox.x + tBox.width / 2;
+        destY = tBox.y + tBox.height - 8;
+      }
+    } else {
+      destX = tBox.x + tBox.width / 2;
+      destY = tBox.y + tBox.height / 2;
+    }
+  } else {
+    destX = tBox.x + tBox.width / 2;
+    destY = place === "top" ? tBox.y + 4 : tBox.y + tBox.height - 4;
+  }
 
   // Move in steps to exceed the 4px lift threshold and trigger pointermove
   await page.mouse.move(destX, destY, { steps: 5 });
@@ -88,6 +103,96 @@ test.afterAll(async ({ request }) => {
   for (const id of Object.values(ids)) {
     await request.delete(`/tasks/${id}`, { params: { force: "true" } });
   }
+});
+
+test.beforeEach(async ({ page }) => {
+  page.on("console", (m) => console.log(m.text()));
+});
+
+test("cards visibly slide apart while dragging and the slot opens at the target", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForSelector("section.lane[aria-label='Backlog'] [data-card]");
+
+  // Hold mouse down on drag lone and move over top half of t4
+  const lone = page.locator(`[data-card="${ids["drag lone"]}"]`);
+  const t4 = page.locator(`[data-card="${ids["drag t4"]}"]`);
+
+  const lBox = await lone.boundingBox();
+  const tBox = await t4.boundingBox();
+  expect(lBox).not.toBeNull();
+  expect(tBox).not.toBeNull();
+
+  await page.mouse.move(lBox!.x + lBox!.width / 2, lBox!.y + lBox!.height / 2);
+  await page.mouse.down();
+
+  // Move to top half of t4
+  await page.mouse.move(tBox!.x + tBox!.width / 2, tBox!.y + 4, { steps: 5 });
+
+  // .cards > [data-card] shows the dragged card's element at the target index (slot opened before t4)
+  const cards = page.locator("section.lane[aria-label='Backlog'] .cards > [data-card]");
+  const titles = await cards.evaluateAll((list) =>
+    list
+      .map((el) => el.querySelector(".card-title")?.textContent?.trim() ?? "")
+      .filter((t) => t.startsWith("drag ")),
+  );
+  expect(titles.indexOf("drag lone")).toBe(titles.indexOf("drag t4") - 1);
+
+  // A displaced neighbor has running animations (FLIP running)
+  const animCount = await page
+    .locator("section.lane[aria-label='Backlog'] .cards > [data-card]")
+    .evaluateAll((cards) => cards.reduce((acc, el) => acc + el.getAnimations().length, 0));
+  expect(animCount).toBeGreaterThan(0);
+
+  // No .drop-gap element exists
+  expect(await page.locator(".drop-gap").count()).toBe(0);
+
+  await page.mouse.up();
+});
+
+test("the drop settles smoothly — ghost releases, slot becomes the card", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForSelector("section.lane[aria-label='Backlog'] [data-card]");
+
+  const lone = page.locator(`[data-card="${ids["drag lone"]}"]`);
+  const t4 = page.locator(`[data-card="${ids["drag t4"]}"]`);
+
+  const lBox = await lone.boundingBox();
+  const tBox = await t4.boundingBox();
+
+  await page.mouse.move(lBox!.x + lBox!.width / 2, lBox!.y + lBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(tBox!.x + tBox!.width / 2, tBox!.y + 4, { steps: 5 });
+
+  const ghost = page.locator(".drag-layer > .drag-ghost");
+  await expect(ghost).toBeVisible();
+
+  // Release mouse
+  await page.mouse.up();
+
+  // Ghost has running animation and is removed within 500ms
+  await expect(ghost).toHaveCount(0, { timeout: 500 });
+
+  // Final lane order equals the hinted order without jump
+  await expect.poll(() => backlogTitles(page)).toEqual([
+    "drag t1",
+    "drag t2",
+    "drag epic",
+    "drag t3",
+    "drag lone",
+    "drag t4",
+  ]);
+
+  // Committed order is persisted (reload -> same order)
+  await page.reload();
+  await page.waitForSelector("section.lane[aria-label='Backlog'] [data-card]");
+  expect(await backlogTitles(page)).toEqual([
+    "drag t1",
+    "drag t2",
+    "drag epic",
+    "drag t3",
+    "drag lone",
+    "drag t4",
+  ]);
 });
 
 test("the lifted card follows the cursor; no native ghost or dimmed original", async ({ page }) => {

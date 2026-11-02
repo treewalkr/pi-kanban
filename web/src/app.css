@@ -1564,6 +1564,11 @@ button:focus-visible {
   flex: 1;
 }
 
+.card-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
 .card {
   position: relative;
   background: var(--bg-hover);
@@ -1620,6 +1625,7 @@ button:focus-visible {
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-hover));
   border: 1px dashed var(--accent);
   opacity: 0.75;
+  transition: background 0.18s ease-out, border-color 0.18s ease-out, opacity 0.18s ease-out;
 }
 
 body.drag-live {
