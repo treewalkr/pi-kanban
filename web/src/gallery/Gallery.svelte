@@ -1,6 +1,7 @@
 <script lang="ts">
   import "./gallery.css";
   import { board } from "../lib/board.svelte";
+  import { drag } from "../lib/drag.svelte";
   import { agents } from "../lib/agents.svelte";
   import { theme, setTheme } from "../lib/theme.svelte";
   import { renderMarkdown } from "../lib/markdown";
@@ -31,8 +32,8 @@
   function toggleDrag(): void {
     simulatingDrag = !simulatingDrag;
     const task = byId(ids.working);
-    board.dragging = simulatingDrag ? task.id : null;
-    board.dropHint = simulatingDrag ? { laneId: task.laneId, index: 1 } : null;
+    drag.taskId = simulatingDrag ? task.id : null;
+    drag.hint = simulatingDrag ? { kind: "top", laneId: task.laneId, index: 1 } : null;
   }
 
   function toggleCatalog(): void {

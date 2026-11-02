@@ -10,6 +10,7 @@
   import TaskDetail from "./lib/TaskDetail.svelte";
   import TaskEditor from "./lib/TaskEditor.svelte";
   import FilePreview from "./lib/FilePreview.svelte";
+  import DragLayer from "./lib/DragLayer.svelte";
   import AddLane from "./lib/AddLane.svelte";
   import SearchBox from "./lib/SearchBox.svelte";
   import Palette from "./lib/CommandPalette.svelte";
@@ -344,6 +345,7 @@
         {/each}
         <AddLane />
       </main>
+      <DragLayer />
     {/if}
   </div>
 

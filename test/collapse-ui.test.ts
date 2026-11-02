@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const lanePath = join(import.meta.dir, "..", "web", "src", "lib", "Lane.svelte");
+const dragPath = join(import.meta.dir, "..", "web", "src", "lib", "drag.svelte.ts");
 const source = readFileSync(lanePath, "utf-8");
+const dragSource = readFileSync(dragPath, "utf-8");
 
 describe("Lane collapse UI wiring", () => {
   test("collapsed derives from collapsedLanes gated by laneSearchHit", () => {
@@ -14,6 +16,9 @@ describe("Lane collapse UI wiring", () => {
     expect(source).toContain("setLaneCollapsed(lane.id, true)");
     expect(source).toContain("setLaneCollapsed(lane.id, false)");
     expect(source).toContain('title="collapse lane"');
-    expect(source).toContain("board.moveTask(id, lane.id)");
+  });
+
+  test("collapsed-lane append commit lives in the drag module", () => {
+    expect(dragSource).toContain("board.moveTask(id, laneId)");
   });
 });

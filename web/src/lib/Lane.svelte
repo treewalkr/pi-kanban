@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { flip } from "svelte/animate";
   import type { Lane } from "../../../src/db";
   import { board } from "./board.svelte";
+  import { drag, FLIP_DURATION_MS } from "./drag.svelte";
   import CardView from "./Card.svelte";
   import Composer from "./Composer.svelte";
   import { laneDwellLabel } from "./statsview";
@@ -8,71 +10,17 @@
 
   let { lane, index }: { lane: Lane; index: number } = $props();
 
-  let el = $state<HTMLElement>();
   let composing = $state(false);
   let renaming = $state(false);
   let renameValue = $state("");
   let editingLimit = $state(false);
   let limitValue = $state("");
 
-  let visible = $derived(board.visibleTasks(lane.id));
   let count = $derived(
     board.projectFilter !== "" ? board.visibleTasks(lane.id).length : board.laneCount(lane.id),
   );
-  let hint = $derived(
-    board.dropHint && board.dropHint.laneId === lane.id ? board.dropHint.index : -1,
-  );
   let isArchive = $derived(lane.id === "archive");
   let collapsed = $derived(board.collapsedLanes.has(lane.id) && !board.laneSearchHit(lane.id));
-
-  /** Where a drop at this cursor lands, as an anchor rather than a number: the
-   * server resolves numeric indexes against the lane's full flat order, where
-   * hidden nested children (and filtered-out cards) shift every slot. Top-level
-   * blocks split at the block's midpoint so a nest behaves as one unit; a
-   * nested card being dragged inside its own nest anchors to the sibling under
-   * the cursor. Empty space below the cards appends (before: undefined). */
-  function hintFor(e: DragEvent): { index: number; before?: string } {
-    // A dragover landing on this lane's own drop-gap is feedback, not intent:
-    // inserting the 2px gap shifted the cards under a held cursor. Recomputing
-    // would flip the hint to "append" and flicker (gap → bottom → gap → …).
-    if (board.dropHint?.laneId === lane.id && (e.target as HTMLElement).closest?.(".drop-gap")) {
-      return { index: board.dropHint.index, before: board.dropHint.before };
-    }
-    if (!el) return { index: -1 };
-    const tops = [...el.querySelectorAll(".cards > [data-card]")] as HTMLElement[];
-    const hovered = (e.target as HTMLElement).closest("[data-card]") as HTMLElement | null;
-    if (!hovered) return { index: tops.length };
-    const hoveredNested = !!hovered.closest(".card-children");
-    const dragged = board.dragging ? board.taskById(board.dragging) : undefined;
-    if (hoveredNested && dragged && board.nestsUnder(dragged)) {
-      return { index: -1, before: hovered.getAttribute("data-card")! }; // sibling anchor, no gap line
-    }
-    const block = hoveredNested ? (tops.find((t) => t.contains(hovered)) ?? hovered) : hovered;
-    const i = Math.max(0, tops.indexOf(block));
-    const r = block.getBoundingClientRect();
-    const at = i + (e.clientY > r.top + r.height / 2 ? 1 : 0);
-    return { index: at, before: tops[at]?.getAttribute("data-card") ?? undefined };
-  }
-
-  function ondragover(e: DragEvent) {
-    e.preventDefault();
-    e.dataTransfer!.dropEffect = "move";
-    board.dropHint = { laneId: lane.id, ...hintFor(e) };
-  }
-
-  function ondrop(e: DragEvent) {
-    e.preventDefault();
-    const id = e.dataTransfer!.getData("text/plain");
-    const before = board.dropHint && board.dropHint.laneId === lane.id ? board.dropHint.before : undefined;
-    board.dropHint = null;
-    board.dragging = null;
-    if (id && id !== before) board.moveTask(id, lane.id, before ? { before } : undefined);
-  }
-
-  function ondragleave(e: DragEvent) {
-    const to = e.relatedTarget as Node | null;
-    if (!el || !el.contains(to)) board.dropHint = null;
-  }
 
   function commitRename() {
     renaming = false;
@@ -99,16 +47,6 @@
     style="--accent: {laneColor(index)}"
     role="group"
     aria-label="{lane.name} (collapsed)"
-    ondragover={(e) => {
-      e.preventDefault();
-      e.dataTransfer!.dropEffect = "move";
-    }}
-    ondrop={(e) => {
-      e.preventDefault();
-      const id = e.dataTransfer!.getData("text/plain");
-      board.dragging = null;
-      if (id) board.moveTask(id, lane.id);
-    }}
   >
     <button class="collapsed-head" title="expand {lane.name}" onclick={() => board.setLaneCollapsed(lane.id, false)}>
       <span class="lane-dot"></span>
@@ -123,13 +61,9 @@
     class="lane"
     class:archive-lane={isArchive}
     data-lane={lane.id}
-    bind:this={el}
     style="--accent: {laneColor(index)}"
     role="group"
     aria-label={lane.name}
-    ondragover={ondragover}
-    ondrop={ondrop}
-    ondragleave={ondragleave}
   >
     <header class="lane-head">
       <span class="lane-dot"></span>
@@ -192,11 +126,11 @@
     </header>
 
     <div class="cards">
-      {#each visible as task, i (task.id)}
-        {#if hint === i}<div class="drop-gap"></div>{/if}
-        <CardView {task} />
+      {#each drag.displayTasks(lane.id) as task (task.id)}
+        <div animate:flip={{ duration: FLIP_DURATION_MS }}>
+          <CardView {task} />
+        </div>
       {/each}
-      {#if hint >= visible.length}<div class="drop-gap"></div>{/if}
     </div>
 
     {#if composing}

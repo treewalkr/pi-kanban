@@ -7,6 +7,7 @@ import type { AgentSessionInfo } from "../../../src/autoreview";
 import type { CatalogModel } from "../../../src/models";
 import { newId, slugify } from "../../../src/ids";
 import { board } from "../lib/board.svelte";
+import { drag } from "../lib/drag.svelte";
 import { agents } from "../lib/agents.svelte";
 import { pools } from "../lib/pools.svelte";
 
@@ -442,8 +443,8 @@ export function seed(): void {
   board.editing = null;
   board.editMode = false;
   board.collapsedLanes = new Set(["archive"]);
-  board.dragging = null;
-  board.dropHint = null;
+  drag.taskId = null;
+  drag.hint = null;
   board.expanded = new Set([epic.id]); // nested children visible out of the box
   board.flashId = null;
 
