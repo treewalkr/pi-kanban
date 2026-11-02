@@ -1564,11 +1564,6 @@ button:focus-visible {
   flex: 1;
 }
 
-.card-wrap {
-  display: flex;
-  flex-direction: column;
-}
-
 .card {
   position: relative;
   background: var(--bg-hover);

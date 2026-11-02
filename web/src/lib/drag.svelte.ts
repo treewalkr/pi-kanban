@@ -78,6 +78,9 @@ class DragStore {
 
     const startX = e.clientX;
     const startY = e.clientY;
+    let lastX = startX;
+    let lastY = startY;
+
     const cardEl = target?.closest("[data-card]") as HTMLElement | null;
     if (!cardEl) return;
 
@@ -87,27 +90,63 @@ class DragStore {
     ghostWidth = rect.width;
 
     let isLifted = false;
+    let holdTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const onTouchMovePrevent = (ev: TouchEvent) => {
+      if (isLifted) {
+        ev.preventDefault();
+      }
+    };
+
+    const cleanup = () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("touchmove", onTouchMovePrevent);
+    };
+
+    const doLift = (clientX: number, clientY: number) => {
+      isLifted = true;
+      this.lift(task, clientX, clientY, cardEl);
+      window.addEventListener("touchmove", onTouchMovePrevent, { passive: false });
+      this.computeHint(clientX, clientY);
+    };
+
+    if (e.pointerType === "touch") {
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        doLift(lastX, lastY);
+      }, TOUCH_HOLD_MS);
+    }
 
     const onPointerMove = (ev: PointerEvent) => {
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+
       if (!isLifted) {
         const dist = Math.hypot(ev.clientX - startX, ev.clientY - startY);
-        if (dist < DRAG_THRESHOLD_PX) return;
-        isLifted = true;
-        this.lift(task, ev.clientX, ev.clientY, cardEl);
+        if (ev.pointerType === "touch") {
+          if (dist > TOUCH_SLACK_PX) {
+            cleanup();
+            return;
+          }
+          return;
+        } else {
+          if (dist < DRAG_THRESHOLD_PX) return;
+          doLift(ev.clientX, ev.clientY);
+        }
       }
 
       if (currentGhost) {
         currentGhost.style.transform = `translate(${ev.clientX - grabOffsetX}px, ${ev.clientY - grabOffsetY}px) rotate(2deg) scale(1.02)`;
       }
       this.computeHint(ev.clientX, ev.clientY);
-    };
-
-    const cleanup = () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerCancel);
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("blur", onBlur);
     };
 
     const onPointerUp = async () => {
@@ -215,7 +254,7 @@ class DragStore {
       const parentEl = laneEl.querySelector(`[data-card="${dragged.parentId}"]`);
       const parentChildrenEl = parentEl?.querySelector(".card-children");
       if (parentChildrenEl && parentChildrenEl.contains(hit)) {
-        const siblingCards = ([...parentChildrenEl.querySelectorAll(":scope > [data-card]")] as HTMLElement[])
+        const siblingCards = ([...parentChildrenEl.querySelectorAll(":scope > div > [data-card], :scope > [data-card]")] as HTMLElement[])
           .filter((el) => el.getAttribute("data-card") !== this.taskId);
         const hoveredSibling = siblingCards.find((s) => s.contains(hit));
         if (hoveredSibling) {
@@ -237,7 +276,7 @@ class DragStore {
 
     // Top-level hint
     const cardsContainer = laneEl.querySelector(".cards");
-    const tops = ([...(cardsContainer?.querySelectorAll(":scope > [data-card]") ?? [])] as HTMLElement[])
+    const tops = ([...(cardsContainer?.querySelectorAll(":scope > div > [data-card], :scope > [data-card]") ?? [])] as HTMLElement[])
       .filter((el) => el.getAttribute("data-card") !== this.taskId);
 
     if (tops.length === 0) {

@@ -35,6 +35,7 @@
   class:child
   class:blocked={board.isBlocked(task.id)}
   class:drag-slot={drag.taskId === task.id}
+  data-card={task.id}
   role="button"
   tabindex="0"
   onclick={openDetail}
@@ -160,7 +161,7 @@
   {#if open && nested.length > 0}
     <div class="card-children" role="group" aria-label="subtasks of {task.title}">
       {#each drag.displayNest(task) as sub (sub.id)}
-        <div class="card-wrap child-wrap" class:drag-slot={drag.taskId === sub.id} data-card={sub.id} animate:flip={{ duration: FLIP_DURATION_MS }}>
+        <div animate:flip={{ duration: FLIP_DURATION_MS }}>
           <CardView task={sub} child />
         </div>
       {/each}

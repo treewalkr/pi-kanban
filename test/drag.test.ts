@@ -46,6 +46,25 @@ describe("drag module constants and state", () => {
     expect(drag.lifted).toBe(true);
     drag.taskId = null;
   });
+
+  test("press ignores non-primary buttons and interactive targets", () => {
+    const task = makeTask({ id: "X", title: "X", laneId: "backlog" });
+    const fakeEventRightClick = {
+      button: 2,
+      target: { closest: () => null },
+      stopPropagation: () => {},
+    } as any;
+    drag.press(task, fakeEventRightClick);
+    expect(drag.taskId).toBeNull();
+
+    const fakeEventButton = {
+      button: 0,
+      target: { closest: (sel: string) => (sel.includes("button") ? {} : null) },
+      stopPropagation: () => {},
+    } as any;
+    drag.press(task, fakeEventButton);
+    expect(drag.taskId).toBeNull();
+  });
 });
 
 describe("drag displayTasks", () => {

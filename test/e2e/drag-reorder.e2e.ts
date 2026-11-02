@@ -59,7 +59,8 @@ const backlog = (page: Page) => page.locator("section.lane[aria-label='Backlog']
 async function laneTitles(page: Page, laneLabel: string): Promise<string[]> {
   const read = () =>
     page.locator(`section.lane[aria-label='${laneLabel}']`).evaluate((lane) =>
-      [...lane.querySelectorAll(".cards > [data-card]")]
+      [...lane.querySelectorAll(".cards [data-card]")]
+        .filter((c) => !c.closest(".card-children"))
         .map(
           (c) =>
             [...c.querySelector(".card-title")!.childNodes].find((n) => n.nodeType === 3)?.textContent?.trim() ?? "",
@@ -128,18 +129,19 @@ test("cards visibly slide apart while dragging and the slot opens at the target"
   // Move to top half of t4
   await page.mouse.move(tBox!.x + tBox!.width / 2, tBox!.y + 4, { steps: 5 });
 
-  // .cards > [data-card] shows the dragged card's element at the target index (slot opened before t4)
-  const cards = page.locator("section.lane[aria-label='Backlog'] .cards > [data-card]");
+  // .cards [data-card] shows the dragged card's element at the target index (slot opened before t4)
+  const cards = page.locator("section.lane[aria-label='Backlog'] .cards [data-card]");
   const titles = await cards.evaluateAll((list) =>
     list
+      .filter((el) => !el.closest(".card-children"))
       .map((el) => el.querySelector(".card-title")?.textContent?.trim() ?? "")
       .filter((t) => t.startsWith("drag ")),
   );
   expect(titles.indexOf("drag lone")).toBe(titles.indexOf("drag t4") - 1);
 
-  // A displaced neighbor has running animations (FLIP running)
+  // A displaced neighbor has running animations (FLIP running on .cards > div)
   const animCount = await page
-    .locator("section.lane[aria-label='Backlog'] .cards > [data-card]")
+    .locator("section.lane[aria-label='Backlog'] .cards > div")
     .evaluateAll((cards) => cards.reduce((acc, el) => acc + el.getAnimations().length, 0));
   expect(animCount).toBeGreaterThan(0);
 
@@ -336,7 +338,9 @@ test("a held cursor near a card's top edge keeps the slot stable (no flicker loo
     await page.waitForTimeout(30);
     const slotIndex = await cardsLoc.evaluate((cards, slotId) => {
       const children = [...cards.children];
-      return children.findIndex((el) => el.getAttribute("data-card") === slotId);
+      return children.findIndex(
+        (el) => el.getAttribute("data-card") === slotId || el.querySelector(`[data-card="${slotId}"]`) !== null,
+      );
     }, ids["drag f3"]);
     seq.push(slotIndex);
   }
@@ -421,8 +425,112 @@ test("epic blocks part as one unit and nested siblings reorder by anchor", async
   await pointerDrag(page, ids["drag c1"], `[data-card="${ids["drag c3"]}"]`, "bottom");
   await expect.poll(async () => {
     return epicCard.evaluate((el) => {
-      const children = [...el.querySelectorAll(".card-children > [data-card]")];
+      const children = [...el.querySelectorAll(".card-children [data-card]")];
       return children.map((c) => c.querySelector(".card-title")?.textContent?.trim() ?? "");
     });
   }).toEqual(["drag c2", "drag c3", "drag c1"]);
+});
+
+test("touch: long-press lifts, scrolling cancels", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForSelector("section.lane[aria-label='Backlog'] [data-card]");
+
+  // 1. Long-press lifts and drops
+  const initialTitles = await backlogTitles(page);
+  const src = page.locator(`[data-card="${ids["drag lone"]}"]`);
+  const tBox = await page.locator(`[data-card="${ids["drag t1"]}"]`).boundingBox();
+  expect(tBox).not.toBeNull();
+
+  // Synthetic touch down on drag lone
+  await src.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerType: "touch",
+        pointerId: 1,
+        clientX: r.left + r.width / 2,
+        clientY: r.top + r.height / 2,
+        button: 0,
+        bubbles: true,
+      }),
+    );
+  });
+
+  // Hold 300ms (> 250ms TOUCH_HOLD_MS)
+  await page.waitForTimeout(300);
+  await expect(page.locator(".drag-layer > .drag-ghost")).toBeVisible();
+
+  // Move to top of t1 and up
+  await page.evaluate(
+    ([destX, destY]) => {
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          pointerType: "touch",
+          pointerId: 1,
+          clientX: destX,
+          clientY: destY,
+          bubbles: true,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          pointerType: "touch",
+          pointerId: 1,
+          clientX: destX,
+          clientY: destY,
+          bubbles: true,
+        }),
+      );
+    },
+    [tBox!.x + tBox!.width / 2, tBox!.y + 4],
+  );
+
+  // Moved before t1
+  const expectedTitles = ["drag lone", ...initialTitles.filter((t) => t !== "drag lone")];
+  await expect.poll(() => backlogTitles(page)).toEqual(expectedTitles);
+
+  // 2. Fresh touch + immediate move past slack (>8px) before hold + pointercancel -> no lift, order unchanged
+  const currentTitles = await backlogTitles(page);
+  const loneCard = page.locator(`[data-card="${ids["drag lone"]}"]`);
+
+  await loneCard.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const startX = r.left + r.width / 2;
+    const startY = r.top + r.height / 2;
+
+    el.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerType: "touch",
+        pointerId: 2,
+        clientX: startX,
+        clientY: startY,
+        button: 0,
+        bubbles: true,
+      }),
+    );
+
+    // Immediate move 20px (> TOUCH_SLACK_PX)
+    window.dispatchEvent(
+      new PointerEvent("pointermove", {
+        pointerType: "touch",
+        pointerId: 2,
+        clientX: startX,
+        clientY: startY + 20,
+        bubbles: true,
+      }),
+    );
+
+    // pointercancel (browser takes over scroll)
+    window.dispatchEvent(
+      new PointerEvent("pointercancel", {
+        pointerType: "touch",
+        pointerId: 2,
+        bubbles: true,
+      }),
+    );
+  });
+
+  await page.waitForTimeout(300);
+  expect(await page.locator(".drag-layer > .drag-ghost").count()).toBe(0);
+  expect(await backlogTitles(page)).toEqual(currentTitles);
 });

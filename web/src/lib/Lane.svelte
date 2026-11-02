@@ -127,7 +127,7 @@
 
     <div class="cards">
       {#each drag.displayTasks(lane.id) as task (task.id)}
-        <div class="card-wrap" class:drag-slot={drag.taskId === task.id} data-card={task.id} animate:flip={{ duration: FLIP_DURATION_MS }}>
+        <div animate:flip={{ duration: FLIP_DURATION_MS }}>
           <CardView {task} />
         </div>
       {/each}
