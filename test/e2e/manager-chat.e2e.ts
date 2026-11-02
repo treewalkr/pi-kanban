@@ -32,8 +32,17 @@ test("agents settings shows the lane workers empty state", async ({ page }) => {
   await expect(section).toBeVisible();
   await expect(section).toContainText("no runs — dispatch from board chat or `kanban worker run`");
 
-  // the role segmented control gained manager and worker
-  const roleSeg = page.locator(".settings-general-section", { hasText: "Role" }).locator(".seg");
+  // the lane-grouped panel (3n96c) hosts the utility roles under the Board
+  // scope — switch there; its seg still carries manager and worker
+  await page
+    .locator(".settings-general-section")
+    .filter({ has: page.getByRole("heading", { name: "Lane", exact: true }) })
+    .getByRole("button", { name: "Board", exact: true })
+    .click();
+  const roleSeg = page
+    .locator(".settings-general-section")
+    .filter({ has: page.getByRole("heading", { name: "Board agents" }) })
+    .locator(".seg");
   await expect(roleSeg).toContainText("manager");
   await expect(roleSeg).toContainText("worker");
 });
