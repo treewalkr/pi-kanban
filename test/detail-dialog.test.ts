@@ -77,7 +77,7 @@ describe("elaborate button: rendered in the footer, hidden while queued or live,
 describe("open card reloads board and thread when its live session ends", () => {
   test("defines reloadThread, falling-edge effect, and retains queued/live panels", () => {
     expect(taskDetailSource).toMatch(/async function reloadThread\(\): Promise<void>/);
-    expect(taskDetailSource).toMatch(/\$effect\(\(\) => \{\s*void reloadThread\(\);\s*\}\);/);
+    expect(taskDetailSource).toMatch(/\$effect\(\(\) => \{\s*void board\.tasks;\s*void reloadThread\(\);\s*\}\);/);
     expect(taskDetailSource).toContain("let hadLive = false;");
     expect(taskDetailSource).toMatch(/if \(hadLive && !running\) \{\s*void board\.refresh\(\);\s*void reloadThread\(\);\s*\}/);
     expect(taskDetailSource).toContain("detail-activity queued");

@@ -222,8 +222,8 @@
     board.closeCard(); // planner re-plans with the feedback
   }
 
-  // per-card thread state: fetch on open, append after own post — SSE refresh
-  // is paused while a modal is open, so a reopen catches CLI-side comments
+  // per-card thread state: fetched on open and on every board refresh (the SSE
+  // pause applies to the editor only), appended after own post
   let comments = $state<Comment[]>([]);
   let stateIdx = $derived(latestStateIndex(comments));
   let commentBody = $state("");
@@ -279,12 +279,15 @@
     if (!filesRes.error) cardFiles = filesRes.data;
   }
 
+  // live thread: every board refresh replaces board.tasks; refetch this card's
+  // thread so external comments, files, and sessions appear without a reopen
   $effect(() => {
+    void board.tasks;
     void reloadThread();
   });
 
-  // finished-session pickup: an open card doesn't ride the SSE refresh (paused
-  // while a modal is open) — pull the board and thread when this card's live
+  // finished-session pickup: a finishing session emits no change event, so no
+  // SSE refresh follows it — pull the board and thread when this card's live
   // session ends, so the elaborated note appears without closing the card
   let hadLive = false;
   $effect(() => {
