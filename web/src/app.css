@@ -1918,6 +1918,9 @@ body.drag-live {
 /* board-chat toggle: sibling of the view tabs, opens the manager drawer */
 .view-chat {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 24px;
   margin-left: 8px;
   padding: 0 10px;
@@ -1930,6 +1933,11 @@ body.drag-live {
   transition: background 0.12s, color 0.12s;
 }
 
+/* desktop keeps the text label; the icon only shows at phone widths below */
+.view-chat svg {
+  display: none;
+}
+
 .view-chat:hover {
   background: var(--bg-hover);
   color: var(--text);
@@ -1938,6 +1946,23 @@ body.drag-live {
 .view-chat.active {
   background: var(--bg-selected);
   color: var(--text);
+}
+
+/* phone widths: the text button wraps the header's second row — collapse to
+   the icon (30px incl. padding) so row 1 stays one line (board-collapse AC2).
+   Placed after the base rules so the equal-specificity media overrides win. */
+@media (max-width: 640px) {
+  .view-chat {
+    padding: 0 7px;
+  }
+
+  .view-chat svg {
+    display: block;
+  }
+
+  .view-chat .view-chat-label {
+    display: none;
+  }
 }
 
 .list {

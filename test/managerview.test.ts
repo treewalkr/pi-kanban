@@ -103,6 +103,9 @@ test("header view-toggle row carries the chat button wired to manager.toggle", (
   const chatBtnIdx = app.indexOf('class="view-chat"');
   expect(chatBtnIdx).toBeGreaterThan(toggleIdx);
   expect(app.indexOf("void manager.toggle()", chatBtnIdx)).toBeGreaterThan(chatBtnIdx);
+  // stable accessible name for the drawer opener (manager-chat e2e targets it;
+  // aria-label matches the drawer dialog's label, not the visible "chat" text)
+  expect(app.slice(chatBtnIdx - 200, chatBtnIdx + 400)).toContain('aria-label="board chat"');
   const css = read("web/src/app.css");
   expect(css).toMatch(/\.view-chat\s*{/);
 });
