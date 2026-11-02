@@ -21,7 +21,7 @@
   import { theme, setTheme } from "./lib/theme.svelte";
   import { notify } from "./lib/notify.svelte";
   import { files } from "./lib/files.svelte";
-  import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu, Hash } from "@lucide/svelte";
+  import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu, Hash, MessagesSquare } from "@lucide/svelte";
   import { wheelPan } from "./lib/wheel";
   import { service, pollServe, restartService } from "./lib/service.svelte";
 
@@ -242,9 +242,13 @@
         class="view-chat"
         class:active={manager.open}
         title="board chat — the manager dispatches lane workers"
+        aria-label="board chat"
         aria-pressed={manager.open}
-        onclick={() => void manager.toggle()}>chat</button
+        onclick={() => void manager.toggle()}
       >
+        <MessagesSquare size={14} strokeWidth={1.8} aria-hidden="true" />
+        <span class="view-chat-label">chat</span>
+      </button>
       <SearchBox />
       <div class="chips">
         <button

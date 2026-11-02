@@ -1180,6 +1180,12 @@ button {
     justify-content: flex-end;
   }
 
+  /* the stale chip is a direct .top child — it joins the chips row instead of
+     wedging into row 1 and re-wrapping the header (board-collapse AC2) */
+  .stale-chip {
+    order: 4;
+  }
+
   /* task count lives in the sidebar and lane headers at phone widths */
   .meta {
     display: none;
@@ -1372,14 +1378,18 @@ button {
   color: var(--text);
 }
 
-/* stale serve: label + border + tooltip carry the state, color only reinforces */
-.chips button.stale-chip,
-.chips button.stale-chip:hover {
+/* stale serve: label + border + tooltip carry the state, color only reinforces.
+   .top-scoped: the chip is a direct header child (not in .chips) — the old
+   .chips button selectors died in the header rework and the chip rendered
+   unstyled. min-height keeps it a 24px hit target (responsive AC3). */
+.top .stale-chip,
+.top .stale-chip:hover {
+  min-height: 24px;
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
-.chips button.stale-chip:hover {
+.top .stale-chip:hover {
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
@@ -1918,6 +1928,9 @@ body.drag-live {
 /* board-chat toggle: sibling of the view tabs, opens the manager drawer */
 .view-chat {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 24px;
   margin-left: 8px;
   padding: 0 10px;
@@ -1930,6 +1943,11 @@ body.drag-live {
   transition: background 0.12s, color 0.12s;
 }
 
+/* desktop keeps the text label; the icon only shows at phone widths below */
+.view-chat svg {
+  display: none;
+}
+
 .view-chat:hover {
   background: var(--bg-hover);
   color: var(--text);
@@ -1938,6 +1956,23 @@ body.drag-live {
 .view-chat.active {
   background: var(--bg-selected);
   color: var(--text);
+}
+
+/* phone widths: the text button wraps the header's second row — collapse to
+   the icon (30px incl. padding) so row 1 stays one line (board-collapse AC2).
+   Placed after the base rules so the equal-specificity media overrides win. */
+@media (max-width: 640px) {
+  .view-chat {
+    padding: 0 7px;
+  }
+
+  .view-chat svg {
+    display: block;
+  }
+
+  .view-chat .view-chat-label {
+    display: none;
+  }
 }
 
 .list {
