@@ -1,6 +1,8 @@
 <script lang="ts">
-  import type { AgentConfig, AgentThinking } from "../../../src/db";
+  import { untrack } from "svelte";
+  import type { AgentConfig, AgentThinking, LaneActor, LaneContext, LaneTriggerRule } from "../../../src/db";
   import { agents, type SettingsRole } from "./agents.svelte";
+  import { board } from "./board.svelte";
   import SkillPicker from "./SkillPicker.svelte";
 
   interface AgentForm {
@@ -39,6 +41,148 @@
   let role = $state<SettingsRole>("reviewer");
   let form = $state<AgentForm>(toForm(agents.configs.reviewer));
 
+  // ---- lane workflow scope (card 3n96c): the agents panel is organized by lane ----
+  // workflow lanes = every lane except the fixed parking lots; "board" holds the utility roles
+  let workflowLanes = $derived(board.lanes.filter((l) => l.id !== "waiting" && l.id !== "done" && l.id !== "archive"));
+  let selectedLane = $derived(agents.selectedLane);
+  let boardScope = $derived(selectedLane === "board");
+  let customLane = $derived(!boardScope && selectedLane !== "plan" && selectedLane !== "implement" && selectedLane !== "review");
+
+  interface LaneForm {
+    // the selected actor
+    author: string;
+    instructions: string;
+    // the lane's artifact
+    artifact: string;
+    template: string;
+    // triggers (comment-kind triggers are preserved invisibly)
+    onEnter: boolean;
+    humanComment: boolean;
+    // gate + cap + test gate
+    approveTarget: string;
+    cap: string;
+    testGate: boolean;
+  }
+
+  const emptyLaneForm = (): LaneForm => ({
+    author: "",
+    instructions: "",
+    artifact: "",
+    template: "",
+    onEnter: false,
+    humanComment: false,
+    approveTarget: "",
+    cap: "",
+    testGate: false,
+  });
+
+  let laneForm = $state<LaneForm>(emptyLaneForm());
+
+  let laneContext = $derived(agents.laneContexts[selectedLane] ?? board.laneContexts[selectedLane] ?? null);
+  let laneActors = $derived(laneContext?.actors ?? []);
+  let laneActor = $derived(laneActors.find((a) => a.id === role) ?? null);
+  let laneName = $derived(board.lanes.find((l) => l.id === selectedLane)?.name ?? selectedLane);
+
+  function loadLaneForms(): void {
+    if (boardScope) return;
+    const ctx = laneContext;
+    if (!ctx) {
+      laneForm = emptyLaneForm();
+      const first = board.lanes.find((l) => l.id === selectedLane);
+      role = `${first?.id ?? "lane"}-worker`;
+      return;
+    }
+    role = ctx.actors.some((a) => a.id === role) ? role : (ctx.actors[0]?.id ?? role);
+    const actor = ctx.actors.find((a) => a.id === role);
+    laneForm = laneFormOf(ctx, actor);
+    form = toForm(actorConfigOf(actor));
+  }
+
+  function actorConfigOf(actor: LaneActor | null | undefined): AgentConfig {
+    return actor?.config ?? agents.configs[actor?.id as SettingsRole] ?? {};
+  }
+
+  function laneFormOf(ctx: LaneContext, actor: LaneActor | null | undefined): LaneForm {
+    return {
+      author: actor?.author ?? "",
+      instructions: actor?.instructions ?? "",
+      artifact: ctx.artifact ?? "",
+      template: ctx.template ?? "",
+      onEnter: (ctx.triggers ?? []).some((t) => t.kind === "on-enter"),
+      humanComment: (ctx.triggers ?? []).some((t) => t.kind === "human-comment"),
+      approveTarget: ctx.gate?.approveTarget ?? "",
+      cap: ctx.cap ? String(ctx.cap.max) : "",
+      testGate: ctx.testGate ?? false,
+    };
+  }
+
+  // the editable context: the saved one with the form's actor + lane fields patched in
+  function buildContext(): LaneContext | null {
+    const base = laneContext;
+    if (!base) return null;
+    const config = toConfig(form);
+    const actor: LaneActor = laneActor
+      ? { ...laneActor, author: laneForm.author, instructions: laneForm.instructions, config }
+      : { id: role as string, author: laneForm.author, instructions: laneForm.instructions, config };
+    const actors = base.actors.some((a) => a.id === actor.id)
+      ? base.actors.map((a) => (a.id === actor.id ? actor : a))
+      : [...base.actors, actor];
+    const commentTriggers = (base.triggers ?? []).filter((t): t is LaneTriggerRule & { kind: "comment" } => t.kind === "comment");
+    const triggers: LaneTriggerRule[] = [
+      ...(laneForm.onEnter ? [{ kind: "on-enter" } as const] : []),
+      ...commentTriggers,
+      ...(laneForm.humanComment ? [{ kind: "human-comment" } as const] : []),
+    ];
+    const next: LaneContext = { ...base, actors, triggers };
+    if (laneForm.artifact.trim()) next.artifact = laneForm.artifact.trim();
+    else delete next.artifact;
+    if (laneForm.template.trim()) next.template = laneForm.template;
+    else delete next.template;
+    if (laneForm.approveTarget.trim()) {
+      next.gate = { ...(base.gate ?? {}), approveTarget: laneForm.approveTarget.trim() };
+    } else delete next.gate;
+    const capMax = Number(laneForm.cap);
+    if (laneForm.cap !== "" && Number.isInteger(capMax)) {
+      next.cap = {
+        max: capMax,
+        scope: base.cap?.scope ?? "thread",
+        match: base.cap?.match ?? {},
+        author: base.cap?.author ?? actors[0]?.author ?? `pi-${selectedLane}`,
+        message: base.cap?.message ?? "auto-cycles reached the cap of {max} — needs a human. Comment with feedback to re-run, or reject with feedback.",
+      };
+    } else delete next.cap;
+    if (laneForm.testGate) next.testGate = true;
+    else delete next.testGate;
+    return next;
+  }
+
+  function touchLane(): void {
+    agents.scheduleContext(selectedLane, () => buildContext());
+  }
+
+  /** Enable a starter workflow on a context-free custom lane. */
+  function enableWorkflow(): void {
+    const lane = board.lanes.find((l) => l.id === selectedLane);
+    const id = lane ? lane.id : selectedLane;
+    agents.scheduleContext(selectedLane, () => ({
+      actors: [{ id, author: `pi-${id}`, instructions: `Work kanban card {id} "{title}" in this lane, then record the result on the thread.` }],
+      triggers: [{ kind: "on-enter" }],
+    }));
+  }
+
+  /** Clear a custom lane's workflow (the loop stops arming its actors). */
+  function disableWorkflow(): void {
+    agents.scheduleContext(selectedLane, () => null);
+  }
+
+  // pick the lane's first actor whenever the panel opens or the lane changes —
+  // untracked: a post-save context refresh must not clobber in-progress edits
+  $effect(() => {
+    void agents.loaded;
+    void agents.selectedLane;
+    untrack(() => loadLaneForms());
+  });
+
   // lane workers section: fetch runs when the panel mounts (AgentsSettings remounts per open)
   let workerRuns = $derived(agents.workerRuns);
   $effect(() => {
@@ -59,8 +203,15 @@
     return [...groups.entries()];
   });
 
+  async function selectLane(id: string): Promise<void> {
+    if (id === agents.selectedLane) return;
+    await agents.flush();
+    agents.selectedLane = id;
+  }
+
   function touch(): void {
-    agents.schedule(role, () => toConfig(form));
+    if (boardScope) agents.schedule(role, () => toConfig(form));
+    else touchLane();
   }
 
   // role switch stashes edits in the store so the other role's form can load
@@ -68,9 +219,17 @@
     if (next === role) return;
     const ok = await agents.flush();
     if (!ok) return;
-    agents.configs[role] = toConfig(form);
-    role = next;
-    form = toForm(agents.configs[next]);
+    if (boardScope) {
+      agents.configs[role] = toConfig(form);
+      role = next;
+      form = toForm(agents.configs[next]);
+    } else {
+      role = next;
+      const ctx = agents.laneContexts[selectedLane] ?? board.laneContexts[selectedLane] ?? null;
+      const actor = ctx?.actors.find((a) => a.id === next);
+      form = toForm(actorConfigOf(actor));
+      laneForm = laneFormOf(ctx ?? { actors: [], triggers: [] }, actor);
+    }
   }
 
   function ageOf(run: { createdAt: number; endedAt?: number }): string {
@@ -102,56 +261,146 @@
   </section>
 
   <section class="settings-general-section">
-    <h3 class="settings-general-heading">Role</h3>
-    <p class="settings-general-description">Used by serve --agents: the planner writes plans for cards in Plan, the plan reviewer checks them against the template checklist before the human gate, the reviewer checks cards in Review, the builder works blocked findings or builds approved plans. The manager chats from the board view and dispatches lane workers; workers run per-lane charters. Switching stashes unsaved edits.</p>
+    <h3 class="settings-general-heading">Lane</h3>
+    <p class="settings-general-description">Agent settings are organized by workflow lane: each lane hosts an actor chain with its own prompts, artifact template, and trigger/exit/gate/cap rules. Board holds the board-level agents. Switching stashes unsaved edits.</p>
     <div class="seg">
-      <button type="button" class="seg-option" class:on={role === "planner"} aria-pressed={role === "planner"} onclick={() => switchRole("planner")}>
-        <span class="seg-label">planner</span>
-      </button>
-      <button type="button" class="seg-option" class:on={role === "reviewer"} aria-pressed={role === "reviewer"} onclick={() => switchRole("reviewer")}>
-        <span class="seg-label">reviewer</span>
-      </button>
-      <button type="button" class="seg-option" class:on={role === "builder"} aria-pressed={role === "builder"} onclick={() => switchRole("builder")}>
-        <span class="seg-label">builder</span>
-      </button>
-      <button
-        type="button"
-        class="seg-option"
-        class:on={role === "plan-reviewer"}
-        aria-pressed={role === "plan-reviewer"}
-        onclick={() => switchRole("plan-reviewer")}
-      >
-        <span class="seg-label">plan reviewer</span>
-      </button>
-      <button
-        type="button"
-        class="seg-option"
-        class:on={role === "elaborator"}
-        aria-pressed={role === "elaborator"}
-        onclick={() => switchRole("elaborator")}
-      >
-        <span class="seg-label">elaborator</span>
-      </button>
-      <button
-        type="button"
-        class="seg-option"
-        class:on={role === "manager"}
-        aria-pressed={role === "manager"}
-        onclick={() => switchRole("manager")}
-      >
-        <span class="seg-label">manager</span>
-      </button>
-      <button
-        type="button"
-        class="seg-option"
-        class:on={role === "worker"}
-        aria-pressed={role === "worker"}
-        onclick={() => switchRole("worker")}
-      >
-        <span class="seg-label">worker</span>
+      {#each workflowLanes as l (l.id)}
+        <button type="button" class="seg-option" class:on={selectedLane === l.id} aria-pressed={selectedLane === l.id} onclick={() => void selectLane(l.id)}>
+          <span class="seg-label">{l.name}</span>
+        </button>
+      {/each}
+      <button type="button" class="seg-option" class:on={boardScope} aria-pressed={boardScope} onclick={() => void selectLane("board")}>
+        <span class="seg-label">Board</span>
       </button>
     </div>
   </section>
+
+  {#if boardScope}
+    <section class="settings-general-section">
+      <h3 class="settings-general-heading">Board agents</h3>
+      <p class="settings-general-description">The elaborator expands newly captured cards on request, the manager chats from the board view and dispatches lane workers, and workers run per-lane charters. Lane agents are configured on their lanes above. Switching stashes unsaved edits.</p>
+      <div class="seg">
+        <button
+          type="button"
+          class="seg-option"
+          class:on={role === "elaborator"}
+          aria-pressed={role === "elaborator"}
+          onclick={() => switchRole("elaborator")}
+        >
+          <span class="seg-label">elaborator</span>
+        </button>
+        <button
+          type="button"
+          class="seg-option"
+          class:on={role === "manager"}
+          aria-pressed={role === "manager"}
+          onclick={() => switchRole("manager")}
+        >
+          <span class="seg-label">manager</span>
+        </button>
+        <button
+          type="button"
+          class="seg-option"
+          class:on={role === "worker"}
+          aria-pressed={role === "worker"}
+          onclick={() => switchRole("worker")}
+        >
+          <span class="seg-label">worker</span>
+        </button>
+      </div>
+    </section>
+  {:else if laneContext}
+    <section class="settings-general-section">
+      <h3 class="settings-general-heading">Actors on {laneName}</h3>
+      <p class="settings-general-description">The lane arms its actor chain per its rules — each actor's instructions support the {"{id}"} / {"{title}"} / {"{tmpFile}"} placeholders, and the template below is appended unless the instructions embed it via {"{template}"}.</p>
+      <div class="seg">
+        {#each laneActors as a (a.id)}
+          <button type="button" class="seg-option" class:on={role === a.id} aria-pressed={role === a.id} onclick={() => switchRole(a.id)}>
+            <span class="seg-label">{a.id}</span>
+          </button>
+        {/each}
+      </div>
+      <div class="settings-form">
+        <label>
+          actor author
+          <input bind:value={laneForm.author} oninput={touchLane} placeholder="pi-{role}" />
+        </label>
+        <label>
+          instructions
+          <textarea
+            bind:value={laneForm.instructions}
+            oninput={touchLane}
+            rows="6"
+            placeholder={"the prompt this actor is spawned with — kanban card {id} \"{title}\" …"}
+          ></textarea>
+        </label>
+      </div>
+      {#if customLane}
+        <div class="settings-form">
+          <button class="ghost danger" onclick={disableWorkflow}>disable this lane's workflow</button>
+        </div>
+      {/if}
+    </section>
+
+    <section class="settings-general-section">
+      <h3 class="settings-general-heading">Workflow rules</h3>
+      <p class="settings-general-description">Triggers arm the actor chain (on entry, or when the last thread comment is a human's); the gate is the human-only approve/reject; the cap parks the card for a human after that many agent cycles; the test gate runs `bun test` before a spawn.</p>
+      <div class="settings-form">
+        <div class="row">
+          <label>
+            artifact
+            <input bind:value={laneForm.artifact} oninput={touchLane} placeholder="plan" />
+          </label>
+          <label>
+            gate: approve to
+            <select bind:value={laneForm.approveTarget} onchange={touchLane}>
+              <option value="">no gate</option>
+              {#each board.lanes as l (l.id)}
+                <option value={l.id}>{l.name}</option>
+              {/each}
+            </select>
+          </label>
+        </div>
+        <label>
+          template
+          <textarea
+            bind:value={laneForm.template}
+            oninput={touchLane}
+            rows="6"
+            placeholder={"the artifact this lane's actors write against — embedded in every prompt"}
+          ></textarea>
+        </label>
+        <div class="row">
+          <span class="lane-triggers">
+            <label class="trigger-toggle">
+              <input type="checkbox" bind:checked={laneForm.onEnter} onchange={touchLane} />
+              arm on enter
+            </label>
+            <label class="trigger-toggle">
+              <input type="checkbox" bind:checked={laneForm.humanComment} onchange={touchLane} />
+              arm on human comment
+            </label>
+            <label class="trigger-toggle">
+              <input type="checkbox" bind:checked={laneForm.testGate} onchange={touchLane} />
+              pre-spawn test gate
+            </label>
+          </span>
+          <label>
+            cap · cycles
+            <input inputmode="numeric" bind:value={laneForm.cap} oninput={touchLane} placeholder="none" />
+          </label>
+        </div>
+      </div>
+    </section>
+  {:else}
+    <section class="settings-general-section">
+      <h3 class="settings-general-heading">{laneName}</h3>
+      <p class="settings-general-description">This lane has no workflow — cards pass through untouched. Enable one to give it an actor chain, a template, and rules, with zero code changes.</p>
+      <div class="settings-form">
+        <button class="ghost" onclick={enableWorkflow}>add a workflow to this lane</button>
+      </div>
+    </section>
+  {/if}
 
   <section class="settings-general-section">
     <h3 class="settings-general-heading">Model</h3>

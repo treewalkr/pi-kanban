@@ -47,10 +47,10 @@ describe("agents auto-save store", () => {
       }
       calls.push({ url, method, body });
 
+      if (method === "PUT" && putHandler) {
+        return await putHandler(url, body);
+      }
       if (method === "PUT" && url.includes("/agents/")) {
-        if (putHandler) {
-          return await putHandler(url, body);
-        }
         return new Response(JSON.stringify(body ?? {}), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -291,6 +291,83 @@ describe("agents auto-save store", () => {
     expect(src).toContain("agents.close()");
     expect(src).toContain("save-status");
     expect(src).toMatch(/await\s+agents\.flush\(\)[\s\S]*role\s*=\s*next/);
+  });
+
+  test("openLane opens the settings on the lane's workflow", () => {
+    agents.openLane("design");
+    expect(agents.open).toBe(true);
+    expect(agents.section).toBe("agents");
+    expect(agents.selectedLane).toBe("design");
+    agents.open = false;
+  });
+
+  test("scheduleContext debounces PUT /lanes/:id/context and flush() carries it", async () => {
+    jest.useFakeTimers();
+    agents.openLane("design");
+    const context = {
+      actors: [{ id: "designer", author: "pi-designer", instructions: "Design {id}" }],
+      triggers: [{ kind: "on-enter" as const }],
+    };
+    putHandler = (url, body) =>
+      new Response(JSON.stringify({ laneId: "design", context: body }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    agents.scheduleContext("design", () => context);
+
+    expect(calls.length).toBe(0);
+    expect(agents.saveState).toBe("saving");
+
+    jest.advanceTimersByTime(DEBOUNCE_MS);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    const put = calls.find((c) => c.method === "PUT" && c.url.includes("/lanes/design/context"));
+    expect(put).toBeDefined();
+    expect(put!.body).toEqual(context);
+    expect(agents.saveState).toBe("saved");
+    expect(agents.laneContexts.design).toEqual(context);
+    agents.open = false;
+  });
+
+  test("close() flushes a pending lane context before closing", async () => {
+    agents.open = true;
+    agents.laneContexts = {};
+    const context = {
+      actors: [{ id: "designer", author: "pi-designer", instructions: "v2" }],
+      triggers: [{ kind: "on-enter" as const }],
+    };
+    agents.scheduleContext("design", () => context);
+    await agents.close();
+    expect(calls.some((c) => c.method === "PUT" && c.url.includes("/lanes/design/context"))).toBe(true);
+    expect(agents.open).toBe(false);
+  });
+
+  test("AgentsSettings markup: lane selector, actor chain, and the lane context editor", () => {
+    const src = readFileSync(new URL("../web/src/lib/AgentsSettings.svelte", import.meta.url), "utf-8");
+    // the Lane bar lists the board's workflow lanes plus Board for the utility roles
+    expect(src).toContain("workflowLanes");
+    expect(src).toContain('selectLane("board")');
+    // the actor chain selector switches between the lane's actors
+    expect(src).toContain("switchRole(a.id)");
+    // the context editor binds the plan-pinned fields
+    expect(src).toContain("laneForm.author");
+    expect(src).toContain("laneForm.instructions");
+    expect(src).toContain("laneForm.artifact");
+    expect(src).toContain("laneForm.template");
+    expect(src).toContain("laneForm.onEnter");
+    expect(src).toContain("laneForm.humanComment");
+    expect(src).toContain("laneForm.approveTarget");
+    expect(src).toContain("laneForm.cap");
+    expect(src).toContain("laneForm.testGate");
+    // custom lanes enable/clear their workflow
+    expect(src).toContain("enableWorkflow");
+    expect(src).toContain("disableWorkflow");
+  });
+
+  test("Lane.svelte wires the gear button to the lane's workflow settings", () => {
+    const src = readFileSync(new URL("../web/src/lib/Lane.svelte", import.meta.url), "utf-8");
+    expect(src).toContain('agents.openLane(lane.id)');
+    expect(src).toContain('title="lane workflow settings"');
   });
 
   test("GeneralSettings theme wiring unchanged", () => {

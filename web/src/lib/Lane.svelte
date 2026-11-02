@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Lane } from "../../../src/db";
   import { board } from "./board.svelte";
+  import { agents } from "./agents.svelte";
   import CardView from "./Card.svelte";
   import Composer from "./Composer.svelte";
   import { laneDwellLabel } from "./statsview";
@@ -178,6 +179,9 @@
         <span class="lane-dwell" title="average time per card in this lane">{laneDwellLabel(board.stats, lane.id)}</span>
       {/if}
       <span class="lane-tools">
+        {#if lane.id !== "waiting" && lane.id !== "done" && lane.id !== "archive"}
+          <button title="lane workflow settings" aria-label="configure {lane.name}" onclick={() => agents.openLane(lane.id)}>⚙</button>
+        {/if}
         <button title="collapse lane" aria-label="collapse {lane.name}" onclick={() => board.setLaneCollapsed(lane.id, true)}>«</button>
         {#if index > 0}
           <button title="move lane left" onclick={() => board.moveLane(lane.id, index - 1)}>‹</button>
