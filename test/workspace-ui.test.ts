@@ -58,7 +58,7 @@ describe("workspace UI rendering and wiring (AC1, AC2, AC5)", () => {
     expect(boardStoreSource).toContain("workspaces = $state<Record<string, CardWorkspace>>({});");
     expect(boardStoreSource).toContain("this.workspaces = boardRes.data.workspaces ?? {};");
 
-    // App.svelte 10s git interval polls board.refresh guarded by !board.editing
+    // App.svelte modal-close catch-up effect polls board.refresh guarded by !board.editing
     expect(appSource).toContain("10_000");
     expect(appSource).toContain("void ui.loadGit();");
     expect(appSource).toContain("if (!board.editing) board.refresh();");

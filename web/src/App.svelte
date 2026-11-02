@@ -59,7 +59,7 @@
     window.addEventListener("pointerup", up);
   }
 
-  // initial load, plus catch-up when a modal closes (change events are paused while editing)
+  // initial load, plus catch-up when a modal closes (change events are paused while the editor is open)
   $effect(() => {
     if (!board.editing) board.refresh();
   });
@@ -68,7 +68,7 @@
   $effect(() => {
     const source = new EventSource(eventsUrl);
     const refresh = () => {
-      if (!document.hidden && !board.editing) board.refresh();
+      if (!document.hidden && !board.editMode) board.refresh();
     };
     let opened = false;
     source.addEventListener("change", refresh);
@@ -126,7 +126,7 @@
       if (!document.hidden) {
         void ui.loadGit();
         // terminal worktree changes emit no DB event
-        if (!board.editing) board.refresh();
+        if (!board.editMode) board.refresh();
       }
     }, 10_000);
     return () => clearInterval(timer);
