@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanDb, type Task } from "../src/db";
@@ -2095,4 +2095,57 @@ test("worker run queues a run; unknown lane prints the charter error; worker ls 
 
   const filtered = await cli("worker", "ls", "--lane", "review");
   expect(filtered.stdout).not.toContain("groom stale cards");
+});
+
+test("project ls / show / set round-trip: route, flip gate, clear", async () => {
+  const repoDir = join(dir, "some-repo");
+  mkdirSync(repoDir);
+  await cli("add", "project routing card", "--project", "kanban", "--json");
+  await cli("add", "unrouted project card", "--project", "sometag", "--json");
+
+  const set = await cli("project", "set", "kanban", "--repo", repoDir);
+  expect(set.code).toBe(0);
+  expect(set.stdout.trim()).toBe(`saved  kanban  ${repoDir}  test gate on`);
+
+  const ls = await cli("project", "ls");
+  expect(ls.stdout).toContain(`kanban  ${repoDir}  test gate on`);
+  expect(ls.stdout).toContain("sometag  — (fallback)  test gate on"); // un-routed tag listed lazily
+
+  const off = await cli("project", "set", "kanban", "--no-test-gate");
+  expect(off.code).toBe(0);
+  expect(off.stdout.trim()).toBe(`saved  kanban  ${repoDir}  test gate off`);
+
+  const show = await cli("project", "show", "kanban");
+  expect(show.code).toBe(0);
+  expect(show.stdout.trim()).toBe(`kanban  ${repoDir}  test gate off`);
+
+  const cleared = await cli("project", "set", "kanban", "--clear-repo");
+  expect(cleared.code).toBe(0);
+  expect(cleared.stdout.trim()).toBe("saved  kanban  — (fallback)  test gate off");
+
+  const nope = await cli("project", "show", "nope");
+  expect(nope.code).toBe(1);
+  expect(nope.stderr).toContain("unknown project 'nope'");
+});
+
+test("project set validation: relative/missing paths and conflicting flags", async () => {
+  const rel = await cli("project", "set", "kanban", "--repo", "relative/x");
+  expect(rel.code).toBe(1);
+  expect(rel.stderr).toContain("repo path must be an absolute path to an existing directory: relative/x");
+
+  const missing = await cli("project", "set", "kanban", "--repo", join(dir, "nope"));
+  expect(missing.code).toBe(1);
+  expect(missing.stderr).toContain("repo path must be an absolute path to an existing directory");
+
+  const bothRepo = await cli("project", "set", "kanban", "--repo", dir, "--clear-repo");
+  expect(bothRepo.code).toBe(1);
+  expect(bothRepo.stderr).toContain("--repo and --clear-repo are mutually exclusive");
+
+  const bothGate = await cli("project", "set", "kanban", "--test-gate", "--no-test-gate");
+  expect(bothGate.code).toBe(1);
+  expect(bothGate.stderr).toContain("--test-gate and --no-test-gate are mutually exclusive");
+
+  const bare = await cli("project", "set", "x");
+  expect(bare.code).toBe(1);
+  expect(bare.stderr).toContain("usage: kanban project set <name> (--repo <path> | --clear-repo) [--test-gate | --no-test-gate]");
 });

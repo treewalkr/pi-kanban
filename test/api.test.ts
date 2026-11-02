@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/app";
@@ -1318,4 +1318,71 @@ test("PATCH /tasks/:id before anchors the move; bad anchor 409s", async () => {
   // self anchor → 400 invalid
   const self = await patch(a.id, { before: a.id });
   expect(self.status).toBe(400);
+});
+
+test("GET/PUT /projects roundtrip; empty body 400; bad path 400; schema violation 422", async () => {
+  const app = createApp(db);
+  db.createTask({ title: "tagged card", project: "e2e-proj" });
+
+  // GET surfaces the lazy union, un-routed tag included
+  const get1 = await app.handle(new Request("http://localhost/projects"));
+  expect(get1.status).toBe(200);
+  const { projects } = (await get1.json()) as { projects: Array<{ name: string; repoPath: string | null; testGate: boolean }> };
+  expect(projects).toContainEqual({ name: "e2e-proj", repoPath: null, testGate: true });
+
+  // PUT routes the repo
+  const repoDir = join(dir, "repo");
+  mkdirSync(repoDir);
+  const put = await app.handle(
+    new Request("http://localhost/projects/e2e-proj", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoPath: repoDir }),
+    }),
+  );
+  expect(put.status).toBe(200);
+  expect(((await put.json()) as { project: unknown }).project).toEqual({ name: "e2e-proj", repoPath: repoDir, testGate: true });
+
+  // relative path → 400 with the db contract's message
+  const rel = await app.handle(
+    new Request("http://localhost/projects/e2e-proj", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoPath: "rel/x" }),
+    }),
+  );
+  expect(rel.status).toBe(400);
+  expect(((await rel.json()) as { error?: string }).error).toContain("repo path must be an absolute path to an existing directory");
+
+  // empty body → 400
+  const empty = await app.handle(
+    new Request("http://localhost/projects/e2e-proj", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }),
+  );
+  expect(empty.status).toBe(400);
+  expect(((await empty.json()) as { error?: string }).error).toBe("provide repoPath and/or testGate");
+
+  // wrong-typed repoPath → 422 (Elysia schema)
+  const bad = await app.handle(
+    new Request("http://localhost/projects/e2e-proj", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoPath: 5 }),
+    }),
+  );
+  expect(bad.status).toBe(422);
+
+  // null unrouts
+  const unroute = await app.handle(
+    new Request("http://localhost/projects/e2e-proj", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoPath: null }),
+    }),
+  );
+  expect(unroute.status).toBe(200);
+  expect(((await unroute.json()) as { project: unknown }).project).toEqual({ name: "e2e-proj", repoPath: null, testGate: true });
 });

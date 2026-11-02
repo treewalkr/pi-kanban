@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type Task, type TaskPatch } from "./db";
+import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type Priority, type ProjectRoute, type Task, type TaskPatch } from "./db";
 import { charterError, charterFor } from "./lane-workers";
-import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, ownedLines, overviewLine, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
+import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, ownedLines, overviewLine, projectList, projectRow, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
 import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
 import { searchBoard, HARD_RESULT_LIMIT, MAX_RESULTS } from "./search";
 import { cardFileDiff } from "./diff";
@@ -52,6 +52,7 @@ usage:
   kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force] | limit <ref> <n|off>
   kanban worker run <lane> [--focus <text>] [--author <name>]   (queue a lane worker run; drained by serve --agents)
   kanban worker ls [--lane <ref>] [--json]     (lane worker runs: id · lane · status · age · summary)
+  kanban project ls | show <name> | set <name> [--repo <path> | --clear-repo] [--test-gate | --no-test-gate]
   kanban serve [--port <n>] [--open] [--agents] [--fg]  (backgrounds itself by default: kanban ps to check, kanban stop to stop; --fg stays foreground)
   kanban stop [--port <n>]                     (SIGTERM the kanban server; graceful — traces in-flight agents)
   kanban ps [--json]                           (running serves on any port + their live agent sessions + abandoned leases)
@@ -78,8 +79,8 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus"]);
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear"]);
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus", "repo"]);
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear", "clear-repo", "test-gate", "no-test-gate"]);
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag"]); // repeatable: each occurrence appends one value
 
 export function parse(argv: string[]): Parsed {
@@ -1307,6 +1308,50 @@ async function main(): Promise<number> {
           return 0;
         }
         throw new KanbanError(`unknown worker subcommand '${sub}' (run | ls)`, "invalid");
+      }
+
+      case "project": {
+        const [sub, ...subRest] = positional;
+        switch (sub) {
+          case undefined:
+          case "ls": {
+            const routes = db.listProjects();
+            if (json) jsonOut(routes);
+            else out(projectList(routes));
+            return 0;
+          }
+          case "show": {
+            const name = subRest.join(" ");
+            if (!name) throw new KanbanError("usage: kanban project show <name>", "invalid");
+            const route = db.getProject(name);
+            if (!route) throw new KanbanError(`unknown project '${name}'`, "not-found");
+            if (json) jsonOut(route);
+            else out(projectRow(route));
+            return 0;
+          }
+          case "set": {
+            const name = subRest.join(" ");
+            const usage = "usage: kanban project set <name> (--repo <path> | --clear-repo) [--test-gate | --no-test-gate]";
+            if (!name) throw new KanbanError(usage, "invalid");
+            const repo = str(flags, "repo");
+            const clearRepo = !!flags["clear-repo"];
+            const gateOn = !!flags["test-gate"];
+            const gateOff = !!flags["no-test-gate"];
+            if (!repo && !clearRepo && !gateOn && !gateOff) throw new KanbanError(usage, "invalid");
+            if (repo && clearRepo) throw new KanbanError("--repo and --clear-repo are mutually exclusive", "invalid");
+            if (gateOn && gateOff) throw new KanbanError("--test-gate and --no-test-gate are mutually exclusive", "invalid");
+            let route: ProjectRoute | null = null;
+            if (repo) route = db.setProjectRepo(name, repo);
+            else if (clearRepo) route = db.setProjectRepo(name, null);
+            if (gateOn) route = db.setProjectGate(name, true);
+            else if (gateOff) route = db.setProjectGate(name, false);
+            if (json) jsonOut(route);
+            else out(`saved  ${projectRow(route!)}`);
+            return 0;
+          }
+          default:
+            throw new KanbanError(`unknown project subcommand '${sub}' (ls | show | set)`, "invalid");
+        }
       }
 
       default:
