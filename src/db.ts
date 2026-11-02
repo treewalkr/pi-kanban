@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { dirname, join } from "node:path";
 import { newId, slugify } from "./ids";
 
@@ -127,6 +128,13 @@ export interface LaneSnapshotCard {
   ageDays: number;
   priority: string;
   blocked: boolean;
+}
+
+/** A project's routing settings (the `projects` table); repoPath null = the serve launch dir. */
+export interface ProjectRoute {
+  name: string;
+  repoPath: string | null;
+  testGate: boolean;
 }
 
 export interface LaneSnapshot {
@@ -486,6 +494,13 @@ CREATE TABLE IF NOT EXISTS gh_state (
   merged_at INTEGER,
   fetched_at INTEGER NOT NULL,
   error TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS projects (
+  name TEXT PRIMARY KEY,
+  repo_path TEXT,
+  test_gate INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 `;
 
@@ -849,6 +864,7 @@ export class KanbanDb {
     this.ensureWaitingLane();
     this.ensureArchiveLane();
     this.migratePlansTable();
+    this.migrateProjectsSeed();
     this.backfillLaneEvents();
   }
 
@@ -1047,6 +1063,98 @@ export class KanbanDb {
        SELECT id, task_id, 'plan', version, content, source, created_at FROM plans`,
     ).run();
     this.db.exec("DROP TABLE plans");
+  }
+
+  // One-time seed at upgrade: existing project tags materialize as un-routed
+  // rows exactly once (guarded by an empty table) so route edits survive tag
+  // churn. Later tags surface lazily through listProjects' read-time union —
+  // this only ever runs in the constructor, reads elsewhere stay writes-free.
+  private migrateProjectsSeed(): void {
+    const count = this.q("SELECT COUNT(*) AS n FROM projects").get() as { n: number };
+    if (count.n > 0) return;
+    const now = Date.now();
+    this.tx(() => {
+      this.q(
+        `INSERT OR IGNORE INTO projects (name, repo_path, test_gate, created_at, updated_at)
+         SELECT DISTINCT project, NULL, 1, ?, ? FROM tasks WHERE project != ''`,
+      ).run(now, now);
+    });
+  }
+
+  /** Routing settings per project tag; un-registered tags surface lazily as un-routed rows (no write on read). */
+  listProjects(): ProjectRoute[] {
+    const rows = this.q(
+      `SELECT name, repo_path, test_gate FROM projects
+       UNION
+       SELECT DISTINCT project, NULL, 1 FROM tasks WHERE project != '' AND project NOT IN (SELECT name FROM projects)
+       ORDER BY name`,
+    ).all() as Array<{ name: string; repo_path: string | null; test_gate: number }>;
+    return rows.map((r) => ({ name: r.name, repoPath: r.repo_path, testGate: r.test_gate === 1 }));
+  }
+
+  /** The stored row only — null for un-registered tags (defaults apply upstream). */
+  getProject(name: string): ProjectRoute | null {
+    const row = this.q("SELECT name, repo_path, test_gate FROM projects WHERE name = ?").get(name) as
+      | { name: string; repo_path: string | null; test_gate: number }
+      | undefined;
+    if (!row) return null;
+    return { name: row.name, repoPath: row.repo_path, testGate: row.test_gate === 1 };
+  }
+
+  // name guard shared by both setters: matches the 48-char tag cap
+  private projectRow(name: string): { name: string } {
+    const trimmed = name.trim();
+    if (trimmed.length < 1 || trimmed.length > 48) {
+      throw new KanbanError("project name must be 1 to 48 characters", "invalid");
+    }
+    return { name: trimmed };
+  }
+
+  /** Upsert the repo route; null clears it (the card falls back to the serve cwd). */
+  setProjectRepo(name: string, repoPath: string | null): ProjectRoute {
+    const { name: clean } = this.projectRow(name);
+    if (repoPath !== null) {
+      const bad = `repo path must be an absolute path to an existing directory: ${repoPath}`;
+      if (!isAbsolute(repoPath)) throw new KanbanError(bad, "invalid");
+      let isDir = false;
+      try {
+        isDir = statSync(repoPath).isDirectory();
+      } catch {
+        /* missing/unreadable path */
+      }
+      if (!isDir) throw new KanbanError(bad, "invalid");
+    }
+    return this.upsertProject(clean, { repoPath });
+  }
+
+  /** Upsert the test-gate bit; creates the row with a null repo when absent. */
+  setProjectGate(name: string, testGate: boolean): ProjectRoute {
+    const { name: clean } = this.projectRow(name);
+    return this.upsertProject(clean, { testGate });
+  }
+
+  private upsertProject(name: string, patch: { repoPath?: string | null; testGate?: boolean }): ProjectRoute {
+    return this.tx(() => {
+      const now = Date.now();
+      const existing = this.getProject(name);
+      const repoPath = patch.repoPath !== undefined ? patch.repoPath : (existing?.repoPath ?? null);
+      const testGate = patch.testGate !== undefined ? patch.testGate : (existing?.testGate ?? true);
+      this.q(
+        `INSERT INTO projects (name, repo_path, test_gate, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET repo_path = excluded.repo_path, test_gate = excluded.test_gate, updated_at = excluded.updated_at`,
+      ).run(name, repoPath, testGate ? 1 : 0, now, now);
+      return this.getProject(name)!;
+    });
+  }
+
+  /** The cwd agents spawn in for a project tag; null = the serve launch dir. No fs checks — a vanished repo fails the spawn. */
+  projectCwd(project: string): string | null {
+    if (project === "") return null;
+    const row = this.q("SELECT repo_path FROM projects WHERE name = ?").get(project) as
+      | { repo_path: string | null }
+      | undefined;
+    return row?.repo_path ?? null;
   }
 
   private backfillLaneEvents(): void {
