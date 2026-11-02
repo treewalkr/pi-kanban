@@ -261,11 +261,6 @@ class BoardStore {
 
   editing = $state<Task | null>(null);
   editMode = $state(false);
-  dragging = $state<string | null>(null);
-  /** index counts the lane's top-level cards (gap rendering); before is the
-   * anchor card id the drop inserts ahead of — undefined means append. The
-   * anchor survives hidden nested children shifting the server's flat order. */
-  dropHint = $state<{ laneId: string; index: number; before?: string } | null>(null);
   expanded = $state<Set<string>>(new Set());
   /** Card to scroll to and flash once the detail modal closes (search jumps). */
   flashId = $state<string | null>(null);
