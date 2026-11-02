@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -1989,4 +1989,81 @@ test("boardOverview: lane counts, oldest age, waiting ages, next proposal, block
   const overview2 = db.boardOverview(future);
   expect(overview2.waiting[0]!.title).toHaveLength(80);
   expect(overview2.waiting[0]!.ageDays).toBe(12);
+});
+
+test("projects: accessor round-trip — set repo, flip gate, clear repo", () => {
+  expect(db.listProjects()).toEqual([]);
+  expect(db.getProject("alpha")).toBeNull();
+
+  const routed = db.setProjectRepo("alpha", dir);
+  expect(routed).toEqual({ name: "alpha", repoPath: dir, testGate: true });
+  expect(db.getProject("alpha")).toEqual(routed);
+  expect(db.projectCwd("alpha")).toBe(dir);
+
+  const gated = db.setProjectGate("alpha", false);
+  expect(gated).toEqual({ name: "alpha", repoPath: dir, testGate: false }); // the route survives a gate flip
+  expect(db.projectCwd("alpha")).toBe(dir);
+
+  const cleared = db.setProjectRepo("alpha", null);
+  expect(cleared).toEqual({ name: "alpha", repoPath: null, testGate: false });
+  expect(db.projectCwd("alpha")).toBeNull(); // un-routed again
+
+  // gate set on a never-routed project creates the row with a null repo
+  expect(db.setProjectGate("beta", false)).toEqual({ name: "beta", repoPath: null, testGate: false });
+  expect(db.projectCwd("beta")).toBeNull();
+  expect(db.projectCwd("")).toBeNull(); // untagged cards never route
+
+  // reopen persists both rows (created_at survives the updates)
+  db.close();
+  db = new KanbanDb(join(dir, "t.db"));
+  expect(db.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: false });
+  expect(db.getProject("beta")).toEqual({ name: "beta", repoPath: null, testGate: false });
+  expect(db.listProjects().map((p) => p.name)).toEqual(["alpha", "beta"]);
+});
+
+test("projects: seed materializes existing tags once; new tags stay lazy", () => {
+  // fresh db: a tag created after open is not a table row yet
+  db.createTask({ title: "tagged", project: "alpha" });
+  expect(db.getProject("alpha")).toBeNull(); // reads never write
+  expect(db.listProjects()).toEqual([{ name: "alpha", repoPath: null, testGate: true }]); // lazy union
+
+  // reopening the same file seeds the tag exactly once
+  db.close();
+  db = new KanbanDb(join(dir, "t.db"));
+  expect(db.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: true });
+  expect(db.listProjects()).toEqual([{ name: "alpha", repoPath: null, testGate: true }]);
+
+  // second reopen is a no-op — and a post-upgrade tag stays lazy until set
+  db.createTask({ title: "later tag", project: "beta" });
+  db.close();
+  db = new KanbanDb(join(dir, "t.db"));
+  expect(db.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: true });
+  expect(db.getProject("beta")).toBeNull();
+  expect(db.listProjects().map((p) => p.name)).toEqual(["alpha", "beta"]);
+
+  // "" (untagged cards) never appears
+  db.createTask({ title: "untagged" });
+  expect(db.listProjects().map((p) => p.name)).toEqual(["alpha", "beta"]);
+});
+
+test("projects: setProjectRepo rejects relative, missing, and non-directory paths", () => {
+  const relative = join("rel", "x");
+  for (const bad of [relative, join(dir, "nope")]) {
+    expect(() => db.setProjectRepo("a", bad)).toThrow(
+      `repo path must be an absolute path to an existing directory: ${bad}`,
+    );
+  }
+  const filePath = join(dir, "plain.txt");
+  writeFileSync(filePath, "not a dir");
+  expect(() => db.setProjectRepo("a", filePath)).toThrow(
+    `repo path must be an absolute path to an existing directory: ${filePath}`,
+  );
+  expect(db.getProject("a")).toBeNull(); // a rejected set writes nothing
+
+  for (const name of ["x".repeat(49), ""]) {
+    expect(() => db.setProjectRepo(name, dir)).toThrow("project name must be 1 to 48 characters");
+    expect(() => db.setProjectGate(name, true)).toThrow("project name must be 1 to 48 characters");
+  }
+  // names are trimmed, not rejected for surrounding space
+  expect(db.setProjectRepo("  a  ", dir).name).toBe("a");
 });

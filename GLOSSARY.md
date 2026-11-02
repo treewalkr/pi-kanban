@@ -16,6 +16,11 @@ _Avoid_: Column, state, status, stage
 A label associating a card with a codebase or workstream so one shared board can filter work across multiple efforts.
 _Avoid_: Board, namespace, repo tag
 
+**Project route**:
+The stored mapping from a project tag to a repo path (`projects` table) that
+decides which repo a card's agents spawn in; un-routed tags fall back to the
+serve launch dir. _Avoid_: repo mapping, project binding, workspace.
+
 **Thread**:
 The chronological conversation on a card where humans and agents record questions, handoffs, reviews, and gate verdicts.
 _Avoid_: Activity log, comment feed, discussion, chat history
