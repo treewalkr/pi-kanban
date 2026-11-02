@@ -16,3 +16,4 @@ Append one dated line whenever a human overrides a verdict, a finding turns out 
 - 2026-10-29 · Code blocks scroll, never wrap — review approved pre-wrap (1740c72) and the user reversed it the same day (9b21ba2).
 - 2026-10-30 · On/off states must differ by more than hue — stack filled icon + tinted pill + accent (a59042a).
 - 2026-11-01 · Multi-value chips like tags belong in a popover, never inline in header rows (a3deeea).
+- 2026-11-03 · bun test green ≠ e2e green: when a card reshapes rendered UI, run the affected e2e specs before approving — lane-contexts (3n96c) removed the flat "Role" seg bar and reached Done with manager-chat.e2e red (caught next card, 6vw5e).
