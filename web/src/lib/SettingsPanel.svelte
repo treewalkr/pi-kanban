@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { Bot, Layers, Settings2 } from "@lucide/svelte";
+  import { Bot, FolderGit2, Layers, Settings2 } from "@lucide/svelte";
   import { agents, type SettingsSection } from "./agents.svelte";
   import { pools } from "./pools.svelte";
+  import { projects } from "./projects.svelte";
   import GeneralSettings from "./GeneralSettings.svelte";
   import AgentsSettings from "./AgentsSettings.svelte";
   import PoolsSettings from "./PoolsSettings.svelte";
+  import ProjectsSettings from "./ProjectsSettings.svelte";
 
   type Section = SettingsSection;
 
@@ -24,6 +26,7 @@
   $effect(() => {
     if (section === "agents" && !agents.loaded) void agents.load();
     if (section === "pools" && !pools.loaded) void pools.load();
+    if (section === "projects" && !projects.loaded) void projects.load();
   });
 
   function close(): void {
@@ -75,6 +78,15 @@
           <Layers size={16} strokeWidth={1.8} />
           <span>Pools</span>
         </button>
+        <button
+          type="button"
+          class="settings-tab"
+          aria-current={section === "projects" ? "page" : undefined}
+          onclick={() => activate("projects")}
+        >
+          <FolderGit2 size={16} strokeWidth={1.8} />
+          <span>Projects</span>
+        </button>
       </nav>
       <button type="button" class="settings-close" onclick={close} aria-label="close settings" title="close settings">×</button>
     </div>
@@ -104,6 +116,18 @@
             <p class="settings-loading">
               loading pool settings…
               <button type="button" onclick={() => void pools.load()}>retry</button>
+            </p>
+          {/if}
+        </div>
+      {/if}
+      {#if visited.has("projects")}
+        <div class="settings-section-host" hidden={section !== "projects"}>
+          {#if projects.loaded}
+            <ProjectsSettings />
+          {:else}
+            <p class="settings-loading">
+              loading project settings…
+              <button type="button" onclick={() => void projects.load()}>retry</button>
             </p>
           {/if}
         </div>
