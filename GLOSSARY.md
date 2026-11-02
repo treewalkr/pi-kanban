@@ -53,6 +53,10 @@ only when the board's shape changes, so keeping the board truthful is enforced
 by context rather than prompt discipline.
 _Avoid_: Ping, reminder, board feed, injection
 
+**Repo skill**:
+A procedural SKILL.md checked into this repo's `skills/<name>/` — one per recurring procedure — symlinked by `scripts/install.sh` into every agent surface's skill root (`~/.pi/agent/skills/`, `~/.agents/skills/`) so all agents read one live source.
+_Avoid_: Project skill (collides with Project the card label), custom skill, personal skill.
+
 **Overview**:
 The cheap one-read board shape — lane counts, WIP limits, and owned cards,
 never card bodies — the orientation companion to Brief.

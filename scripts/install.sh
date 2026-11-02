@@ -16,10 +16,21 @@ mkdir -p "$BIN_DIR"
 chmod +x src/cli.ts
 ln -sf "$(pwd)/src/cli.ts" "$BIN_DIR/kanban"
 
-SKILL_DIR="${HOME}/.pi/agent/skills/pi-kanban"
-mkdir -p "$SKILL_DIR"
-cp skills/pi-kanban/SKILL.md "$SKILL_DIR/SKILL.md"
-cp skills/pi-kanban/plan-template.md "$SKILL_DIR/plan-template.md"
+# Repo skills: every skills/<name> dir is symlinked (not copied) into both agent
+# skill roots — pi (~/.pi/agent/skills) and the shared ~/.agents/skills — so every
+# surface reads one live source (same pattern as the notice extension below).
+for skill_dir in skills/*/; do
+  name="$(basename "$skill_dir")"
+  for root in "${HOME}/.pi/agent/skills" "${HOME}/.agents/skills"; do
+    mkdir -p "$root"
+    dest="$root/$name"
+    if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+      echo "replacing $dest (existing non-symlink) with repo symlink" >&2
+      rm -rf "$dest"
+    fi
+    ln -sfn "$(pwd)/skills/$name" "$dest"
+  done
+done
 
 # Board notice: pi loads extensions from ~/.pi/agent/extensions; the notice is a
 # Node-safe module that reads the board through the CLI installed above.
@@ -33,7 +44,7 @@ git config core.hooksPath scripts/hooks
 
 echo "installed:"
 echo "  cli    → $BIN_DIR/kanban"
-echo "  skill  → $SKILL_DIR/SKILL.md"
+echo "  skills → every skills/<name> symlinked into ~/.pi/agent/skills and ~/.agents/skills"
 echo "  notice → $EXT_DIR/kanban-notice.ts"
 echo "  hooks  → core.hooksPath scripts/hooks (pre-commit + pre-merge-commit: check + test)"
 echo "web ui  → kanban serve --open   (or: bun run dev)"

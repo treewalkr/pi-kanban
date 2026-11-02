@@ -1599,6 +1599,12 @@ button:focus-visible {
   .promote {
     transition: none;
   }
+  .drag-layer,
+  .drag-ghost,
+  .card.drag-slot {
+    animation: none;
+    transition: none;
+  }
 }
 
 .card:hover {
@@ -1610,9 +1616,42 @@ button:focus-visible {
   cursor: grabbing;
 }
 
-.card.dragging {
-  opacity: 0.45;
-  border-style: dashed;
+.card.drag-slot {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-hover));
+  border: 1px dashed var(--accent);
+  opacity: 0.75;
+  transition: background 0.18s ease-out, border-color 0.18s ease-out, opacity 0.18s ease-out;
+}
+
+body.drag-live {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.drag-layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.drag-ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  pointer-events: none;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28), 0 4px 10px rgba(0, 0, 0, 0.16);
+  opacity: 0.96;
+  cursor: grabbing;
+  transition: opacity 0.12s ease-out, transform 0.12s ease-out;
+  transform-origin: center center;
+}
+
+.drag-ghost,
+.drag-ghost * {
+  pointer-events: none !important;
 }
 
 .card-title {
@@ -1734,13 +1773,6 @@ button:focus-visible {
 
 .age {
   margin-left: auto;
-}
-
-.drop-gap {
-  flex: none;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--accent);
 }
 
 /* task hierarchy (epic → story → subtask) */
@@ -2082,7 +2114,7 @@ button:focus-visible {
 }
 
 .lane.archive-lane .card:hover,
-.lane.archive-lane .card.dragging {
+.lane.archive-lane .card.drag-slot {
   opacity: 1;
 }
 

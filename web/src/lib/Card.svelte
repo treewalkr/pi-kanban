@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { flip } from "svelte/animate";
   import type { Task } from "../../../src/db";
   import { board } from "./board.svelte";
+  import { drag, FLIP_DURATION_MS } from "./drag.svelte";
   import CardView from "./Card.svelte";
   import IdChip from "./IdChip.svelte";
   import { renderMarkdown } from "./markdown";
@@ -32,8 +34,7 @@
   class="card"
   class:child
   class:blocked={board.isBlocked(task.id)}
-  class:dragging={board.dragging === task.id}
-  draggable="true"
+  class:drag-slot={drag.taskId === task.id}
   data-card={task.id}
   role="button"
   tabindex="0"
@@ -45,15 +46,7 @@
       openDetail(e);
     }
   }}
-  ondragstart={(e) => {
-    e.dataTransfer!.setData("text/plain", task.id);
-    e.dataTransfer!.effectAllowed = "move";
-    board.dragging = task.id;
-  }}
-  ondragend={() => {
-    board.dragging = null;
-    board.dropHint = null;
-  }}
+  onpointerdown={(e) => drag.press(task, e)}
 >
   {#if canPromote}
     <button
@@ -159,8 +152,10 @@
   </div>
   {#if open && nested.length > 0}
     <div class="card-children" role="group" aria-label="subtasks of {task.title}">
-      {#each nested as sub (sub.id)}
-        <CardView task={sub} child />
+      {#each drag.displayNest(task) as sub (sub.id)}
+        <div animate:flip={{ duration: FLIP_DURATION_MS }}>
+          <CardView task={sub} child />
+        </div>
       {/each}
     </div>
   {/if}

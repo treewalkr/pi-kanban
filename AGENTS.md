@@ -8,7 +8,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 - `src/chat.ts` + `src/chat-events.ts` — resident chat sessions over the pi SDK (per-card + the board manager on pseudo-card `board`); `/chat/:cardId`, `/chat/:cardId/events` (SSE) in `app.ts`; panel in `web/src/lib/ChatPanel.svelte`, drawer in `web/src/lib/ManagerChat.svelte`
 - `src/lane-workers.ts` — lane worker charters/prompts + the serve-process runner that drains `lane_workers` rows (`kanban worker run`); workers act only via CLI verbs, `pi-worker-<lane>` authors, gates human-only
 - `web/` — Vite + Svelte 5 SPA (board UI), calls the API via Eden Treaty
-- `skills/pi-kanban/SKILL.md` — pi skill, installed to `~/.pi/agent/skills/pi-kanban/` by `scripts/install.sh`
+- `skills/` — repo skills: `pi-kanban` (board workflow) + one procedural skill per recurring procedure (`e2e-verify`, `repro`, `overnight`, `resume-build`, `release`); `scripts/install.sh` symlinks each into `~/.pi/agent/skills/` and `~/.agents/skills/`
 - `src/notice.ts` — board-notice pi extension (Node-safe: only `node:*` imports; reads the board by spawning the installed CLI), symlinked by `scripts/install.sh` to `~/.pi/agent/extensions/kanban-notice.ts`; one `display:false` message at session start and on board-shape changes (`KANBAN_NOTICE=0` disables)
 - Card ownership — `tasks.owner` column (`src/db.ts`), `kanban claim`, auto-set on entry to Test + Implement (`handoff`/`approve`), auto-clear on any exit; shown in `overview`, `ls --owner`, `show`
 - `data/kanban.db` — SQLite DB (gitignored); `KANBAN_DB` env var overrides the path (tests use this)
@@ -17,6 +17,15 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 - Lane workflows — `lanes.context` (`LaneContext` in `src/db.ts`, seeded by `defaultLaneContext`) drives the auto-agent loop (`src/autoreview.ts` `evaluateLaneContext`): actor chains, instructions, templates, triggers/exits/gates/caps per lane; `kanban lane context` (`src/cli.ts`) + `/lanes/:id/context` (`src/app.ts`) edit it, the web Agents panel groups by lane, `agent_configs` and lane actor configs stay bidirectionally synced
 - WIP limits — `lanes.wip_limit` column (`src/db.ts`), `kanban lane limit` (`src/cli.ts`), `wip-over-limit` in `kanban check`, lane count chip in the web UI
 - Serve staleness — `/health` reports `version`, `pid`, `git {commit, head, dirty}` (`src/version.ts`); header `⟳ stale` chip (`web/src/lib/service.svelte.ts`) and `kanban check [--port <n>]` flag a lagging, down, or version-split serve; the chip and settings → restart service rebuild + self-respawn it
+
+## Where knowledge lives
+
+- `AGENTS.md` — always-on law: rules every session follows unprompted.
+- `skills/<name>/SKILL.md` — on-demand procedures: loaded when the task matches; one per recurring procedure, symlinked into agent skill roots by `scripts/install.sh`.
+- `REVIEW.md` — human feedback to the review agents.
+- Personal context (preferences, history) lives in agent memory, never in this repo.
+
+A procedure that recurs becomes a skill; a rule that always applies goes here.
 
 ## Rules
 

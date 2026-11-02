@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,6 +47,8 @@ function makeRepoSandbox(): { container: string; repo: string; home: string } {
   mkdirSync(join(repo, "skills", "pi-kanban"), { recursive: true });
   writeFileSync(join(repo, "skills", "pi-kanban", "SKILL.md"), "# skill\n");
   writeFileSync(join(repo, "skills", "pi-kanban", "plan-template.md"), "# plan template\n");
+  mkdirSync(join(repo, "skills", "repro"), { recursive: true });
+  writeFileSync(join(repo, "skills", "repro", "SKILL.md"), "# repro skill\n");
   mkdirSync(join(repo, "src"), { recursive: true });
   writeFileSync(join(repo, "src", "cli.ts"), "#!/usr/bin/env bun\n");
   writeFileSync(join(repo, "src", "notice.ts"), "// notice extension stub\n");
@@ -103,6 +105,41 @@ describe("scripts/install.sh (gate wiring)", () => {
     expect(second.code).toBe(0);
     expect(gitConfig(["config", "core.hooksPath"])).toBe("scripts/hooks");
     accessSync(binLink, constants.F_OK);
+  });
+
+  test("install.sh symlinks every skill into both agent roots and migrates the legacy copy", () => {
+    // Legacy install state: a real (copied) pi-kanban dir from the old cp wiring.
+    const legacyDir = join(home, ".pi", "agent", "skills", "pi-kanban");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, "SKILL.md"), "# stale copy\n");
+    writeFileSync(join(legacyDir, "plan-template.md"), "# stale plan template\n");
+
+    const first = runInstall(repo, home);
+
+    expect(first.code).toBe(0);
+    expect(first.stdout).toContain("skills → every skills/<name> symlinked into ~/.pi/agent/skills and ~/.agents/skills");
+    // The legacy real dir lost to the repo install — loudly.
+    expect(first.stderr).toContain("replacing");
+    expect(first.stderr).toContain("non-symlink");
+
+    // Every skills/<name> is a symlink at BOTH roots, pointing at the repo.
+    for (const root of [join(home, ".pi", "agent", "skills"), join(home, ".agents", "skills")]) {
+      for (const name of ["pi-kanban", "repro"]) {
+        const link = join(root, name);
+        expect(readlinkSync(link)).toBe(join(repo, "skills", name));
+        expect(existsSync(link)).toBe(true);
+      }
+    }
+    // The legacy copy was replaced by the link — repo content, not stale copy.
+    expect(readFileSync(join(home, ".pi", "agent", "skills", "pi-kanban", "SKILL.md"), "utf-8")).toBe("# skill\n");
+    expect(readFileSync(join(home, ".pi", "agent", "skills", "pi-kanban", "plan-template.md"), "utf-8")).toBe("# plan template\n");
+
+    // Idempotent: second run exits 0 and leaves the links alone.
+    const second = runInstall(repo, home);
+    expect(second.code).toBe(0);
+    expect(second.stderr).not.toContain("replacing");
+    expect(readlinkSync(join(home, ".pi", "agent", "skills", "pi-kanban"))).toBe(join(repo, "skills", "pi-kanban"));
+    expect(readlinkSync(join(home, ".agents", "skills", "repro"))).toBe(join(repo, "skills", "repro"));
   });
 
   test("README documents the hook wiring", () => {

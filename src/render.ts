@@ -1,4 +1,4 @@
-import type { BoardStatsPayload, CardStats, Comment, KanbanDb, Lane, Task } from "./db";
+import type { BoardStatsPayload, CardStats, Comment, KanbanDb, Lane, ProjectRoute, Task } from "./db";
 import type { SearchResult } from "./search";
 import { clockTime, formatDuration, KIND_TAG_COLORS, latestStateIndex, relTime, shortDate, wrapText } from "./thread";
 
@@ -349,6 +349,21 @@ export function laneList(db: KanbanDb): string {
       const limit = l.wipLimit !== null ? c.dim(`/${l.wipLimit}`) : "";
       return `${c.dim(`${i + 1}.`)} ${c.hex(laneColor(i), l.name)}${c.dim(` (${l.id})`)}  ${n}${limit}${fixed}`;
     })
+    .join("\n");
+}
+
+/** One project-route row: `name  repo (or — (fallback))  test gate on|off`. */
+export function projectRow(route: ProjectRoute): string {
+  return `${route.name}  ${route.repoPath ?? "— (fallback)"}  test gate ${route.testGate ? "on" : "off"}`;
+}
+
+/** Project list for `kanban project ls` — one row per route, sorted by name. */
+export function projectList(routes: ProjectRoute[]): string {
+  if (routes.length === 0) return "no projects — tags appear as cards use them";
+  return routes
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(projectRow)
     .join("\n");
 }
 

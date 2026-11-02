@@ -1,8 +1,7 @@
 import * as path from "node:path";
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneContext, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type WorkerPool } from "./db";
-import { parseGhRef, refreshGhUrl } from "./gh";
+import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneContext, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type WorkerPool, type ProjectRoute } from "./db";import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listChatModels, listPiModels } from "./models";
@@ -1135,6 +1134,30 @@ export const createApp = (
       },
       {
         params: t.Object({ id: t.String() }),
+      },
+    )
+    .get("/projects", (): { projects: ProjectRoute[] } => ({ projects: db.listProjects() }))
+    .put(
+      "/projects/:name",
+      ({ params, body, status }): { project: ProjectRoute } | unknown => {
+        try {
+          if (body.repoPath === undefined && body.testGate === undefined) {
+            throw new KanbanError("provide repoPath and/or testGate", "invalid");
+          }
+          let project: ProjectRoute | null = null;
+          if (body.repoPath !== undefined) project = db.setProjectRepo(params.name, body.repoPath);
+          if (body.testGate !== undefined) project = db.setProjectGate(params.name, body.testGate);
+          return status(200, { project });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        params: t.Object({ name: t.String({ minLength: 1, maxLength: 48 }) }),
+        body: t.Object({
+          repoPath: t.Optional(t.Union([t.String(), t.Null()])),
+          testGate: t.Optional(t.Boolean()),
+        }),
       },
     )
     .get("/autoarchive", (): { days: number } => ({ days: db.autoArchiveDays() }))
