@@ -80,7 +80,10 @@ export async function serveRestart(): Promise<void> {
     if (!(await buildWeb())) return;
     console.log("[restart] build ok — draining sessions, respawning server…");
     await runShutdown(); // terminate agent children, release leases — no orphans
-    Bun.spawn([process.execPath, ...process.argv.slice(1)], {
+    // --fg: the respawn must run the server in-process. If the incumbent was
+    // launched by the backgrounding `kanban serve` wrapper, its argv has no
+    // --fg — re-running it verbatim would double-background the respawn.
+    Bun.spawn([process.execPath, ...process.argv.slice(1), "--fg"], {
       detached: true,
       stdin: "ignore",
       stdout: "inherit",
