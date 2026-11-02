@@ -35,7 +35,7 @@ export function roleVerb(role: AgentRole): "reviewing" | "checking plan" | "plan
   if (role === "plan-reviewer") return "checking plan";
   if (role === "planner") return "planning";
   if (role === "elaborator") return "elaborating";
-  return "building";
+  return "building"; // builders and custom lane actors
 }
 
 export function roleAuthor(role: AgentRole): string {
@@ -43,7 +43,8 @@ export function roleAuthor(role: AgentRole): string {
   if (role === "plan-reviewer") return "pi-plan-reviewer";
   if (role === "planner") return "pi-planner";
   if (role === "elaborator") return "pi-elaborator";
-  return "pi-builder";
+  if (role === "builder") return "pi-builder";
+  return `pi-${role}`; // custom lane actors author as pi-<id>
 }
 
 export function queuedChip(job: QueuedJobInfo): { label: string; title: string } {

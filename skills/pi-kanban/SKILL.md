@@ -143,6 +143,35 @@ review your own work in that mode unless asked.
   card to Done. If a review session failed, a comment says so — add any
   comment to the card to re-arm it.
 
+## Lane workflows (lane contexts)
+
+Every workflow lane carries an optional **lane context** — the declarative rules the
+auto-agent loop interprets: an ordered **actor chain** (each with a `pi-` author, prompt
+instructions supporting `{id}` / `{title}` / `{tmpFile}`, and per-actor model settings), an
+optional artifact + **template**, **trigger** rules (arm on lane entry / on a human
+comment / on a matching comment), **exit** rules (a verdict comment → arm the next actor,
+re-run the first, move/park the card, or disarm), the human-only **gate**
+(`approve`/`reject` targets), and a **cap** (max auto-cycles before the card parks for a
+human). The default plan → implement → review pipeline is just the seeded configuration of
+the `plan`, `implement`, and `review` lanes — a custom lane needs zero code changes:
+
+```
+kanban lane add Design
+kanban lane context design --actor designer --author pi-designer --instructions "Design card {id} \"{title}\" against the template" \
+  --template @skills/pi-kanban/design-template.md --artifact design --approve-to plan --cap 2
+kanban lane context design            # view it (--json for machine-readable)
+kanban lane context design --clear    # remove the workflow (cards pass through untouched)
+```
+
+- Configure the seeded pipeline's agents on their lanes: web UI → ≡ → **Agents** → pick a
+  lane (or the ⚙ on any lane header); `agent_configs` and the lane actors stay in sync.
+- Verdict prefixes an actor's exit rules match are freeform (e.g. `design: pass`); the
+  seeded lanes match `plan review: pass/block` and the review verdicts.
+- Gates stay human-only: agents never run `approve`/`reject`/`plan-review`/`review` on a
+  lane they don't own, and every gate is still a human action.
+- `kanban plan-review`, `approve`, and `reject` work on any lane whose context hosts a
+  gate/artifact — a Design lane's reviewer parks cards the same way the plan reviewer does.
+
 ## Board manager and lane workers
 
 The board chat in the web UI (sidebar → **Board chat**) talks to the **board manager** — a
@@ -203,6 +232,8 @@ kanban check [--json]                                                 # board-he
 kanban stats [id] [--json]                                           # board summary, or one card's lane times / cycle / gate metrics
 kanban rm <id> [--force]                                              # delete card (a parent needs --force; cascades)
 kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force]  # manage lanes
+kanban lane context <ref> [--json] [--clear] [--from <file>]          # a lane's workflow: actors, instructions, template, triggers, exits, gate, cap
+kanban lane context <ref> --actor <id> --author <pi-name> --instructions <text|@file> [--template <text|@file>] [--artifact <name>] [--approve-to <lane>] [--cap <n>] [--test-gate]  # create/patch a lane workflow
 kanban serve [--port <n>] [--open] [--agents] [--fg]  # start web UI (default 127.0.0.1:4600); backgrounds itself (kanban ps / kanban stop); --agents: pi plans Plan-lane cards and reviews Review-lane cards
 kanban ps [--json]                                                    # running serves on any port + their live agent sessions + abandoned leases
 kanban help | version                                                 # CLI help / version

@@ -9,7 +9,7 @@
   import { CircleSlash, GitBranch } from "@lucide/svelte";
   import { cycleChip, laneAgeChip } from "./statsview";
   import { ghChip } from "./ghview";
-  import { canPromoteToPlan, queuedChip, timeAgo } from "./util";
+  import { canPromoteToPlan, queuedChip, roleVerb, timeAgo } from "./util";
   import { waitingBadge } from "./waiting";
 
   let { task, child = false }: { task: Task; child?: boolean } = $props();
@@ -125,15 +125,7 @@
     {/each}
     {#if board.activity[task.id]}
       <span class="chip working" title="pi agent working — open the card for live output">
-        ◌ {board.activity[task.id].role === "reviewer"
-          ? "reviewing"
-          : board.activity[task.id].role === "plan-reviewer"
-            ? "checking plan"
-            : board.activity[task.id].role === "planner"
-              ? "planning"
-              : board.activity[task.id].role === "elaborator"
-                ? "elaborating"
-                : "building"} · {timeAgo(board.activity[task.id].startedAt)}{#if board.activity[task.id].model} · {board.activity[task.id].model}{/if}
+        ◌ {roleVerb(board.activity[task.id].role)} · {timeAgo(board.activity[task.id].startedAt)}{#if board.activity[task.id].model} · {board.activity[task.id].model}{/if}
       </span>
     {/if}
     {#if board.queued[task.id]}

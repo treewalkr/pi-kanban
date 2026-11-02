@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { Attachment, BoardStatsPayload, CardWorkspace, GhLink, GhStatus, Lane, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
+import type { Attachment, BoardStatsPayload, CardWorkspace, GhLink, GhStatus, Lane, LaneContext, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
 import type { AgentSessionInfo, QueuedJobInfo } from "../../../src/autoreview";
 import { MAX_RESULTS, searchBoard } from "../../../src/search";
 import { initialProject, parseProjectHash, projectHash } from "./viewhash";
@@ -109,6 +109,8 @@ class BoardStore {
   ghStatuses = $state<Record<string, GhStatus>>({});
   /** Live implementation location of a card, keyed by task id (sparse). */
   workspaces = $state<Record<string, CardWorkspace>>({});
+  /** Workflow context per lane that hosts one (board payload, sparse) — the lane ⚙ settings read this. */
+  laneContexts = $state<Record<string, LaneContext>>({});
   stats = $state<BoardStatsPayload | null>(null);
   loading = $state(true);
   error = $state("");
@@ -448,6 +450,7 @@ class BoardStore {
     this.links = boardRes.data.links ?? {};
     this.ghLinks = boardRes.data.ghLinks ?? {};
     this.workspaces = boardRes.data.workspaces ?? {};
+    this.laneContexts = boardRes.data.laneContexts ?? {}; // guards the dev-restart window like the other optional fields
     this.loading = false;
     const laneIds = new Set(this.lanes.map((l) => l.id));
     const liveCollapsed = new Set([...this.collapsedLanes].filter((id) => laneIds.has(id)));

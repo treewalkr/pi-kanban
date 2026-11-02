@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AgentRole, AgentThinking, WorkerPool } from "../../../src/db";
+  import type { AgentThinking, BuiltinAgentRole, WorkerPool } from "../../../src/db";
   import { pools } from "./pools.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
 
@@ -24,7 +24,7 @@
     pools.addDraft();
   }
 
-  function toggleRole(pool: WorkerPool, role: AgentRole): void {
+  function toggleRole(pool: WorkerPool, role: BuiltinAgentRole): void {
     if (pool.roles.includes(role)) {
       pool.roles = pool.roles.filter((r) => r !== role);
     } else {

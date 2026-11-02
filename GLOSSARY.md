@@ -89,6 +89,14 @@ _Avoid_: Drag image, browser ghost, floating card
 The human-only decision point (`approve` or `reject`) between plan review and implementation that agents are forbidden to run themselves.
 _Avoid_: Checkpoint, sign-off, auto-approval
 
+**Lane context**:
+The optional workflow a lane hosts (`lanes.context`): an ordered **actor** chain with prompt instructions (`{id}` / `{title}` / `{tmpFile}` placeholders), an artifact template, and trigger/exit/gate/cap rules the generic loop interprets; plan → implement → review ships as the seeded default, and any custom lane gains its own workflow by setting one.
+_Avoid_: Column config, lane settings, workflow DSL
+
+**Actor**:
+One agent on a lane's chain (`LaneActor`): a role id, a `pi-` thread author, prompt instructions, and optional agent config; a lane arms its actors per its context's rules.
+_Avoid_: Role, agent slot, worker
+
 **Git gate**:
 The `pre-commit` + `pre-merge-commit` hooks (`scripts/hooks/`, wired via `core.hooksPath` by `install.sh`) that run `bun run check` + `bun test` before a commit or workspace merge lands. Docs-only commits skip it; `git commit --no-verify` is the WIP escape hatch (merges have none).
 _Avoid_: Pre-commit hook, husky, lint gate

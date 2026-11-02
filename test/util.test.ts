@@ -43,3 +43,8 @@ test("canPromoteToPlan is false when no plan lane exists", () => {
   expect(canPromoteToPlan(task, [lane("backlog"), lane("implement")])).toBe(false);
   expect(canPromoteToPlan(task, [lane("backlog"), lane("implement"), lane("plan")])).toBe(true);
 });
+
+test("roleVerb and roleAuthor fall back for custom lane actors", () => {
+  expect(roleVerb("designer")).toBe("building");
+  expect(roleAuthor("designer")).toBe("pi-designer");
+});

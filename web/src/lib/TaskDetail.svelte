@@ -197,9 +197,19 @@
     if (await board.addTask(me.laneId, title, undefined, task.id)) subtaskTitle = "";
   }
 
-  // the plan gate: approve arms the plan-build builder, reject re-arms the planner —
-  // both work on a card parked in Waiting on you from Plan (a passed review)
-  const atPlanGate = $derived(me.laneId === "plan" || (me.laneId === "waiting" && me.previousLane === "plan"));
+  // the plan gate (card 3n96c): any lane whose context hosts a gate — approve arms
+  // its actor chain, reject returns the card; both work on a card parked from the lane
+  const gateHome = $derived(me.laneId === "waiting" ? me.previousLane : me.laneId);
+  const atPlanGate = $derived(
+    (gateHome !== null && board.laneContexts[gateHome]?.gate !== undefined) ||
+      me.laneId === "plan" ||
+      (me.laneId === "waiting" && me.previousLane === "plan"),
+  );
+  // the artifact the gate's approve side requires (plan for the seeded pipeline)
+  let gateArtifact = $derived.by(() => {
+    const gate = gateHome !== null ? board.laneContexts[gateHome]?.gate : undefined;
+    return gate?.requireArtifact ?? (gateHome === "plan" || me.laneId === "plan" ? "plan" : null);
+  });
   let rejecting = $state(false);
   let rejectMsg = $state("");
 
@@ -234,6 +244,10 @@
   // card files (plan + named attachments): latest per name on open; a file's full
   // version history is fetched lazily when its section is expanded (drives the picker)
   let cardFiles = $state<Attachment[]>([]);
+  let gateArtifactReady = $derived(
+    gateArtifact === null ||
+      (gateArtifact === "plan" ? plan !== undefined : cardFiles.some((f) => f.kind === gateArtifact)),
+  );
   let versionsByKind = $state<Record<string, Attachment[]>>({});
   let pickedVersion = $state<Record<string, number>>({});
 
@@ -736,7 +750,7 @@
             <button class="primary reject" type="submit" disabled={!rejectMsg.trim()}>reject</button>
           </form>
         {:else}
-          {#if plan}<button class="ghost approve" onclick={approve}>✓ approve plan</button>{/if}
+          {#if gateArtifactReady}<button class="ghost approve" onclick={approve}>✓ approve {gateArtifact ?? "plan"}</button>{/if}
           <button class="ghost reject" onclick={() => (rejecting = true)}>✗ reject</button>
         {/if}
       {/if}
