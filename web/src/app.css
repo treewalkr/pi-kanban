@@ -3325,6 +3325,23 @@ body.drag-live {
   border-color: var(--border);
 }
 
+/* the interactive priority chip (hquwn): cycles high → normal → low; the
+   glyph IS the state — ▲ / · / ▼ — so no extra cue is stacked on */
+button.chip.prio-chip {
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease;
+}
+
+button.chip.prio-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chip.prio-normal {
+  color: var(--text-dim);
+}
+
 .chip.blocked {
   color: #d29922;
   border-color: color-mix(in srgb, #d29922 40%, var(--border));
@@ -5146,6 +5163,13 @@ a.dep-chip.gh-link .gh-state {
   .lane-tools button, .view-toggle button, .chips button {
     min-width: 28px;
     height: 28px;
+  }
+
+  /* the glyph-only card variant needs the same touch room (hra26 precedent) */
+  .card button.chip.prio-chip {
+    min-width: 28px;
+    height: 28px;
+    line-height: 26px;
   }
 
   .theme-toggle {
