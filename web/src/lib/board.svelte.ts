@@ -100,6 +100,24 @@ function loadCollapsedLanes(): Set<string> {
   }
 }
 
+/**
+ * Expanded parents in the board view (missing = collapsed — the board's default
+ * is closed, unlike the list's). Exported because the store is an import-time
+ * singleton: this is the read path's module API.
+ */
+export function loadExpandedParents(): Set<string> {
+  try {
+    const raw = localStorage.getItem("kanban-expanded-parents");
+    if (raw === null) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((x): x is string => typeof x === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 class BoardStore {
   lanes = $state<Lane[]>([]);
   tasks = $state<Task[]>([]);
@@ -282,13 +300,21 @@ class BoardStore {
     this.#persistCollapsed();
   }
 
+  #persistExpanded(): void {
+    try {
+      localStorage.setItem("kanban-expanded-parents", JSON.stringify([...this.expanded]));
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
   laneSearchHit(laneId: string): boolean {
     return this.search.trim() !== "" && this.visibleTasks(laneId).length > 0;
   }
 
   editing = $state<Task | null>(null);
   editMode = $state(false);
-  expanded = $state<Set<string>>(new Set());
+  expanded = $state<Set<string>>(loadExpandedParents());
   /** Card to scroll to and flash once the detail modal closes (search jumps). */
   flashId = $state<string | null>(null);
   /** In-flight pi agent sessions, keyed by task id (poll-driven: sessions emit no DB writes). */
@@ -439,6 +465,7 @@ class BoardStore {
     const next = new Set(this.expanded);
     if (!next.delete(id)) next.add(id);
     this.expanded = next;
+    this.#persistExpanded();
   }
 
   /** Jump from a search result: reveal the task on the board, then open it. */
@@ -446,6 +473,7 @@ class BoardStore {
     const next = new Set(this.expanded);
     for (const ancestor of this.ancestorsOf(task.id)) next.add(ancestor.id);
     this.expanded = next;
+    this.#persistExpanded();
     this.setLaneCollapsed(task.laneId, false);
     this.flashId = task.id;
     this.search = "";
@@ -488,6 +516,13 @@ class BoardStore {
     if (liveCollapsed.size !== this.collapsedLanes.size) {
       this.collapsedLanes = liveCollapsed;
       this.#persistCollapsed();
+    }
+    // expanded ids are pruned by card existence in the payload, never by filter visibility
+    const taskIds = new Set(this.tasks.map((t) => t.id));
+    const liveExpanded = new Set([...this.expanded].filter((id) => taskIds.has(id)));
+    if (liveExpanded.size !== this.expanded.size) {
+      this.expanded = liveExpanded;
+      this.#persistExpanded();
     }
     // a stored project whose tag no longer exists (renamed, or its last card dropped the tag)
     // resets to "all" — an active filter with no visible chip would be a silent empty board

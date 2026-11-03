@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { board } from "../web/src/lib/board.svelte";
+import { board, loadExpandedParents } from "../web/src/lib/board.svelte";
 import type { Lane, Task } from "../src/db";
 
 function mockStorage(): Map<string, string> {
@@ -787,6 +787,133 @@ describe("boardview show empty lanes", () => {
       board.projectNames = [];
       board.lanes = [];
       board.tasks = [];
+    }
+  });
+});
+
+describe("boardview expanded-parents persistence", () => {
+  test("toggleExpanded writes kanban-expanded-parents and toggle-off removes the id", () => {
+    const storage = mockStorage();
+    try {
+      const before = board.expanded;
+      board.toggleExpanded("p");
+      expect(before).toEqual(new Set()); // copy-on-write: the pre-toggle set is untouched
+      expect(storage.get("kanban-expanded-parents")).toBe(JSON.stringify(["p"]));
+
+      board.toggleExpanded("p");
+      expect(board.expanded.size).toBe(0);
+      expect(storage.get("kanban-expanded-parents")).toBe(JSON.stringify([]));
+    } finally {
+      board.expanded = new Set();
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  test("loadExpandedParents rehydrates ids and tolerates absent or malformed values", () => {
+    const storage = mockStorage();
+    try {
+      // absent key → empty, and a read never writes
+      expect(loadExpandedParents()).toEqual(new Set());
+      expect(storage.get("kanban-expanded-parents")).toBeUndefined();
+
+      storage.set("kanban-expanded-parents", "[]");
+      expect(loadExpandedParents()).toEqual(new Set());
+
+      storage.set("kanban-expanded-parents", JSON.stringify(["a", "b"]));
+      expect(loadExpandedParents()).toEqual(new Set(["a", "b"]));
+
+      for (const malformed of ["{}", "5", "not json"]) {
+        storage.set("kanban-expanded-parents", malformed);
+        expect(loadExpandedParents()).toEqual(new Set());
+      }
+
+      // non-string entries are dropped, not a crash
+      storage.set("kanban-expanded-parents", JSON.stringify([1, "a", null]));
+      expect(loadExpandedParents()).toEqual(new Set(["a"]));
+
+      // a throwing localStorage is swallowed, never rethrown
+      (globalThis as any).localStorage = {
+        getItem: () => {
+          throw new Error("storage broken");
+        },
+        setItem: () => {},
+        removeItem: () => {},
+        clear: () => {},
+      };
+      expect(loadExpandedParents()).toEqual(new Set());
+    } finally {
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  test("refresh prunes expanded ids whose card no longer exists and persists the survivors", async () => {
+    const storage = mockStorage();
+    const originalFetch = globalThis.fetch;
+    const parent = makeTask({ id: "p1", title: "parent", laneId: "backlog" });
+    const child = makeTask({ id: "c1", title: "child", laneId: "backlog", parentId: "p1" });
+    board.tasks = [parent, child];
+    // direct assignment is deliberately unpersisted — seed the stored key to match
+    board.expanded = new Set(["p1", "ghost"]);
+    storage.set("kanban-expanded-parents", JSON.stringify(["p1", "ghost"]));
+    globalThis.fetch = stubBoardFetch(parent) as typeof fetch;
+    try {
+      await board.refresh();
+      expect(board.expanded).toEqual(new Set(["p1"]));
+      expect(storage.get("kanban-expanded-parents")).toBe(JSON.stringify(["p1"]));
+
+      // a refresh with nothing dead leaves the key alone
+      await board.refresh();
+      expect(storage.get("kanban-expanded-parents")).toBe(JSON.stringify(["p1"]));
+    } finally {
+      board.expanded = new Set();
+      board.tasks = [];
+      globalThis.fetch = originalFetch;
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  test("refresh keeps expanded ids for parents hidden by the active filters", async () => {
+    const storage = mockStorage();
+    const originalFetch = globalThis.fetch;
+    const parent = makeTask({ id: "p1", title: "parent", laneId: "backlog", project: "web", tags: ["ui"] });
+    board.tasks = [parent];
+    board.expanded = new Set(["p1"]);
+    storage.set("kanban-expanded-parents", JSON.stringify(["p1"]));
+    globalThis.fetch = stubBoardFetch(parent) as typeof fetch;
+    try {
+      board.projectFilter = "api"; // a project the card is not in
+      await board.refresh();
+      board.tagFilter = ["review"]; // a tag the card does not carry
+      await board.refresh();
+      expect(board.expanded).toEqual(new Set(["p1"]));
+      expect(storage.get("kanban-expanded-parents")).toBe(JSON.stringify(["p1"]));
+    } finally {
+      board.expanded = new Set();
+      board.tasks = [];
+      board.projectFilter = "";
+      board.tagFilter = [];
+      globalThis.fetch = originalFetch;
+      delete (globalThis as any).localStorage;
+    }
+  });
+
+  test("jumpTo persists the ancestors it reveals", () => {
+    const storage = mockStorage();
+    const grandparent = makeTask({ id: "g1", title: "grandparent", laneId: "backlog" });
+    const parent = makeTask({ id: "p1", title: "parent", laneId: "backlog", parentId: "g1" });
+    const child = makeTask({ id: "c1", title: "child", laneId: "backlog", parentId: "p1" });
+    board.tasks = [grandparent, parent, child];
+    try {
+      board.jumpTo(child);
+      expect(board.expanded).toEqual(new Set(["g1", "p1"]));
+      expect(storage.get("kanban-expanded-parents")).toBe(JSON.stringify(["g1", "p1"]));
+    } finally {
+      board.closeCard();
+      board.expanded = new Set();
+      board.tasks = [];
+      board.flashId = null;
+      board.search = "";
+      delete (globalThis as any).localStorage;
     }
   });
 });

@@ -112,6 +112,13 @@ the lane) while `animate:flip` runs; drag hints are decided against settled
 layout so measurement never chases moving cards.
 _Avoid_: resting position, final position
 
+**View state**:
+Client-only display preferences the SPA keeps in `localStorage` and never sends to
+the server — active view (`kanban-view`), collapsed lanes
+(`kanban-collapsed-lanes`), and expanded parent cards (`kanban-expanded-parents`);
+board data itself stays on the server.
+_Avoid_: UI prefs, user settings, local settings, board state
+
 **Pool slot**:
 One concurrency opening of a worker pool (`worker_pools`): a `{provider, model, thinking}` override the loop merges over the role's agent config when it spawns there. Distinct from the drag-and-drop **Slot**.
 _Avoid_: worker, lane slot, agent seat.
