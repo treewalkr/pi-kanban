@@ -486,3 +486,23 @@ test("POST /tasks/:id/elaborate drains to an elaborator spawn across connections
 
   calls[0].finish({ code: 0 });
 });
+
+test("elaboration still runs on a blocked card", async () => {
+  const { dbFile, writer: w } = setupLoop();
+  const blocker = w.createTask({ title: "blocker", lane: "implement" });
+  const card = w.createTask({ title: "blocked card", lane: "implement" });
+  w.setBlockedBy(card.id, [blocker.id]);
+  w.queueElaboration(card.id);
+
+  const { calls, spawnFn } = fakeSpawn();
+  startLoop(spawnFn, dbFile);
+
+  await sleep(100);
+  expect(calls.length).toBe(1);
+  const job = calls[0].job;
+  expect(job.role).toBe("elaborator");
+  expect(job.mode).toBe("elaborate");
+  expect(w.elaborationRequests()).toEqual([]);
+
+  calls[0].finish({ code: 0 });
+});
