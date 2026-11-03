@@ -684,6 +684,8 @@ describe("auto-review", () => {
       "**Seam**:",
       "**Brief**:",
       "**Gate**:",
+      "**Project override**:",
+      "**Per-project test command**:",
       "**Planner**",
       "**Plan reviewer**",
       "**Builder**",

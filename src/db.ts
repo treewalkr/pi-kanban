@@ -231,6 +231,7 @@ export interface ProjectRoute {
   name: string;
   repoPath: string | null;
   testGate: boolean;
+  testCmd: string | null; // null = board default (`bun test`)
 }
 
 export interface LaneSnapshot {
@@ -599,8 +600,16 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT PRIMARY KEY,
   repo_path TEXT,
   test_gate INTEGER NOT NULL DEFAULT 1,
+  test_cmd TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_agent_configs (
+  project TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  config TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project, actor)
 );
 `;
 
@@ -1179,6 +1188,7 @@ export class KanbanDb {
     this.migrateTagsColumn();
     this.migrateWipLimitColumn();
     this.migrateLaneContextColumn();
+    this.migrateProjectTestCmdColumn();
     if (!this.schemaIsCurrent()) this.db.exec(SCHEMA); // fresh/old boards only — see below
     this.seedLanes();
     this.ensureWaitingLane();
@@ -1347,6 +1357,15 @@ export class KanbanDb {
       this.db.exec("ALTER TABLE lanes ADD COLUMN context TEXT");
   }
 
+  /** Boards created before per-project test commands existed need the column added once (nullable, no backfill: board default). */
+  private migrateProjectTestCmdColumn(): void {
+    const table = this.q("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").get();
+    if (!table) return; // fresh db: SCHEMA creates the table with the column
+    const cols = this.q("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+    if (!cols.some((col) => col.name === "test_cmd"))
+      this.db.exec("ALTER TABLE projects ADD COLUMN test_cmd TEXT");
+  }
+
   /**
    * One-time seed at upgrade (card 3n96c): plan, implement, and review get their
    * default LaneContexts — folding any existing agent_configs rows for their
@@ -1447,21 +1466,26 @@ export class KanbanDb {
   /** Routing settings per project tag; un-registered tags surface lazily as un-routed rows (no write on read). */
   listProjects(): ProjectRoute[] {
     const rows = this.q(
-      `SELECT name, repo_path, test_gate FROM projects
+      `SELECT name, repo_path, test_gate, test_cmd FROM projects
        UNION
-       SELECT DISTINCT project, NULL, 1 FROM tasks WHERE project != '' AND project NOT IN (SELECT name FROM projects)
+       SELECT DISTINCT project, NULL, 1, NULL FROM tasks WHERE project != '' AND project NOT IN (SELECT name FROM projects)
        ORDER BY name`,
-    ).all() as Array<{ name: string; repo_path: string | null; test_gate: number }>;
-    return rows.map((r) => ({ name: r.name, repoPath: r.repo_path, testGate: r.test_gate === 1 }));
+    ).all() as Array<{ name: string; repo_path: string | null; test_gate: number; test_cmd: string | null }>;
+    return rows.map((r) => ({
+      name: r.name,
+      repoPath: r.repo_path,
+      testGate: r.test_gate === 1,
+      testCmd: r.test_cmd ?? null,
+    }));
   }
 
   /** The stored row only — null for un-registered tags (defaults apply upstream). */
   getProject(name: string): ProjectRoute | null {
-    const row = this.q("SELECT name, repo_path, test_gate FROM projects WHERE name = ?").get(name) as
-      | { name: string; repo_path: string | null; test_gate: number }
+    const row = this.q("SELECT name, repo_path, test_gate, test_cmd FROM projects WHERE name = ?").get(name) as
+      | { name: string; repo_path: string | null; test_gate: number; test_cmd: string | null }
       | undefined;
     if (!row) return null;
-    return { name: row.name, repoPath: row.repo_path, testGate: row.test_gate === 1 };
+    return { name: row.name, repoPath: row.repo_path, testGate: row.test_gate === 1, testCmd: row.test_cmd ?? null };
   }
 
   // name guard shared by both setters: matches the 48-char tag cap
@@ -1521,17 +1545,96 @@ export class KanbanDb {
     return this.upsertProject(clean, { testGate });
   }
 
-  private upsertProject(name: string, patch: { repoPath?: string | null; testGate?: boolean }): ProjectRoute {
+  /** Upsert the test command; null or "" clears it to null (the project falls back to the board default). */
+  setProjectTestCmd(name: string, cmd: string | null): ProjectRoute {
+    const { name: clean } = this.projectRow(name);
+    if (cmd === null || cmd === "") {
+      return this.upsertProject(clean, { testCmd: null });
+    }
+    const trimmed = cmd.trim();
+    if (trimmed.length < 1 || trimmed.length > 500) {
+      throw new KanbanError("test command must be 1 to 500 characters", "invalid");
+    }
+    return this.upsertProject(clean, { testCmd: trimmed });
+  }
+
+  /** Stored per-project actor override, or null when absent or corrupt. Never throws. */
+  projectAgentConfig(project: string, actor: string): AgentConfig | null {
+    if (!project || !actor) return null;
+    const row = this.q("SELECT config FROM project_agent_configs WHERE project = ? AND actor = ?").get(
+      project,
+      actor,
+    ) as { config: string } | null;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.config) as AgentConfig;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Set or delete a per-project actor override. Null deletes.
+   * Unknown roles throw KanbanError; un-registered project tags materialize with v1 defaults.
+   */
+  setProjectAgentConfig(project: string, actor: string, config: AgentConfig | null): AgentConfig | null {
+    const { name: cleanProject } = this.projectRow(project);
+    if (!AGENT_CONFIG_ROLES.has(actor) && !this.hasLaneActor(actor)) {
+      throw new KanbanError(
+        `unknown agent role '${actor}' (reviewer | builder | planner | plan-reviewer | elaborator | manager | worker)`,
+        "invalid",
+      );
+    }
+    if (config === null) {
+      this.q("DELETE FROM project_agent_configs WHERE project = ? AND actor = ?").run(cleanProject, actor);
+      return null;
+    }
+    const clean = this.cleanProjectOverride(config);
+    this.tx(() => {
+      this.upsertProject(cleanProject, {});
+      const now = Date.now();
+      this.q(
+        `INSERT INTO project_agent_configs (project, actor, config, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(project, actor) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at`,
+      ).run(cleanProject, actor, JSON.stringify(clean), now);
+    });
+    return clean;
+  }
+
+  /** Strip empty strings from an override agent config; empty skills/extraArgs preserved if present. */
+  private cleanProjectOverride(config: AgentConfig): AgentConfig {
+    const clean: AgentConfig = {};
+    if (config.provider?.trim()) clean.provider = config.provider.trim();
+    if (config.model?.trim()) clean.model = config.model.trim();
+    if (config.thinking) clean.thinking = config.thinking;
+    if (config.skills !== undefined) {
+      clean.skills = config.skills.map((s) => s.trim()).filter(Boolean);
+    }
+    if (config.context?.trim()) clean.context = config.context.trim();
+    if (config.tools?.trim()) clean.tools = config.tools.trim();
+    if (config.extraArgs !== undefined) {
+      clean.extraArgs = config.extraArgs.map((a) => a.trim()).filter(Boolean);
+    }
+    if (config.timeoutMs !== undefined) clean.timeoutMs = config.timeoutMs;
+    return clean;
+  }
+
+  private upsertProject(
+    name: string,
+    patch: { repoPath?: string | null; testGate?: boolean; testCmd?: string | null },
+  ): ProjectRoute {
     return this.tx(() => {
       const now = Date.now();
       const existing = this.getProject(name);
       const repoPath = patch.repoPath !== undefined ? patch.repoPath : (existing?.repoPath ?? null);
       const testGate = patch.testGate !== undefined ? patch.testGate : (existing?.testGate ?? true);
+      const testCmd = patch.testCmd !== undefined ? patch.testCmd : (existing?.testCmd ?? null);
       this.q(
-        `INSERT INTO projects (name, repo_path, test_gate, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(name) DO UPDATE SET repo_path = excluded.repo_path, test_gate = excluded.test_gate, updated_at = excluded.updated_at`,
-      ).run(name, repoPath, testGate ? 1 : 0, now, now);
+        `INSERT INTO projects (name, repo_path, test_gate, test_cmd, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET repo_path = excluded.repo_path, test_gate = excluded.test_gate, test_cmd = excluded.test_cmd, updated_at = excluded.updated_at`,
+      ).run(name, repoPath, testGate ? 1 : 0, testCmd, now, now);
       return this.getProject(name)!;
     });
   }

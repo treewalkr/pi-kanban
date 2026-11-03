@@ -2100,28 +2100,28 @@ test("projects: accessor round-trip — set repo, flip gate, clear repo", () => 
   expect(db.getProject("alpha")).toBeNull();
 
   const routed = db.setProjectRepo("alpha", dir);
-  expect(routed).toEqual({ name: "alpha", repoPath: dir, testGate: true });
+  expect(routed).toEqual({ name: "alpha", repoPath: dir, testGate: true, testCmd: null });
   expect(db.getProject("alpha")).toEqual(routed);
   expect(db.projectCwd("alpha")).toBe(dir);
 
   const gated = db.setProjectGate("alpha", false);
-  expect(gated).toEqual({ name: "alpha", repoPath: dir, testGate: false }); // the route survives a gate flip
+  expect(gated).toEqual({ name: "alpha", repoPath: dir, testGate: false, testCmd: null }); // the route survives a gate flip
   expect(db.projectCwd("alpha")).toBe(dir);
 
   const cleared = db.setProjectRepo("alpha", null);
-  expect(cleared).toEqual({ name: "alpha", repoPath: null, testGate: false });
+  expect(cleared).toEqual({ name: "alpha", repoPath: null, testGate: false, testCmd: null });
   expect(db.projectCwd("alpha")).toBeNull(); // un-routed again
 
   // gate set on a never-routed project creates the row with a null repo
-  expect(db.setProjectGate("beta", false)).toEqual({ name: "beta", repoPath: null, testGate: false });
+  expect(db.setProjectGate("beta", false)).toEqual({ name: "beta", repoPath: null, testGate: false, testCmd: null });
   expect(db.projectCwd("beta")).toBeNull();
   expect(db.projectCwd("")).toBeNull(); // untagged cards never route
 
   // reopen persists both rows (created_at survives the updates)
   db.close();
   db = new KanbanDb(join(dir, "t.db"));
-  expect(db.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: false });
-  expect(db.getProject("beta")).toEqual({ name: "beta", repoPath: null, testGate: false });
+  expect(db.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: false, testCmd: null });
+  expect(db.getProject("beta")).toEqual({ name: "beta", repoPath: null, testGate: false, testCmd: null });
   expect(db.listProjects().map((p) => p.name)).toEqual(["alpha", "beta"]);
 });
 
@@ -2129,19 +2129,19 @@ test("projects: seed materializes existing tags once; new tags stay lazy", () =>
   // fresh db: a tag created after open is not a table row yet
   db.createTask({ title: "tagged", project: "alpha" });
   expect(db.getProject("alpha")).toBeNull(); // reads never write
-  expect(db.listProjects()).toEqual([{ name: "alpha", repoPath: null, testGate: true }]); // lazy union
+  expect(db.listProjects()).toEqual([{ name: "alpha", repoPath: null, testGate: true, testCmd: null }]); // lazy union
 
   // reopening the same file seeds the tag exactly once
   db.close();
   db = new KanbanDb(join(dir, "t.db"));
-  expect(db.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: true });
-  expect(db.listProjects()).toEqual([{ name: "alpha", repoPath: null, testGate: true }]);
+  expect(db.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: true, testCmd: null });
+  expect(db.listProjects()).toEqual([{ name: "alpha", repoPath: null, testGate: true, testCmd: null }]);
 
   // second reopen is a no-op — and a post-upgrade tag stays lazy until set
   db.createTask({ title: "later tag", project: "beta" });
   db.close();
   db = new KanbanDb(join(dir, "t.db"));
-  expect(db.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: true });
+  expect(db.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: true, testCmd: null });
   expect(db.getProject("beta")).toBeNull();
   expect(db.listProjects().map((p) => p.name)).toEqual(["alpha", "beta"]);
 
@@ -2174,7 +2174,7 @@ test("projects: setProjectRepo rejects relative, missing, and non-directory path
 
 test("projects: addProject registers route and refuses duplicate names or invalid paths", () => {
   const added = db.addProject("alpha", dir);
-  expect(added).toEqual({ name: "alpha", repoPath: dir, testGate: true });
+  expect(added).toEqual({ name: "alpha", repoPath: dir, testGate: true, testCmd: null });
   expect(db.getProject("alpha")).toEqual(added);
   expect(db.projectCwd("alpha")).toBe(dir);
 
@@ -2204,6 +2204,200 @@ test("projects: addProject registers route and refuses duplicate names or invali
     expect(() => db.addProject(name, dir)).toThrow("project name must be 1 to 48 characters");
   }
   expect(db.addProject("  gamma  ", dir).name).toBe("gamma");
+});
+
+test("projects: per-actor overrides round-trip; present-key skills; lane actors; upsert", () => {
+  // set {model:" claude-opus-4-5 ", thinking:"high", skills:[" ~/.pi/agent/skills/x ", ""]} on reviewer -> read back
+  const set1 = db.setProjectAgentConfig("demo", "reviewer", {
+    model: " claude-opus-4-5 ",
+    thinking: "high",
+    skills: [" ~/.pi/agent/skills/x ", ""],
+  });
+  expect(set1).toEqual({
+    model: "claude-opus-4-5",
+    thinking: "high",
+    skills: ["~/.pi/agent/skills/x"],
+  });
+  expect(db.projectAgentConfig("demo", "reviewer")).toEqual({
+    model: "claude-opus-4-5",
+    thinking: "high",
+    skills: ["~/.pi/agent/skills/x"],
+  });
+
+  // set {model:"m3", skills:[]} -> read skills: [] (present key stored, not stripped)
+  const set2 = db.setProjectAgentConfig("demo", "reviewer", { model: "m3", skills: [] });
+  expect(set2).toEqual({ model: "m3", skills: [] });
+  expect(db.projectAgentConfig("demo", "reviewer")).toEqual({ model: "m3", skills: [] });
+
+  // setProjectAgentConfig("demo","reviewer",null) -> returns null, read null
+  expect(db.setProjectAgentConfig("demo", "reviewer", null)).toBeNull();
+  expect(db.projectAgentConfig("demo", "reviewer")).toBeNull();
+
+  // delete on a never-touched project is a silent no-op returning null
+  expect(db.setProjectAgentConfig("never-touched", "reviewer", null)).toBeNull();
+  expect(db.getProject("never-touched")).toBeNull();
+
+  // unknown actor chief -> KanbanError message exactly
+  expect(() => db.setProjectAgentConfig("demo", "chief", { model: "m" })).toThrow(
+    new KanbanError(
+      "unknown agent role 'chief' (reviewer | builder | planner | plan-reviewer | elaborator | manager | worker)",
+      "invalid",
+    ),
+  );
+
+  // after setLaneContext on a custom lane hosting actor designer, set + read designer works
+  const lane = db.createLane({ name: "Design" });
+  db.setLaneContext(lane.id, {
+    artifact: "design",
+    template: "# Design Spec",
+    actors: [{ id: "designer", author: "pi-designer", instructions: 'Design {id} "{title}"' }],
+    triggers: [{ kind: "on-enter" }],
+    gate: { approveTarget: "plan" },
+  });
+  expect(db.setProjectAgentConfig("demo", "designer", { model: "design-v1" })).toEqual({ model: "design-v1" });
+  expect(db.projectAgentConfig("demo", "designer")).toEqual({ model: "design-v1" });
+
+  // set on un-registered tag fresh -> getProject("fresh") equals {name:"fresh", repoPath:null, testGate:true, testCmd:null}
+  db.setProjectAgentConfig("fresh", "reviewer", { model: "fresh-model" });
+  expect(db.getProject("fresh")).toEqual({
+    name: "fresh",
+    repoPath: null,
+    testGate: true,
+    testCmd: null,
+  });
+
+  // name "x".repeat(49) -> project name must be 1 to 48 characters with nothing written
+  expect(() => db.setProjectAgentConfig("x".repeat(49), "reviewer", { model: "m" })).toThrow(
+    new KanbanError("project name must be 1 to 48 characters", "invalid"),
+  );
+  expect(db.getProject("x".repeat(49))).toBeNull();
+  expect(db.projectAgentConfig("x".repeat(49), "reviewer")).toBeNull();
+});
+
+test("projects: setProjectTestCmd trims, enforces 1–500, clears, upserts", () => {
+  // " cargo test " -> route {testCmd:"cargo test"}
+  const r1 = db.setProjectTestCmd("alpha", " cargo test ");
+  expect(r1.testCmd).toBe("cargo test");
+  expect(db.getProject("alpha")?.testCmd).toBe("cargo test");
+
+  // a 500-char command stores
+  const cmd500 = "x".repeat(500);
+  const r500 = db.setProjectTestCmd("alpha", cmd500);
+  expect(r500.testCmd).toBe(cmd500);
+  expect(db.getProject("alpha")?.testCmd).toBe(cmd500);
+
+  // 501-char and whitespace-only "   " -> test command must be 1 to 500 characters
+  expect(() => db.setProjectTestCmd("alpha", "x".repeat(501))).toThrow(
+    new KanbanError("test command must be 1 to 500 characters", "invalid"),
+  );
+  expect(() => db.setProjectTestCmd("alpha", "   ")).toThrow(
+    new KanbanError("test command must be 1 to 500 characters", "invalid"),
+  );
+
+  // null and "" -> testCmd: null
+  expect(db.setProjectTestCmd("alpha", null).testCmd).toBeNull();
+  expect(db.getProject("alpha")?.testCmd).toBeNull();
+  db.setProjectTestCmd("alpha", "npm test");
+  expect(db.setProjectTestCmd("alpha", "").testCmd).toBeNull();
+  expect(db.getProject("alpha")?.testCmd).toBeNull();
+
+  // returned route keeps existing repoPath/testGate untouched
+  db.setProjectRepo("alpha", dir);
+  db.setProjectGate("alpha", false);
+  const rPreserved = db.setProjectTestCmd("alpha", "make test");
+  expect(rPreserved).toEqual({
+    name: "alpha",
+    repoPath: dir,
+    testGate: false,
+    testCmd: "make test",
+  });
+
+  // set on un-registered tag -> getProject non-null with v1 defaults + the command
+  const rTag = db.setProjectTestCmd("unreg", "pytest");
+  expect(rTag).toEqual({
+    name: "unreg",
+    repoPath: null,
+    testGate: true,
+    testCmd: "pytest",
+  });
+  expect(db.getProject("unreg")).toEqual(rTag);
+
+  // name guard throws like v1 setters
+  for (const name of ["x".repeat(49), ""]) {
+    expect(() => db.setProjectTestCmd(name, "test")).toThrow("project name must be 1 to 48 characters");
+  }
+});
+
+test("projects: no v4 settings — routes read v1-shaped plus null testCmd", () => {
+  // board with zero v4 settings: stored rows (setProjectRepo then read) report testCmd: null
+  const routed = db.setProjectRepo("delta", dir);
+  expect(routed.testCmd).toBeNull();
+  expect(db.getProject("delta")?.testCmd).toBeNull();
+
+  // lazy-union row (card tagged later, no row) via listProjects() reports {repoPath:null, testGate:true, testCmd:null}
+  db.createTask({ title: "card", project: "later" });
+  const row = db.listProjects().find((p) => p.name === "later");
+  expect(row).toEqual({ name: "later", repoPath: null, testGate: true, testCmd: null });
+
+  // setProjectRepo/setProjectGate round-trips (route, clear, flip gate) match the v1 test's semantics with testCmd: null throughout
+  const gated = db.setProjectGate("delta", false);
+  expect(gated).toEqual({ name: "delta", repoPath: dir, testGate: false, testCmd: null });
+
+  const cleared = db.setProjectRepo("delta", null);
+  expect(cleared).toEqual({ name: "delta", repoPath: null, testGate: false, testCmd: null });
+
+  // reopen persists
+  db.close();
+  db = new KanbanDb(join(dir, "t.db"));
+  expect(db.getProject("delta")).toEqual({ name: "delta", repoPath: null, testGate: false, testCmd: null });
+});
+
+test("projects: reopening a pre-v4 board adds test_cmd and project_agent_configs", () => {
+  const path = join(dir, "old-v1-project.db");
+  const raw = new Database(path);
+  raw.exec(`
+    CREATE TABLE lanes (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      position REAL NOT NULL, fixed INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+      lane_id TEXT NOT NULL REFERENCES lanes (id), project TEXT NOT NULL DEFAULT '',
+      position REAL NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE projects (
+      name TEXT PRIMARY KEY,
+      repo_path TEXT,
+      test_gate INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO lanes (id, name, description, position, fixed) VALUES ('backlog', 'Backlog', '', 100, 1);
+    INSERT INTO projects (name, repo_path, test_gate, created_at, updated_at) VALUES ('alpha', NULL, 1, 0, 0);
+  `);
+  raw.close();
+
+  const reopened = new KanbanDb(path);
+  expect(reopened.getProject("alpha")).toEqual({ name: "alpha", repoPath: null, testGate: true, testCmd: null });
+  expect(reopened.setProjectTestCmd("alpha", "cargo test")).toEqual({
+    name: "alpha",
+    repoPath: null,
+    testGate: true,
+    testCmd: "cargo test",
+  });
+  expect(reopened.setProjectAgentConfig("alpha", "reviewer", { model: "m" })).toEqual({ model: "m" });
+  expect(reopened.projectAgentConfig("alpha", "reviewer")).toEqual({ model: "m" });
+  reopened.close();
+
+  const second = new KanbanDb(path);
+  expect(second.getProject("alpha")).toEqual({
+    name: "alpha",
+    repoPath: null,
+    testGate: true,
+    testCmd: "cargo test",
+  });
+  expect(second.projectAgentConfig("alpha", "reviewer")).toEqual({ model: "m" });
+  second.close();
 });
 
 // ---------- lane contexts (card 3n96c) ----------

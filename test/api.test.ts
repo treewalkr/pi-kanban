@@ -1365,8 +1365,8 @@ test("GET/PUT /projects roundtrip; empty body 400; bad path 400; schema violatio
   // GET surfaces the lazy union, un-routed tag included
   const get1 = await app.handle(new Request("http://localhost/projects"));
   expect(get1.status).toBe(200);
-  const { projects } = (await get1.json()) as { projects: Array<{ name: string; repoPath: string | null; testGate: boolean }> };
-  expect(projects).toContainEqual({ name: "e2e-proj", repoPath: null, testGate: true });
+  const { projects } = (await get1.json()) as { projects: Array<{ name: string; repoPath: string | null; testGate: boolean; testCmd: string | null }> };
+  expect(projects).toContainEqual({ name: "e2e-proj", repoPath: null, testGate: true, testCmd: null });
 
   // PUT routes the repo
   const repoDir = join(dir, "repo");
@@ -1379,7 +1379,7 @@ test("GET/PUT /projects roundtrip; empty body 400; bad path 400; schema violatio
     }),
   );
   expect(put.status).toBe(200);
-  expect(((await put.json()) as { project: unknown }).project).toEqual({ name: "e2e-proj", repoPath: repoDir, testGate: true });
+  expect(((await put.json()) as { project: unknown }).project).toEqual({ name: "e2e-proj", repoPath: repoDir, testGate: true, testCmd: null });
 
   // relative path → 400 with the db contract's message
   const rel = await app.handle(
@@ -1422,7 +1422,7 @@ test("GET/PUT /projects roundtrip; empty body 400; bad path 400; schema violatio
     }),
   );
   expect(unroute.status).toBe(200);
-  expect(((await unroute.json()) as { project: unknown }).project).toEqual({ name: "e2e-proj", repoPath: null, testGate: true });
+  expect(((await unroute.json()) as { project: unknown }).project).toEqual({ name: "e2e-proj", repoPath: null, testGate: true, testCmd: null });
 });
 
 
