@@ -3,6 +3,8 @@
   import { board } from "./board.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import IdChip from "./IdChip.svelte";
+  import { Eye, Pen } from "@lucide/svelte";
+  import { renderMarkdown } from "./markdown";
 
   const source = board.editing!;
 
@@ -14,6 +16,9 @@
   let parentId = $state(source.parentId ?? "");
   let priority = $state<Task["priority"]>(source.priority);
   let confirming = $state(false);
+
+  // writing aid: preview the local, unsaved note as markdown; resets when the editor remounts
+  let preview = $state(false);
 
   // candidates mirror the api rule: depth(candidate) + 1 + subtree height ≤ 2
   let candidates = $derived.by(() => {
@@ -95,10 +100,40 @@
       title
       <input bind:value={title} />
     </label>
-    <label>
-      note
-      <textarea bind:value={note} use:fitNote rows="6" placeholder="details, links, acceptance criteria… (markdown ok)"></textarea>
-    </label>
+    <div class="field">
+      <div class="field-header">
+        <label for="task-note-input">note</label>
+        <button
+          type="button"
+          class="ghost editor-toggle-btn"
+          aria-pressed={preview}
+          aria-label={preview ? "edit note" : "preview markdown"}
+          title={preview ? "back to the plain-text note" : "render the note as markdown"}
+          onclick={() => (preview = !preview)}
+        >
+          {#if preview}
+            <Pen size={12} strokeWidth={1.75} />
+            <span>edit</span>
+          {:else}
+            <Eye size={12} strokeWidth={1.75} />
+            <span>preview</span>
+          {/if}
+        </button>
+      </div>
+      {#if !preview}
+        <textarea
+          id="task-note-input"
+          bind:value={note}
+          use:fitNote
+          rows="6"
+          placeholder="details, links, acceptance criteria… (markdown ok)"
+        ></textarea>
+      {:else if note.trim()}
+        <div class="editor-note-preview detail-note md">{@html renderMarkdown(note)}</div>
+      {:else}
+        <p class="editor-note-preview detail-note empty">no note</p>
+      {/if}
+    </div>
     <div class="row">
       <label>
         project
