@@ -4,10 +4,11 @@
   import Brand from "./Brand.svelte";
   import PathLabel from "./PathLabel.svelte";
   import Dropdown from "./Dropdown.svelte";
-  import { Bot, Check, ChevronDown, FolderOpen, GitBranch, Layers, Loader2, Plus, Search, Settings2 } from "@lucide/svelte";
+  import { Bot, Check, ChevronDown, FolderOpen, FolderPlus, GitBranch, Layers, Loader2, Plus, Search, Settings2 } from "@lucide/svelte";
   import { formatRelativeTime, roleVerb } from "./util";
   import { agents, type SettingsSection } from "./agents.svelte";
   import { files } from "./files.svelte";
+  import { projectPicker } from "./projectPicker.svelte.js";
   import FilesPanel from "./FilesPanel.svelte";
   import type { AgentRole } from "../../../src/db";
 
@@ -225,6 +226,18 @@
           <span class="check"><FolderOpen size={10} strokeWidth={1.6} /></span>
         {/if}
         <span class="picker-footer-label">all projects</span>
+      </button>
+      <button
+        class="picker-row footer"
+        aria-label="add project from directory"
+        onclick={() => {
+          filter = "";
+          pickerOpen = false;
+          projectPicker.openModal();
+        }}
+      >
+        <span class="check"><FolderPlus size={10} strokeWidth={1.6} /></span>
+        <span class="picker-footer-label">add project…</span>
       </button>
     </Dropdown>
   </div>
