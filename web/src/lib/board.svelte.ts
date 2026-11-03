@@ -100,6 +100,24 @@ function loadCollapsedLanes(): Set<string> {
   }
 }
 
+/**
+ * Expanded parents in the board view (missing = collapsed — the board's default
+ * is closed, unlike the list's). Exported because the store is an import-time
+ * singleton: this is the read path's module API.
+ */
+export function loadExpandedParents(): Set<string> {
+  try {
+    const raw = localStorage.getItem("kanban-expanded-parents");
+    if (raw === null) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((x): x is string => typeof x === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 class BoardStore {
   lanes = $state<Lane[]>([]);
   tasks = $state<Task[]>([]);
@@ -288,7 +306,7 @@ class BoardStore {
 
   editing = $state<Task | null>(null);
   editMode = $state(false);
-  expanded = $state<Set<string>>(new Set());
+  expanded = $state<Set<string>>(loadExpandedParents());
   /** Card to scroll to and flash once the detail modal closes (search jumps). */
   flashId = $state<string | null>(null);
   /** In-flight pi agent sessions, keyed by task id (poll-driven: sessions emit no DB writes). */
