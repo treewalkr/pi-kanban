@@ -50,9 +50,9 @@ test("settings tabs and sidebar foot use the lucide section icons", () => {
   expect(sidebarImports).toContain("Layers");
   expect(sidebarImports).toContain("Settings2");
 
-  expect(settingsPanel).toMatch(/<Settings2\b[^>]*\/>\s*<span>General<\/span>/);
-  expect(settingsPanel).toMatch(/<Bot\b[^>]*\/>\s*<span>Agents<\/span>/);
-  expect(settingsPanel).toMatch(/<Layers\b[^>]*\/>\s*<span>Pools<\/span>/);
+  expect(settingsPanel).toMatch(/\{ id: "general", label: "General", icon: Settings2 \}/);
+  expect(settingsPanel).toMatch(/\{ id: "agents", label: "Agents", icon: Bot \}/);
+  expect(settingsPanel).toMatch(/\{ id: "pools", label: "Pools", icon: Layers \}/);
 
   expect(sidebar).toMatch(/s\.id === "agents"[\s\S]*?<Bot\b[^>]*\/>/);
   expect(sidebar).toMatch(/s\.id === "pools"[\s\S]*?<Layers\b[^>]*\/>/);

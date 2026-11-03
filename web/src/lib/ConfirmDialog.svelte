@@ -18,6 +18,15 @@
   }
 </script>
 
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      oncancel();
+    }
+  }}
+/>
+
 <div
   class="overlay confirm"
   role="presentation"

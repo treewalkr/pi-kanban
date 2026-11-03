@@ -284,12 +284,15 @@ describe("agents auto-save store", () => {
     expect(agents.configs.reviewer).toEqual({ model: "B" });
   });
 
-  test("AgentsSettings markup: no save button, close goes through the store", () => {
+  test("AgentsSettings markup: no save button; status and close live in the panel header", () => {
     const src = readFileSync(new URL("../web/src/lib/AgentsSettings.svelte", import.meta.url), "utf-8");
+    const panel = readFileSync(new URL("../web/src/lib/SettingsPanel.svelte", import.meta.url), "utf-8");
     expect(src).not.toContain(">save</button>");
     expect(src).not.toContain("onclick={save}");
-    expect(src).toContain("agents.close()");
-    expect(src).toContain("save-status");
+    // the 2,000px form's status line moved to the modal header (q8x8g)
+    expect(src).not.toContain("save-status");
+    expect(panel).toContain("settings-status");
+    expect(panel).toContain("agents.close()");
     expect(src).toMatch(/await\s+agents\.flush\(\)[\s\S]*role\s*=\s*next/);
   });
 
