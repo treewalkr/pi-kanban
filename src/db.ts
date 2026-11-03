@@ -2992,10 +2992,14 @@ export class KanbanDb {
     return computeCardStats(task, events, comments, attachments, boardLanes, now);
   }
 
-  boardStats(now: number = Date.now()): BoardStatsPayload {
+  boardStats(now: number = Date.now(), project: string | null = null): BoardStatsPayload {
     const allLanes = this.lanes();
     const allTasks = this.tasks();
     const allEvents = this.laneEvents();
+    // A project chip scopes the aggregates; card stats stay global so opening a
+    // card never loses its lane times.
+    const scopedTasks = project ? allTasks.filter((t) => t.project === project) : allTasks;
+    const scopedIds = project ? new Set(scopedTasks.map((t) => t.id)) : null;
     const allComments = (
       this.q("SELECT * FROM comments ORDER BY created_at, rowid").all() as CommentRow[]
     ).map(rowToComment);
@@ -3045,7 +3049,7 @@ export class KanbanDb {
       );
     }
 
-    const wip = allTasks.filter((t) => t.laneId !== "done" && t.laneId !== "archive").length;
+    const wip = scopedTasks.filter((t) => t.laneId !== "done" && t.laneId !== "archive").length;
 
     function startOfLocalWeek(ts: number): number {
       const d = new Date(ts);
@@ -3065,7 +3069,7 @@ export class KanbanDb {
 
     const doneCounts = new Array(8).fill(0);
     for (const e of allEvents) {
-      if (e.toLaneId === "done") {
+      if (e.toLaneId === "done" && (!scopedIds || scopedIds.has(e.taskId))) {
         const eWeek = startOfLocalWeek(e.createdAt);
         const idx = weekStarts.indexOf(eWeek);
         if (idx >= 0) {
@@ -3079,7 +3083,9 @@ export class KanbanDb {
     }));
 
     const laneVisitors = new Map<string, { totalMs: number; cards: number }>();
-    for (const stats of Object.values(cardStatsMap)) {
+    for (const task of scopedTasks) {
+      const stats = cardStatsMap[task.id];
+      if (!stats) continue;
       for (const lt of stats.laneTimes) {
         const curDwell = laneVisitors.get(lt.laneId) ?? { totalMs: 0, cards: 0 };
         curDwell.totalMs += lt.ms;
@@ -3098,7 +3104,7 @@ export class KanbanDb {
     }
 
     const projectMap = new Map<string, { total: number; active: number; done: number }>();
-    for (const task of allTasks) {
+    for (const task of scopedTasks) {
       const p = task.project;
       const curP = projectMap.get(p) ?? { total: 0, active: 0, done: 0 };
       curP.total += 1;
@@ -3114,7 +3120,9 @@ export class KanbanDb {
       .map(([project, counts]) => ({ project, ...counts }))
       .sort((a, b) => a.project.localeCompare(b.project));
 
-    const reachedDoneStats = Object.values(cardStatsMap).filter((s) => s.reachedDone);
+    const reachedDoneStats = scopedTasks
+      .map((t) => cardStatsMap[t.id])
+      .filter((s): s is CardStats => !!s && s.reachedDone);
     const cycleAvgMs =
       reachedDoneStats.length === 0
         ? null
