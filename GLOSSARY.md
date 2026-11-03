@@ -64,8 +64,9 @@ _Avoid_: Dashboard, board summary, digest, glance
 
 **Owner**:
 The actor currently responsible for a card, recorded as a `tasks.owner` value
-set when a card enters Test + Implement and cleared when it leaves, making
-"who's on this" a fact rather than a thread-read.
+set when a card enters Test + Implement — the handing-off actor, or the lane's
+lead actor on a review return — and cleared when it leaves, making "who's on
+this" a fact rather than a thread-read.
 _Avoid_: Assignee, claimant, holder, session binding
 
 **Lead actor**:
