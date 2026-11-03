@@ -407,7 +407,7 @@ function matchesOn(on: { author?: string; kind?: string; prefix?: string }, c: {
  * The generic lane interpreter (card 3n96c): evaluate a lane's context against a
  * card's thread and say what the loop should do — arm an actor (with the
  * plan-build flavor when approvalInstructions apply), post a cap question,
- * transition the card, or nothing. Replaces roleFor's hardcoded plan/implement/
+ * transition the card, or nothing (or blocked, card j2kpq). Replaces roleFor's hardcoded plan/implement/
  * review branches; the seeded contexts reproduce those branches exactly.
  */
 export function evaluateLaneContext(
@@ -416,6 +416,11 @@ export function evaluateLaneContext(
   context: LaneContext,
   opts?: { maxBlocks?: number; maxPlanBlocks?: number; now?: number },
 ): LaneEvaluation {
+  // a blocked card is paused by the human: no actor, no cap question, no
+  // transition until its blockers land — then the unchanged thread re-arms it
+  // (card j2kpq)
+  if (db.isBlocked(task.id)) return { actor: null };
+
   // pi-elaborator comments are a side-channel note edit: invisible to every
   // lane's state machine — a plan-review pass stays at the gate, an open
   // planner question stays open, a reviewer/builder disarm stays disarmed

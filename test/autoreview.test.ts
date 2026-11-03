@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { KanbanDb } from "../src/db";
+import { defaultLaneContext, KanbanDb } from "../src/db";
 import {
   BUILDER_AUTHOR,
   DEFAULT_STALL_MS,
@@ -22,6 +22,7 @@ import {
   defaultGate,
   defaultSpawn,
   durationFor,
+  evaluateLaneContext,
   formatPiEvent,
   killAgentSessions,
   MAX_SKILL_CHARS,
@@ -3089,5 +3090,90 @@ describe("lane contexts", () => {
     expect(calls.length).toBe(2);
     expect(calls[1].job.role).toBe("designer");
     calls[1].finish({ code: 0 });
+  });
+
+  test("evaluateLaneContext: a blocked card yields no actor and re-arms on unblock", () => {
+    const { writer: w } = setup();
+    const ctx = defaultLaneContext("implement")!;
+    const blocker = w.createTask({ title: "blocker", lane: "implement" });
+    const card = w.createTask({ title: "card", lane: "implement" });
+    w.comment(card.id, { author: "user", body: "ready to build" });
+
+    // armed human comment → actor.id === "builder"
+    const ev1 = evaluateLaneContext(w, w.resolveTask(card.id), ctx);
+    expect(ev1.actor?.id).toBe("builder");
+
+    // after setBlockedBy → toEqual({ actor: null })
+    w.setBlockedBy(card.id, [blocker.id]);
+    const ev2 = evaluateLaneContext(w, w.resolveTask(card.id), ctx);
+    expect(ev2).toEqual({ actor: null });
+
+    // after the blocker → Done → actor.id === "builder"
+    w.updateTask(blocker.id, { lane: "done" });
+    const ev3 = evaluateLaneContext(w, w.resolveTask(card.id), ctx);
+    expect(ev3.actor?.id).toBe("builder");
+  });
+
+  test("a blocked implement card gets no builder and nothing queued", async () => {
+    const { dbFile, writer: w } = setup();
+    const blocker = w.createTask({ title: "blocker", lane: "implement" });
+    const card = w.createTask({ title: "card", lane: "implement" });
+    w.comment(card.id, { author: "user", body: "build it" });
+    w.setBlockedBy(card.id, [blocker.id]);
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+    expect(calls.length).toBe(0);
+    expect(activitySnapshot().sessions.some((s) => s.taskId === card.id)).toBe(false);
+    expect(activitySnapshot().queued.some((q) => q.taskId === card.id)).toBe(false);
+
+    // unrelated write bumps data_version
+    w.createTask({ title: "unrelated", lane: "backlog" });
+    await sleep(150);
+    expect(calls.length).toBe(0);
+    expect(activitySnapshot().sessions.some((s) => s.taskId === card.id)).toBe(false);
+    expect(activitySnapshot().queued.some((q) => q.taskId === card.id)).toBe(false);
+  });
+
+  test("a blocked card in plan is not armed on entry", async () => {
+    const { dbFile, writer: w } = setup();
+    const blocker = w.createTask({ title: "blocker", lane: "implement" });
+    const card = w.createTask({ title: "card", lane: "backlog" });
+    w.setBlockedBy(card.id, [blocker.id]);
+    w.updateTask(card.id, { lane: "plan" });
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+    expect(calls.length).toBe(0);
+
+    w.updateTask(blocker.id, { lane: "done" });
+    await sleep(200);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("planner");
+    expect(calls[0].job.task.id).toBe(card.id);
+    calls[0].finish({ code: 0 });
+  });
+
+  test("unblocking re-arms the loop with no new comment", async () => {
+    const { dbFile, writer: w } = setup();
+    const blocker = w.createTask({ title: "blocker", lane: "implement" });
+    const card = w.createTask({ title: "card", lane: "implement" });
+    w.comment(card.id, { author: "user", body: "build it" });
+    w.setBlockedBy(card.id, [blocker.id]);
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+    expect(calls.length).toBe(0);
+
+    w.updateTask(blocker.id, { lane: "done" });
+    await sleep(200);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("builder");
+    expect(calls[0].job.task.id).toBe(card.id);
+    expect(db!.nextTask().task?.id).toBe(card.id);
+    calls[0].finish({ code: 0 });
   });
 });
