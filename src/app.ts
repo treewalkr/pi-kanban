@@ -358,7 +358,7 @@ export const createApp = (
           workspaces[task.id] = live[task.workspace];
         }
       }
-      return { ...board, workspaces };
+      return { ...board, workspaces, projectNames: db.listProjects().map((p) => p.name) };
     })
     .get("/stats", (): BoardStatsPayload => db.boardStats())
     .get("/git", (): Promise<GitInfo | { repo: false }> => gitInfo(process.cwd()))

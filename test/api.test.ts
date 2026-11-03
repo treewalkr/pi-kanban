@@ -1681,3 +1681,25 @@ test("POST /fs/mkdir creates 0755 directories under homeDir and refuses escapes,
   const tildeEscape = await app.handle(new Request("http://localhost/fs/dirs?path=~/../outside"));
   expect(tildeEscape.status).toBe(400);
 });
+
+test("GET /board lists registered projects that carry no cards", async () => {
+  const homeDir = join(dir, "home");
+  mkdirSync(homeDir, { recursive: true });
+
+  const app = createApp(db, { homeDir });
+
+  // Pre-seed payload (projectNames: [])
+  const initialRes = await app.handle(new Request("http://localhost/board"));
+  expect(initialRes.status).toBe(200);
+  const initial = (await initialRes.json()) as any;
+  expect(initial.projectNames).toEqual([]);
+
+  // After db.addProject("kanban-add", homeDir) and a card tagged tag-only
+  db.addProject("kanban-add", homeDir);
+  db.createTask({ title: "Card tagged tag-only", project: "tag-only" });
+
+  const updatedRes = await app.handle(new Request("http://localhost/board"));
+  expect(updatedRes.status).toBe(200);
+  const updated = (await updatedRes.json()) as any;
+  expect(updated.projectNames).toEqual(["kanban-add", "tag-only"]);
+});
