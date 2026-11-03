@@ -287,8 +287,11 @@ kanban help | version                                                 # CLI help
   or Archive; finishing the blocker unblocks it (the edge stays, for history).
   Self-edges and cycles are refused. Blocked cards print ⊘ in `ls`/`show` and
   dim in the web UI; `mv` into Plan/Implement warns but never refuses;
-  `next` skips them and prints how many. Edges map dependencies — they don't
-  gate moves or auto-finish anything.
+  `next` skips them and prints how many. The auto-agent loop also holds blocked
+  cards — no lane agent spawns and no dead session resumes while any blocker
+  sits outside Done/Archive, AI note elaboration still runs, and finishing the
+  last blocker (a board write) makes the loop pick the card up with no new
+  comment. Edges map dependencies — they don't gate moves or auto-finish anything.
 - **Links (`kanban link <id> <other>`)**: general undirected relations
   between cards (`kanban unlink <id> <other>` removes). Links are undirected,
   idempotent, visible from both cards in CLI and web detail, survive moves,

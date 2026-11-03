@@ -407,7 +407,7 @@ function matchesOn(on: { author?: string; kind?: string; prefix?: string }, c: {
  * The generic lane interpreter (card 3n96c): evaluate a lane's context against a
  * card's thread and say what the loop should do — arm an actor (with the
  * plan-build flavor when approvalInstructions apply), post a cap question,
- * transition the card, or nothing. Replaces roleFor's hardcoded plan/implement/
+ * transition the card, or nothing (or blocked, card j2kpq). Replaces roleFor's hardcoded plan/implement/
  * review branches; the seeded contexts reproduce those branches exactly.
  */
 export function evaluateLaneContext(
@@ -416,6 +416,11 @@ export function evaluateLaneContext(
   context: LaneContext,
   opts?: { maxBlocks?: number; maxPlanBlocks?: number; now?: number },
 ): LaneEvaluation {
+  // a blocked card is paused by the human: no actor, no cap question, no
+  // transition until its blockers land — then the unchanged thread re-arms it
+  // (card j2kpq)
+  if (db.isBlocked(task.id)) return { actor: null };
+
   // pi-elaborator comments are a side-channel note edit: invisible to every
   // lane's state machine — a plan-review pass stays at the gate, an open
   // planner question stays open, a reviewer/builder disarm stays disarmed
@@ -912,6 +917,13 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
     }
   };
 
+  /** A blocked card's resume is held as a persisted request — the row is the
+   *  durable artifact, the queue is only a cache (card j2kpq). */
+  const holdResume = (job: AgentJob): void => {
+    db.queueResume(job.task.id);
+    log(`${job.role} ${job.task.id}: blocked — resume held, request kept until its blockers land`);
+  };
+
   function scan(): void {
     // the board-level pause gates every loop: no scan work, no capped-cap
     // comments, nothing — until the flag clears (the pause write itself wakes
@@ -924,6 +936,9 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         continue;
       }
       if (db.leaseFor(task.id, LEASE_TTL_MS)) continue;
+      // a blocked card's resume waits with its request intact: the row is not
+      // cleared, so the first scan after the blocker lands spawns it (card j2kpq)
+      if (db.isBlocked(task.id)) continue;
       const session = db.cardSession(task.id);
       if (!session) {
         db.clearResumeRequest(task.id);
@@ -1037,6 +1052,12 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
             return; // the question parks the card in waiting — the lane change disarms it (roleFor ignores waiting)
           }
         }
+      }
+      // the gate can run for minutes: a card blocked meanwhile is held; a resume
+      // job hands its request back because it was cleared at enqueue (card j2kpq)
+      if (job.mode !== "elaborate" && db.isBlocked(job.task.id)) {
+        if (job.mode === "resume") holdResume(job);
+        return;
       }
       if (!db.tryTakeLease(job.task.id, job.role, owner, LEASE_TTL_MS)) {
         log(`${job.role} ${job.task.id}: lease held by another server — skipping`);
@@ -1154,6 +1175,10 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         if (!fresh) continue;
         if (job.mode === "resume") {
           if (db.waiting(job.task.id) !== "dead") continue;
+          if (db.isBlocked(job.task.id)) {
+            holdResume(job); // persisted, then dropped: a restart re-reads the row
+            continue;
+          }
         } else if (job.mode === "elaborate") {
           // request-driven: no roleFor precondition
         } else {
