@@ -383,7 +383,11 @@ export const createApp = (
       }
       return { ...board, workspaces, projectNames: db.listProjects().map((p) => p.name) };
     })
-    .get("/stats", (): BoardStatsPayload => db.boardStats())
+    .get(
+      "/stats",
+      ({ query }): BoardStatsPayload => db.boardStats(Date.now(), query.project?.trim() || null),
+      { query: t.Object({ project: t.Optional(t.String()) }) },
+    )
     .get("/git", (): Promise<GitInfo | { repo: false }> => gitInfo(process.cwd()))
     .post(
       "/git/checkout",

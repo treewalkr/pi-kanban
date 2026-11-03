@@ -1115,6 +1115,41 @@ test("PATCH lane change (drag-drop path) records a lane event visible via /stats
   expect(cardStats.laneTimes.map((lt: any) => lt.laneId)).toEqual(["backlog", "plan"]);
 });
 
+test("GET /stats?project= scopes aggregates but keeps card stats global", async () => {
+  const app = createApp(db);
+  const alphaActive = db.createTask({ title: "alpha backlog", lane: "backlog", project: "alpha" });
+  db.createTask({ title: "alpha plan", lane: "plan", project: "alpha" });
+  const betaPlan = db.createTask({ title: "beta plan", lane: "plan", project: "beta" });
+  db.moveTask(alphaActive.id, "done");
+
+  const scoped = (await (await app.handle(new Request("http://localhost/stats?project=alpha"))).json()) as any;
+  expect(scoped.board.wip).toBe(1); // alpha has one active card; beta's is out of scope
+  expect(scoped.board.throughput.reduce((n: number, w: any) => n + w.done, 0)).toBe(1);
+  expect(scoped.board.laneDwell.plan.cards).toBe(1);
+  expect(scoped.board.laneDwell.backlog.cards).toBe(1);
+  expect(scoped.board.projects).toEqual([{ project: "alpha", total: 2, active: 1, done: 1 }]);
+  expect(scoped.board.cycleAvgMs).not.toBeNull();
+  expect(scoped.cards[betaPlan.id]).toBeDefined(); // card stats stay global
+
+  const beta = (await (await app.handle(new Request("http://localhost/stats?project=beta"))).json()) as any;
+  expect(beta.board.wip).toBe(1);
+  expect(beta.board.throughput.reduce((n: number, w: any) => n + w.done, 0)).toBe(0);
+  expect(Object.keys(beta.board.laneDwell)).toEqual(["plan"]);
+  expect(beta.board.cycleAvgMs).toBeNull();
+
+  // the reported bug: a registered project with no cards must not inherit board totals
+  const empty = (await (await app.handle(new Request("http://localhost/stats?project=baanthong.co"))).json()) as any;
+  expect(empty.board).toMatchObject({ wip: 0, laneDwell: {}, projects: [], cycleAvgMs: null });
+  expect(empty.board.throughput.every((w: any) => w.done === 0)).toBe(true);
+  expect(empty.cards[betaPlan.id]).toBeDefined();
+
+  // no query = whole board (unchanged)
+  const all = (await (await app.handle(new Request("http://localhost/stats"))).json()) as any;
+  expect(all.board.wip).toBe(2);
+  expect(all.board.laneDwell.plan.cards).toBe(2);
+  expect(all.board.projects.map((p: any) => p.project)).toEqual(["alpha", "beta"]);
+});
+
 
 test("GET /git reports the serving repo; checkout refuses unknown branches", async () => {
   const app = createApp(db);

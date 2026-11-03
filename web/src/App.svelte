@@ -67,6 +67,17 @@
     if (!board.editing) board.refresh();
   });
 
+  // the project chip scopes /stats, so switching projects refetches without a
+  // DB write to trigger the SSE refresh
+  let lastProject = board.projectFilter;
+  $effect(() => {
+    const project = board.projectFilter;
+    if (project !== lastProject) {
+      lastProject = project;
+      if (!board.editMode) void board.refresh();
+    }
+  });
+
   // keep the board in sync with CLI-side and other-tab writes, pushed over SSE
   $effect(() => {
     const source = new EventSource(eventsUrl);

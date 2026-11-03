@@ -487,7 +487,14 @@ class BoardStore {
   }
 
   async refresh(): Promise<void> {
-    const [boardRes, statsRes, ghRes] = await Promise.all([api.board.get(), api.stats.get(), api.gh.statuses.get()]);
+    // the stats payload follows the project chip, so the velocity view never
+    // reports another project's work under a filter
+    const statsQuery = { project: this.projectFilter || undefined };
+    const [boardRes, statsRes, ghRes] = await Promise.all([
+      api.board.get(),
+      api.stats.get({ query: statsQuery }),
+      api.gh.statuses.get(),
+    ]);
     if (boardRes.error) {
       this.fail(boardRes.error);
       return;
