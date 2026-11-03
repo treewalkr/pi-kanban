@@ -59,12 +59,74 @@ function swallowNextClick(): void {
   }, 0);
 }
 
+// Settled-layout geometry: the transform-immune viewport rect of an element
+// inside a lane. animate:flip reorders translate the wrapper divs, so any
+// getBoundingClientRect() on a card mid-flip includes the in-flight transform
+// and hint decisions end up chasing moving geometry. The offsetTop/
+// offsetParent chain is computed from layout, not transforms, so it stays
+// still while flips run. Nothing at or above section.lane is transform-animated
+// during a drag, so the element outside the lane (the offset anchor) is the
+// trusted viewport origin.
+function settledRect(
+  el: HTMLElement,
+  laneEl: HTMLElement,
+): { top: number; left: number; height: number; width: number } {
+  let accTop = 0;
+  let accLeft = 0;
+  let curr: HTMLElement = el;
+  // walk offsetParent links while they stay inside the lane; the first offset
+  // parent at or above the lane (or null) is the anchor
+  while (curr.offsetParent && curr.offsetParent !== laneEl && laneEl.contains(curr.offsetParent)) {
+    accTop += curr.offsetTop + (curr.offsetParent as HTMLElement).clientTop;
+    accLeft += curr.offsetLeft + (curr.offsetParent as HTMLElement).clientLeft;
+    curr = curr.offsetParent as HTMLElement;
+  }
+  accTop += curr.offsetTop;
+  accLeft += curr.offsetLeft;
+  const anchor = (curr.offsetParent as HTMLElement | null) ?? laneEl;
+  accTop += anchor.clientTop;
+  accLeft += anchor.clientLeft;
+
+  // scroll correction: subtract scrolled offsets of scroll containers between
+  // el and the anchor (today exactly one: .cards)
+  let scrollTop = 0;
+  let scrollLeft = 0;
+  for (let p = el.parentElement; p && p !== anchor; p = p.parentElement) {
+    const cs = window.getComputedStyle(p);
+    if (cs.overflowY === "auto" || cs.overflowY === "scroll") scrollTop += p.scrollTop;
+    if (cs.overflowX === "auto" || cs.overflowX === "scroll") scrollLeft += p.scrollLeft;
+  }
+
+  const anchorRect = anchor.getBoundingClientRect();
+  return {
+    top: anchorRect.top + accTop - scrollTop,
+    left: anchorRect.left + accLeft - scrollLeft,
+    height: el.offsetHeight,
+    width: el.offsetWidth,
+  };
+}
+
 class DragStore {
   taskId = $state<string | null>(null); // the lifted card, null when idle
   hint = $state<DropHint | null>(null);
 
   get lifted(): boolean {
     return this.taskId !== null || isReleasing;
+  }
+
+  // Write the hint only when its meaning changed. Svelte re-runs the animated
+  // each block (measure/apply, which aborts in-flight flips) whenever the hint
+  // $state changes — a fresh object with the same slot would murder and restart
+  // every displaced card's flip on each pointermove. Same values → same
+  // reference → no reconcile → flips run to completion.
+  private setHint(next: DropHint | null): void {
+    const cur = this.hint;
+    if (cur === next) return;
+    if (cur && next && cur.kind === next.kind && cur.before === next.before) {
+      if (cur.kind === "top" && next.kind === "top" && cur.index === next.index && cur.laneId === next.laneId) return;
+      if (cur.kind === "child" && next.kind === "child" && cur.parentId === next.parentId) return;
+    }
+    this.hint = next;
   }
 
   press(task: Task, e: PointerEvent): void {
@@ -218,59 +280,73 @@ class DragStore {
     const hit = document.elementFromPoint(clientX, clientY);
     const laneEl = hit?.closest("section.lane") as HTMLElement | null;
     if (!laneEl) {
-      this.hint = null;
+      this.setHint(null);
       return;
     }
 
     const laneId = laneEl.getAttribute("data-lane");
     if (!laneId) {
-      this.hint = null;
+      this.setHint(null);
       return;
     }
 
     // Collapsed lane: append hint
     if (laneEl.classList.contains("collapsed")) {
-      this.hint = { kind: "top", laneId, index: 0, before: undefined };
+      this.setHint({ kind: "top", laneId, index: 0, before: undefined });
       return;
     }
 
-    // Gap-feedback guard: hovering the slot itself or within it holds current hint
-    const hovered = hit?.closest("[data-card]") as HTMLElement | null;
-    if (hovered) {
-      const hoveredId = hovered.getAttribute("data-card");
-      if (hoveredId === this.taskId) {
-        return;
-      }
-      const slotEl = laneEl.querySelector(`[data-card="${this.taskId}"]`);
-      if (slotEl && slotEl.contains(hovered)) {
+    // Gap-feedback guard: hovering the settled slot (the dragged card's own
+    // element, nested footprint included) holds the current hint — measured
+    // without flip transforms so the moving slot never lies about where it is
+    const slotEl = laneEl.querySelector(`[data-card="${this.taskId}"]`) as HTMLElement | null;
+    if (slotEl) {
+      const sr = settledRect(slotEl, laneEl);
+      if (
+        clientX >= sr.left &&
+        clientX <= sr.left + sr.width &&
+        clientY >= sr.top &&
+        clientY <= sr.top + sr.height
+      ) {
         return;
       }
     }
 
     const dragged = board.taskById(this.taskId);
 
-    // Child-kind hint: hovering inside .card-children of dragged card's own parent
+    // Child-kind hint: hovering inside .card-children of dragged card's own parent.
+    // Routed by the children container's settled rect so both the Y band and the
+    // X span match (a pointer left of the container is a top-level hint, not a
+    // child reorder) even while sibling cards are mid-flip.
     if (dragged && board.nestsUnder(dragged) && dragged.parentId) {
       const parentEl = laneEl.querySelector(`[data-card="${dragged.parentId}"]`);
-      const parentChildrenEl = parentEl?.querySelector(".card-children");
-      if (parentChildrenEl && parentChildrenEl.contains(hit)) {
-        const siblingCards = ([...parentChildrenEl.querySelectorAll(":scope > div > [data-card], :scope > [data-card]")] as HTMLElement[])
-          .filter((el) => el.getAttribute("data-card") !== this.taskId);
-        const hoveredSibling = siblingCards.find((s) => s.contains(hit));
-        if (hoveredSibling) {
-          const r = hoveredSibling.getBoundingClientRect();
-          const midY = r.top + r.height / 2;
-          const idx = siblingCards.indexOf(hoveredSibling);
-          if (clientY < midY) {
-            this.hint = { kind: "child", parentId: dragged.parentId, before: hoveredSibling.getAttribute("data-card")! };
+      const parentChildrenEl = parentEl?.querySelector(".card-children") as HTMLElement | null;
+      if (parentChildrenEl) {
+        const cr = settledRect(parentChildrenEl, laneEl);
+        const inChildren =
+          clientX >= cr.left &&
+          clientX <= cr.left + cr.width &&
+          clientY >= cr.top &&
+          clientY <= cr.top + cr.height;
+        if (inChildren) {
+          const siblingCards = ([...parentChildrenEl.querySelectorAll(":scope > div > [data-card], :scope > [data-card]")] as HTMLElement[])
+            .filter((el) => el.getAttribute("data-card") !== this.taskId);
+          const hoveredSibling = siblingCards.find((s) => s.contains(hit));
+          if (hoveredSibling) {
+            const r = settledRect(hoveredSibling, laneEl);
+            const midY = r.top + r.height / 2;
+            const idx = siblingCards.indexOf(hoveredSibling);
+            if (clientY < midY) {
+              this.setHint({ kind: "child", parentId: dragged.parentId, before: hoveredSibling.getAttribute("data-card")! });
+            } else {
+              const next = siblingCards[idx + 1];
+              this.setHint({ kind: "child", parentId: dragged.parentId, before: next ? next.getAttribute("data-card")! : undefined });
+            }
           } else {
-            const next = siblingCards[idx + 1];
-            this.hint = { kind: "child", parentId: dragged.parentId, before: next ? next.getAttribute("data-card")! : undefined };
+            this.setHint({ kind: "child", parentId: dragged.parentId, before: undefined });
           }
-        } else {
-          this.hint = { kind: "child", parentId: dragged.parentId, before: undefined };
+          return;
         }
-        return;
       }
     }
 
@@ -280,32 +356,33 @@ class DragStore {
       .filter((el) => el.getAttribute("data-card") !== this.taskId);
 
     if (tops.length === 0) {
-      this.hint = { kind: "top", laneId, index: 0, before: undefined };
+      this.setHint({ kind: "top", laneId, index: 0, before: undefined });
       return;
     }
 
     const lastBlock = tops[tops.length - 1];
-    if (clientY > lastBlock.getBoundingClientRect().bottom) {
-      this.hint = { kind: "top", laneId, index: tops.length, before: undefined };
+    const lastR = settledRect(lastBlock, laneEl);
+    if (clientY > lastR.top + lastR.height) {
+      this.setHint({ kind: "top", laneId, index: tops.length, before: undefined });
       return;
     }
 
     for (let i = 0; i < tops.length; i++) {
       const block = tops[i];
-      const r = block.getBoundingClientRect();
+      const r = settledRect(block, laneEl);
       const midY = r.top + r.height / 2;
       if (clientY < midY) {
-        this.hint = { kind: "top", laneId, index: i, before: block.getAttribute("data-card")! };
+        this.setHint({ kind: "top", laneId, index: i, before: block.getAttribute("data-card")! });
         return;
       }
-      if (clientY <= r.bottom) {
+      if (clientY <= r.top + r.height) {
         const next = tops[i + 1];
-        this.hint = { kind: "top", laneId, index: i + 1, before: next ? next.getAttribute("data-card")! : undefined };
+        this.setHint({ kind: "top", laneId, index: i + 1, before: next ? next.getAttribute("data-card")! : undefined });
         return;
       }
     }
 
-    this.hint = { kind: "top", laneId, index: tops.length, before: undefined };
+    this.setHint({ kind: "top", laneId, index: tops.length, before: undefined });
   }
 
   async commit(): Promise<void> {
