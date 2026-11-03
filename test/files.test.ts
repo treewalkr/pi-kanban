@@ -7,6 +7,7 @@ import {
   EXT_TO_HLJS,
   PREVIEW_MAX_BYTES,
   languageForPath,
+  listDirs,
   listFiles,
   readFile,
 } from "../src/files";
@@ -77,6 +78,33 @@ describe("src/files.ts", () => {
     expect(listFiles(dir, "nope")).rejects.toThrow(
       new KanbanError("no such directory: 'nope'", "not-found")
     );
+  });
+
+  test("listDirs: lists non-dot subdirs, detects .git, provides parent, rejects escapes and misses", async () => {
+    const home = join(dir, "home-test");
+    mkdirSync(home);
+    mkdirSync(join(home, "repo"));
+    mkdirSync(join(home, "repo", ".git"));
+    mkdirSync(join(home, "plain"));
+    mkdirSync(join(home, ".hidden"));
+    writeFileSync(join(home, "file.txt"), "hi");
+
+    const rootListing = await listDirs(home);
+    expect(rootListing.path).toBe(home);
+    expect(rootListing.parent).toBeNull();
+    expect(rootListing.isGitRepo).toBe(false);
+    expect(rootListing.dirs.map((d) => d.name)).toEqual(["plain", "repo"]);
+    expect(rootListing.dirs.find((d) => d.name === "repo")?.isGitRepo).toBe(true);
+    expect(rootListing.dirs.find((d) => d.name === "plain")?.isGitRepo).toBe(false);
+
+    const subListing = await listDirs(home, "repo");
+    expect(subListing.path).toBe(join(home, "repo"));
+    expect(subListing.parent).toBe(home);
+    expect(subListing.isGitRepo).toBe(true);
+
+    expect(listDirs(home, "..")).rejects.toThrow("path escapes home directory");
+    expect(listDirs(home, "/etc")).rejects.toThrow("path escapes home directory");
+    expect(listDirs(home, "nope")).rejects.toThrow("no such directory");
   });
 
   test("readFile maps extensions to hljs languages; unknown → plaintext", () => {

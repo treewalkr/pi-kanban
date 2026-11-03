@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { homedir } from "node:os";
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneContext, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type WorkerPool, type ProjectRoute } from "./db";import { parseGhRef, refreshGhUrl } from "./gh";
@@ -8,7 +9,7 @@ import { listChatModels, listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
-import { contentTypeFor, listFiles, rawFilePath, readFile, searchFiles, type FileEntry } from "./files";
+import { contentTypeFor, listDirs, listFiles, rawFilePath, readFile, searchFiles, type DirListing, type FileEntry } from "./files";
 import { BOARD_CHAT_ID, ChatManager, PROMPT_MAX_CHARS, THINKING_LEVELS, type ChatState, type ChatSessionFactory } from "./chat";
 import { createChatEventStream, type ChatStreamSession } from "./chat-events";
 import { VERSION, serveGit } from "./version";
@@ -199,6 +200,7 @@ export const createApp = (
     onServeRestart?: () => Promise<void>;
     sessions?: () => number;
     filesRoot?: string;
+    homeDir?: string;
     notify?: (title: string, body: string) => void; // test seam for the osascript fallback
     chat?: { cwd?: string; sessionDir?: string; createSession?: ChatSessionFactory; idleTimeoutMs?: number }; // test seam for the chat manager
   } = {}, // test seams for /restart, /files, and chat
@@ -370,6 +372,22 @@ export const createApp = (
         }
       },
       { body: t.Object({ branch: t.String({ minLength: 1 }) }) },
+    )
+    .get(
+      "/fs/dirs",
+      async ({ query, status }): Promise<DirListing> => {
+        try {
+          const home = opts.homeDir ?? homedir();
+          return await listDirs(home, query.path ?? "");
+        } catch (e) {
+          return fail<DirListing>(e, status);
+        }
+      },
+      {
+        query: t.Object({
+          path: t.Optional(t.String({ default: "" })),
+        }),
+      },
     )
     .get(
       "/files",

@@ -1,4 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { mkdirSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // AC6: the settings dialog's Projects section — per-row repo path + test-gate
 // edits land via PUT /projects and survive a reload. The sidebar project picker
@@ -43,5 +46,48 @@ test.describe("settings: projects section", () => {
     // cleanup: unroute and remove the seeded card
     await request.put("/projects/e2e-proj", { data: { repoPath: null } });
     await request.delete(`/tasks/${id}?force=true`);
+  });
+
+  test("adds a project via the directory picker and persists across reload", async ({ page, request }) => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const rootDirName = `kanban-e2e-picker-${suffix}`;
+    const rootDir = join(homedir(), rootDirName);
+    const repoDir = join(rootDir, "picked-repo");
+    mkdirSync(join(repoDir, ".git"), { recursive: true });
+
+    try {
+      await page.goto("/");
+      await page.waitForSelector("main.board");
+      await page.click("button[aria-label='settings']");
+      await page.locator("nav.settings-tabs button", { hasText: "Projects" }).click();
+
+      await page.click("button[aria-label='add project']");
+
+      // navigate into rootDir
+      await page.click(`button[aria-label='open directory ${rootDirName}']`);
+      // navigate into picked-repo
+      await page.click("button[aria-label='open directory picked-repo']");
+
+      // verifies input[aria-label='new project name'] defaults to picked-repo
+      const nameInput = page.locator("input[aria-label='new project name']");
+      await expect(nameInput).toHaveValue("picked-repo");
+
+      // click create project
+      await page.click("button[aria-label='create project']");
+
+      // verifies .project-row for picked-repo appears with repo path equal to absolute path
+      const repoInput = page.locator("input[aria-label='repo path picked-repo']");
+      await expect(repoInput).toHaveValue(repoDir);
+
+      // reloads page, reopens Settings -> Projects, and asserts repo path still holds the absolute path
+      await page.reload();
+      await page.waitForSelector("main.board");
+      await page.click("button[aria-label='settings']");
+      await page.locator("nav.settings-tabs button", { hasText: "Projects" }).click();
+      await expect(page.locator("input[aria-label='repo path picked-repo']")).toHaveValue(repoDir);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+      await request.put("/projects/picked-repo", { data: { repoPath: null } });
+    }
   });
 });
