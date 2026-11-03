@@ -17,8 +17,12 @@ The rendered markdown view of the local, unsaved note draft inside the card edit
 _Avoid_: Preview mode, draft preview, markdown tab
 
 **Lane**:
-A named workflow stage on the board (`Waiting on you`, `Backlog`, `Plan`, `Test + Implement`, `Review`, `Done`, `Archive`) that holds an ordered list of cards.
+A named workflow stage on the board (`Waiting on you`, `Backlog`, `Epics`, `Plan`, `Test + Implement`, `Review`, `Done`, `Archive`) that holds an ordered list of cards.
 _Avoid_: Column, state, status, stage
+
+**Epic**:
+A card with children — it plans work (decomposition, sequencing, boundaries) and never does it itself. In **Plan** the planner writes its charter; on approval it sits in the **Epics** lane supervising its children and finishes itself when nothing is in flight (Backlog defers never block it).
+_Avoid_: parent card, container, umbrella, dispatcher
 
 **Project**:
 A label associating a card with a codebase or workstream so one shared board can filter work across multiple efforts.

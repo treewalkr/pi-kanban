@@ -1161,6 +1161,8 @@ async function main(): Promise<number> {
             line = `⚠ ${v.cardId} in ${v.cardLaneId} behind parent ${v.parentId} (${v.parentLaneId})`;
           } else if (v.kind === "missing-plan") {
             line = `⚠ ${v.cardId} in ${v.laneId} with no attached plan`;
+          } else if (v.kind === "epic-in-workflow-lane") {
+            line = `⚠ ${v.cardId} is an epic in ${v.laneId} — epics belong in Epics once approved`;
           } else if (v.kind === "wip-over-limit") {
             line = `⚠ ${v.laneId} over WIP limit: ${v.count}/${v.limit}`;
           }

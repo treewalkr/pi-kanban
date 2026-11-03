@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, defaultLaneContext, PLAN_SECTIONS, PLAN_TEMPLATE, type AgentConfig, type AgentRole, type AgentThinking, type BuiltinAgentRole, type LaneActor, type LaneCapRule, type LaneContext, type LeaseOwner, type PoolSlot, type Task, type WorkerPool } from "./db";
+import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, defaultLaneContext, epicPlanContext, PLAN_SECTIONS, PLAN_TEMPLATE, type AgentConfig, type AgentRole, type AgentThinking, type BuiltinAgentRole, type LaneActor, type LaneCapRule, type LaneContext, type LeaseOwner, type PoolSlot, type Task, type WorkerPool } from "./db";
 import {
   classifySpawnFailure,
   DEFAULT_COOLDOWN_MS,
@@ -356,13 +356,13 @@ export function authorForRole(role: string): string {
   return seededActorFor(role)?.author ?? AUTHOR_BY_ROLE[role] ?? `pi-${role}`;
 }
 
-export function plannerPrompt(task: Task, now: number = Date.now()): string {
-  const ctx = defaultLaneContext("plan")!;
+export function plannerPrompt(task: Task, now: number = Date.now(), hasChildren = false): string {
+  const ctx = hasChildren ? epicPlanContext() : defaultLaneContext("plan")!;
   return renderActorPrompt(task, "plan", ctx, ctx.actors[0]!, undefined, now);
 }
 
-export function planReviewerPrompt(task: Task): string {
-  const ctx = defaultLaneContext("plan")!;
+export function planReviewerPrompt(task: Task, hasChildren = false): string {
+  const ctx = hasChildren ? epicPlanContext() : defaultLaneContext("plan")!;
   return renderActorPrompt(task, "plan", ctx, ctx.actors[1]!);
 }
 
@@ -1021,12 +1021,15 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       }
       const actor = ev.actor;
       if (!actor) continue;
+      // an epic in Plan gets the decomposition charter, not the build template (ceqfq)
+      const planCtx =
+        task.laneId === "plan" && db.childrenOf(task.id).length > 0 ? epicPlanContext() : context;
       enqueue({
         task,
         role: actor.id,
         laneId: task.laneId,
         mode: ev.mode,
-        prompt: renderActorPrompt(task, task.laneId, context, actor, ev.mode),
+        prompt: renderActorPrompt(task, task.laneId, planCtx, actor, ev.mode),
       });
     }
     void drain();
