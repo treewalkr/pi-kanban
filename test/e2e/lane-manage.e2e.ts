@@ -14,8 +14,8 @@ async function openLanesSettings(page: Page) {
   await page.goto("/");
   await page.waitForSelector("main.board");
   await page.getByRole("button", { name: "settings", exact: true }).click();
-  await page.getByRole("button", { name: "Lanes" }).click();
-  await page.waitForSelector("[data-lane='backlog']");
+  await page.getByRole("button", { name: "Lanes", exact: true }).click();
+  await page.waitForSelector(".lane-row[data-lane='backlog']");
 }
 
 test("settings: add lane, rename, set WIP, delete empty; delete with cards refused", async ({ page, request }) => {
@@ -24,19 +24,19 @@ test("settings: add lane, rename, set WIP, delete empty; delete with cards refus
   // add "staging"
   await page.fill("[aria-label='new lane name']", "staging");
   await page.click("[aria-label='add lane']");
-  await expect(page.locator("[data-lane='staging']")).toBeVisible();
+  await expect(page.locator(".lane-row[data-lane='staging']")).toBeVisible();
   expect((await laneOrder(request)).at(-1)).toBe("staging");
 
   // rename → "canary" (id slugifies)
-  await page.locator("[data-lane='staging'] .lane-row-name-text").dblclick();
+  await page.locator(".lane-row[data-lane='staging'] .lane-row-name-text").dblclick();
   const renameInput = page.locator("[aria-label='rename staging']");
   await expect(renameInput).toBeVisible();
   await renameInput.fill("canary");
   await renameInput.press("Enter");
-  await expect(page.locator("[data-lane='canary']")).toBeVisible();
+  await expect(page.locator(".lane-row[data-lane='canary']")).toBeVisible();
 
   // WIP 2 → the board count chip shows 0/2
-  await page.locator("[data-lane='canary'] .lane-row-wip").dblclick();
+  await page.locator(".lane-row[data-lane='canary'] .lane-row-wip").dblclick();
   const wipInput = page.locator("[aria-label='wip limit canary']");
   await expect(wipInput).toBeVisible();
   await wipInput.fill("2");
@@ -55,7 +55,7 @@ test("settings: add lane, rename, set WIP, delete empty; delete with cards refus
   // empty the lane, delete-empty OK, gone after reload
   await request.patch(`/tasks/${card.id}`, { data: { lane: "archive" } });
   await page.click("[aria-label='delete canary']");
-  await expect(page.locator("[data-lane='canary']")).toHaveCount(0);
+  await expect(page.locator(".lane-row[data-lane='canary']")).toHaveCount(0);
   await page.reload();
   await page.waitForSelector("main.board");
   expect(await laneOrder(request)).not.toContain("canary");
@@ -65,7 +65,9 @@ test("settings: drag lane row reorders vertically", async ({ page, request }) =>
   await openLanesSettings(page);
 
   const grip = page.locator("[aria-label='reorder Review']");
-  const target = page.locator("[data-lane='plan']");
+  const target = page.locator(".lane-row[data-lane='plan']");
+  await grip.scrollIntoViewIfNeeded();
+  await target.scrollIntoViewIfNeeded();
   const g = await grip.boundingBox();
   const t = await target.boundingBox();
   if (!g || !t) throw new Error("settings rows not laid out");
@@ -98,6 +100,8 @@ test("board: drag lane header reorders; fixed lanes stay pinned", async ({ page,
   // drag Test + Implement left of Plan, drop line visible mid-drag
   const head = page.locator("section.lane[aria-label='Test + Implement'] .lane-head");
   const plan = page.locator("section.lane[aria-label='Plan']");
+  await head.scrollIntoViewIfNeeded();
+  await plan.scrollIntoViewIfNeeded();
   const h = await head.boundingBox();
   const p = await plan.boundingBox();
   if (!h || !p) throw new Error("board lanes not laid out");
@@ -113,6 +117,7 @@ test("board: drag lane header reorders; fixed lanes stay pinned", async ({ page,
 
   // fixed Waiting on you refuses the lift: press, drag, release — still first
   const waiting = page.locator("section.lane[aria-label='Waiting on you'] .lane-head");
+  await waiting.scrollIntoViewIfNeeded();
   const w = await waiting.boundingBox();
   if (!w) throw new Error("waiting lane not laid out");
   await page.mouse.move(w.x + w.width / 2, w.y + w.height / 2);
@@ -128,17 +133,17 @@ test("board: eye toggle reveals an empty lane under a project filter and persist
 
   await page.goto("/#project=e2e-proj");
   await page.waitForSelector("main.board");
-  await expect(page.locator("[data-lane='emptylane']")).toHaveCount(0); // hidden by the filter
+  await expect(page.locator("section.lane[data-lane='emptylane']")).toHaveCount(0); // hidden by the filter
 
   await page.click("[aria-label='show empty lanes']");
-  await expect(page.locator("[data-lane='emptylane']")).toBeVisible();
+  await expect(page.locator("section.lane[data-lane='emptylane']")).toBeVisible();
 
   // persists across reload
   await page.reload();
   await page.waitForSelector("main.board");
-  await expect(page.locator("[data-lane='emptylane']")).toBeVisible();
+  await expect(page.locator("section.lane[data-lane='emptylane']")).toBeVisible();
 
   // toggle off → hidden again
   await page.click("[aria-label='show empty lanes']");
-  await expect(page.locator("[data-lane='emptylane']")).toHaveCount(0);
+  await expect(page.locator("section.lane[data-lane='emptylane']")).toHaveCount(0);
 });

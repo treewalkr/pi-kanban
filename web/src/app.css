@@ -1186,6 +1186,13 @@ button {
     order: 4;
   }
 
+  /* the eye toggle sits out the phone header: the chips row is already at its
+     wrap threshold (stale chip + tags join mid-development and re-wrap), and
+     its persisted state still applies to visibleLanes (board-collapse AC2) */
+  .top .chips button[aria-label="show empty lanes"] {
+    display: none;
+  }
+
   /* task count lives in the sidebar and lane headers at phone widths */
   .meta {
     display: none;

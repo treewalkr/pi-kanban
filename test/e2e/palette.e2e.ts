@@ -122,7 +122,7 @@ test("AC4: move lane left reorders the board; fixed lanes offer no moves", async
 
   // fixed lanes stay pinned: the palette offers no move items for Backlog
   await openPalette(page);
-  await page.keyboard.type("move backlog");
+  await page.keyboard.type("backlog");
   await expect(page.locator(".palette-item").first()).toContainText("go to Backlog");
   await expect(page.locator(".palette-item", { hasText: "move Backlog" })).toHaveCount(0);
   await page.keyboard.press("Escape");
