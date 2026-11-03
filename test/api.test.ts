@@ -1554,4 +1554,20 @@ test("GET /fs/dirs lists subdirectories under homeDir, hides files and dotfiles,
   expect(missing.status).toBe(404);
   const missingBody = (await missing.json()) as any;
   expect(missingBody.error).toContain("no such directory");
+
+  // 6. ~ paths
+  const tildeRes = await app.handle(new Request("http://localhost/fs/dirs?path=~"));
+  expect(tildeRes.status).toBe(200);
+  const tildeData = (await tildeRes.json()) as any;
+  expect(tildeData.path).toBe(homeDir);
+
+  const tildeSub = await app.handle(new Request("http://localhost/fs/dirs?path=~/projects"));
+  expect(tildeSub.status).toBe(200);
+  const tildeSubData = (await tildeSub.json()) as any;
+  expect(tildeSubData.path).toBe(plainSub);
+
+  const tildeEscape = await app.handle(new Request("http://localhost/fs/dirs?path=~/../outside"));
+  expect(tildeEscape.status).toBe(400);
+  const tildeEscapeBody = (await tildeEscape.json()) as any;
+  expect(tildeEscapeBody.error).toContain("path escapes home directory: '~/../outside'");
 });

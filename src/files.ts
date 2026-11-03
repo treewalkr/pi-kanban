@@ -150,9 +150,20 @@ export async function listFiles(root: string, dirPath: string): Promise<FileEntr
   return entries;
 }
 
+/** Expand a leading "~" / "~/" against homeRoot; anything else (including "~user") is returned trimmed, unchanged. */
+export function expandHome(homeRoot: string, input: string): string {
+  const trimmed = input.trim();
+  if (trimmed === "") return "";
+  if (trimmed === "~") return path.resolve(homeRoot);
+  if (trimmed.startsWith("~/")) {
+    return path.join(path.resolve(homeRoot), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
 export async function listDirs(homeRoot: string, dirPath = ""): Promise<DirListing> {
   const rootResolved = path.resolve(homeRoot);
-  const raw = dirPath.trim();
+  const raw = expandHome(rootResolved, dirPath);
   const target = raw === "" ? rootResolved : path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(rootResolved, raw);
 
   const rootWithSep = rootResolved.endsWith(path.sep) ? rootResolved : rootResolved + path.sep;

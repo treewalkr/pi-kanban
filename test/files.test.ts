@@ -6,6 +6,7 @@ import { KanbanError } from "../src/db";
 import {
   EXT_TO_HLJS,
   PREVIEW_MAX_BYTES,
+  expandHome,
   languageForPath,
   listDirs,
   listFiles,
@@ -105,6 +106,15 @@ describe("src/files.ts", () => {
     expect(listDirs(home, "..")).rejects.toThrow("path escapes home directory");
     expect(listDirs(home, "/etc")).rejects.toThrow("path escapes home directory");
     expect(listDirs(home, "nope")).rejects.toThrow("no such directory");
+  });
+
+  test("expandHome maps ~ paths and leaves others trimmed", () => {
+    const home = "/Users/testuser";
+    expect(expandHome(home, "~")).toBe(home);
+    expect(expandHome(home, "~/repo")).toBe(join(home, "repo"));
+    expect(expandHome(home, " /abs ")).toBe("/abs");
+    expect(expandHome(home, "~user")).toBe("~user");
+    expect(expandHome(home, "")).toBe("");
   });
 
   test("readFile maps extensions to hljs languages; unknown → plaintext", () => {
