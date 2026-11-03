@@ -517,6 +517,13 @@ class BoardStore {
       this.collapsedLanes = liveCollapsed;
       this.#persistCollapsed();
     }
+    // expanded ids are pruned by card existence in the payload, never by filter visibility
+    const taskIds = new Set(this.tasks.map((t) => t.id));
+    const liveExpanded = new Set([...this.expanded].filter((id) => taskIds.has(id)));
+    if (liveExpanded.size !== this.expanded.size) {
+      this.expanded = liveExpanded;
+      this.#persistExpanded();
+    }
     // a stored project whose tag no longer exists (renamed, or its last card dropped the tag)
     // resets to "all" — an active filter with no visible chip would be a silent empty board
     if (this.projectFilter !== "" && !this.projects.includes(this.projectFilter)) {
