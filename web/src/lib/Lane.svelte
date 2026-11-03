@@ -4,6 +4,7 @@
   import { board } from "./board.svelte";
   import { agents } from "./agents.svelte";
   import { drag, FLIP_DURATION_MS } from "./drag.svelte";
+  import { laneDrag } from "./laneDrag.svelte";
   import CardView from "./Card.svelte";
   import Composer from "./Composer.svelte";
   import { laneDwellLabel } from "./statsview";
@@ -39,6 +40,16 @@
     }
     // anything else cancels
   }
+
+  const dragOpts = {
+    get lanes() {
+      return board.lanes;
+    },
+    axis: "x" as const,
+    elementOf: (id: string) => document.querySelector(`section.lane[data-lane="${CSS.escape(id)}"]`) as HTMLElement | null,
+    scrollElement: () => document.querySelector("main.board") as HTMLElement | null,
+    onCommit: (id: string, anchor: string | null) => void board.moveLaneBefore(id, anchor),
+  };
 </script>
 
 {#if collapsed}
@@ -49,7 +60,12 @@
     role="group"
     aria-label="{lane.name} (collapsed)"
   >
-    <button class="collapsed-head" title="expand {lane.name}" onclick={() => board.setLaneCollapsed(lane.id, false)}>
+    <button
+      class="collapsed-head"
+      title="expand {lane.name}"
+      onclick={() => board.setLaneCollapsed(lane.id, false)}
+      onpointerdown={(e) => laneDrag.press(e, lane.id, dragOpts)}
+    >
       <span class="lane-dot"></span>
       <span class="collapsed-name">{lane.name}</span>
       <span class="count" class:over={lane.wipLimit !== null && count > lane.wipLimit}>
@@ -61,12 +77,16 @@
   <section
     class="lane"
     class:archive-lane={isArchive}
+    class:lane-dragged={laneDrag.draggingLaneId === lane.id}
     data-lane={lane.id}
     style="--accent: {laneColor(index)}"
     role="group"
     aria-label={lane.name}
   >
-    <header class="lane-head">
+    {#if laneDrag.dropBefore === lane.id}
+      <div class="lane-drop-line"></div>
+    {/if}
+    <header class="lane-head" role="presentation" onpointerdown={(e) => laneDrag.press(e, lane.id, dragOpts)}>
       <span class="lane-dot"></span>
       {#if renaming}
         <input
@@ -117,10 +137,10 @@
           <button title="lane workflow settings" aria-label="configure {lane.name}" onclick={() => agents.openLane(lane.id)}>⚙</button>
         {/if}
         <button title="collapse lane" aria-label="collapse {lane.name}" onclick={() => board.setLaneCollapsed(lane.id, true)}>«</button>
-        {#if index > 0}
+        {#if !lane.fixed && index > 0}
           <button title="move lane left" onclick={() => board.moveLane(lane.id, index - 1)}>‹</button>
         {/if}
-        {#if index < board.lanes.length - 1}
+        {#if !lane.fixed && index < board.lanes.length - 1}
           <button title="move lane right" onclick={() => board.moveLane(lane.id, index + 1)}>›</button>
         {/if}
         {#if !lane.fixed}

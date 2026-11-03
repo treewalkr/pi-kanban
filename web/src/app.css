@@ -1465,6 +1465,37 @@ button:focus-visible {
   min-height: 34px;
 }
 
+/* lane header drag: accent line before the drop anchor, ghost following the pointer */
+.lane-drop-line {
+  height: 2px;
+  margin: 4px 6px 0;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.lane-dragged {
+  opacity: 0.45;
+}
+
+.lane-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 35%);
+}
+
 .lane-dot {
   width: 7px;
   height: 7px;
@@ -2826,6 +2857,130 @@ body.drag-live {
 
 .settings-general-description code {
   font-size: 10.5px;
+}
+
+/* lanes management rows (LanesSettings) */
+.lane-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 380px;
+  overflow: auto;
+}
+
+.lane-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--bg-panel);
+}
+
+.lane-row.fixed {
+  opacity: 0.55;
+}
+
+.lane-row-grip {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: grab;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.lane-row-grip.pad {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.lane-row-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.lane-row-name-text {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.lane-row-name input {
+  width: 200px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.lane-row-id {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.lane-row-wip {
+  flex: none;
+  min-width: 56px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-align: right;
+  cursor: default;
+}
+
+.lane-row-wip-input {
+  flex: none;
+  width: 64px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+}
+
+.lane-row-delete {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+}
+
+.lane-add-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.lane-add-row input {
+  width: 220px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .settings-dev-restart {
