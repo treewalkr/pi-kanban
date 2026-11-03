@@ -1719,6 +1719,37 @@ test("handoff into implement sets owner; exits clear it (CLI)", async () => {
   expect(JSON.parse((await cli("show", gateCard.id, "--json")).stdout).owner).toBe("pi-builder");
 });
 
+test("review --block hands the card to the lane builder, not the reviewer (CLI)", async () => {
+  const added = await cli("add", "block owner flow", "--lane", "review", "--json");
+  const task = JSON.parse(added.stdout) as Task;
+
+  const blocked = await cli(
+    "review",
+    task.id,
+    "--block",
+    "--message",
+    "leaks",
+    "--author",
+    "pi-reviewer",
+    "--json",
+  );
+  expect(blocked.code).toBe(0);
+  const blockResult = JSON.parse(blocked.stdout) as { task: Task; comment: { kind: string; author: string } };
+  expect(blockResult.task.laneId).toBe("implement");
+  expect(blockResult.task.owner).toBe("pi-builder");
+
+  const show = await cli("show", task.id, "--json");
+  expect(show.code).toBe(0);
+  const showTask = JSON.parse(show.stdout) as Task;
+  expect(showTask.owner).toBe("pi-builder");
+  expect(showTask.owner).not.toBe("pi-reviewer");
+
+  const claim = await cli("claim", task.id, "--author", "pi-builder");
+  expect(claim.code).toBe(0);
+  expect(claim.stdout).toContain("claimed by pi-builder");
+  expect(claim.stderr).not.toContain("pass --force");
+});
+
 test("overview: lane counts, wip limits, owned cards, and a 2 KB pin on a 300-card board", async () => {
   const oDb = join(dir, "overview.db");
   const run = async (...args: string[]) => {
