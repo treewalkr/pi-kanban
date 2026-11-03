@@ -27,38 +27,36 @@ test("settings: add lane, rename, set WIP, delete empty; delete with cards refus
   await expect(page.locator(".lane-row[data-lane='staging']")).toBeVisible();
   expect((await laneOrder(request)).at(-1)).toBe("staging");
 
-  // rename → "canary" (id slugifies)
+  // rename → "canary" (id remains "staging")
   await page.locator(".lane-row[data-lane='staging'] .lane-row-name-text").dblclick();
   const renameInput = page.locator("[aria-label='rename staging']");
   await expect(renameInput).toBeVisible();
   await renameInput.fill("canary");
   await renameInput.press("Enter");
-  await expect(page.locator(".lane-row[data-lane='canary']")).toBeVisible();
+  await expect(page.locator(".lane-row[data-lane='staging'] .lane-row-name-text")).toHaveText("canary");
 
   // WIP 2 → the board count chip shows 0/2
-  await page.locator(".lane-row[data-lane='canary'] .lane-row-wip").dblclick();
+  await page.locator(".lane-row[data-lane='staging'] .lane-row-wip").dblclick();
   const wipInput = page.locator("[aria-label='wip limit canary']");
   await expect(wipInput).toBeVisible();
   await wipInput.fill("2");
   await wipInput.press("Enter");
-  await page.waitForSelector("main.board"); // settings overlays the board
   await expect(page.locator("section.lane[aria-label='canary'] .lane-head .count")).toHaveText("0/2");
 
   // delete with cards refused: seed a card into canary via the API, then ✕
-  const cardRes = await request.post("/tasks", { data: { title: "canary card", lane: "canary" } });
+  const cardRes = await request.post("/tasks", { data: { title: "canary card", lane: "staging" } });
   const card = (await cardRes.json()) as { id: string };
   await page.click("[aria-label='delete canary']");
   await expect(page.locator(".error-bar")).toContainText("still holds 1 task(s)");
-  expect(await laneOrder(request)).toContain("canary");
-  await page.locator(".error-bar").click(); // dismiss
+  expect(await laneOrder(request)).toContain("staging");
 
   // empty the lane, delete-empty OK, gone after reload
   await request.patch(`/tasks/${card.id}`, { data: { lane: "archive" } });
   await page.click("[aria-label='delete canary']");
-  await expect(page.locator(".lane-row[data-lane='canary']")).toHaveCount(0);
+  await expect(page.locator(".lane-row[data-lane='staging']")).toHaveCount(0);
   await page.reload();
   await page.waitForSelector("main.board");
-  expect(await laneOrder(request)).not.toContain("canary");
+  expect(await laneOrder(request)).not.toContain("staging");
 });
 
 test("settings: drag lane row reorders vertically", async ({ page, request }) => {
@@ -97,18 +95,20 @@ test("board: drag lane header reorders; fixed lanes stay pinned", async ({ page,
   await expect(page.locator("section.lane[aria-label='Waiting on you'] button[title='move lane right']")).toHaveCount(0);
   await expect(page.locator("section.lane[aria-label='Archive'] button[title='move lane left']")).toHaveCount(0);
 
+  // collapse waiting and backlog so Plan and Test + Implement fit comfortably on screen
+  await page.locator("section.lane[aria-label='Waiting on you'] button[title='collapse lane']").click();
+  await page.locator("section.lane[aria-label='Backlog'] button[title='collapse lane']").click();
+
   // drag Test + Implement left of Plan, drop line visible mid-drag
   const head = page.locator("section.lane[aria-label='Test + Implement'] .lane-head");
   const plan = page.locator("section.lane[aria-label='Plan']");
-  await head.scrollIntoViewIfNeeded();
-  await plan.scrollIntoViewIfNeeded();
   const h = await head.boundingBox();
   const p = await plan.boundingBox();
   if (!h || !p) throw new Error("board lanes not laid out");
 
   await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
   await page.mouse.down();
-  await page.mouse.move(p.x + p.width / 2, p.y + 10, { steps: 8 });
+  await page.mouse.move(p.x + p.width / 4, p.y + 10, { steps: 8 });
   await expect(page.locator("section.lane[aria-label='Plan'] .lane-drop-line")).toBeVisible();
   await page.mouse.up();
 
@@ -116,6 +116,7 @@ test("board: drag lane header reorders; fixed lanes stay pinned", async ({ page,
   expect(order.indexOf("implement")).toBe(order.indexOf("plan") - 1);
 
   // fixed Waiting on you refuses the lift: press, drag, release — still first
+  await page.locator("button[title='expand Waiting on you']").click();
   const waiting = page.locator("section.lane[aria-label='Waiting on you'] .lane-head");
   await waiting.scrollIntoViewIfNeeded();
   const w = await waiting.boundingBox();
