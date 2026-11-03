@@ -85,6 +85,13 @@ The card or lane a move is positioned relative to (`mv <id> <lane> --before <anc
 instead of drifting like an index.
 _Avoid_: Reference card, pivot, position marker
 
+**Blocked**:
+A card with a `blocked_by` edge to at least one blocker outside Done or Archive
+(soft blocking) — `ls` prints `⊘`, the web dims it, `next` and the auto-agent
+loop skip it (no lane agent, no session resume), moves still proceed, and it
+unblocks when the last blocker leaves those lanes while the edge stays for history.
+_Avoid_: gated, locked, dependency, waiting
+
 **Slot**:
 The card-sized opening rendered at the drop hint while dragging — the dragged
 card's own element shown at the target position while a lifted clone follows
