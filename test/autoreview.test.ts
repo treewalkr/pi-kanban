@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { defaultLaneContext, KanbanDb } from "../src/db";
 import {
   BUILDER_AUTHOR,
+  DEFAULT_GATE_TIMEOUT_MS,
   DEFAULT_STALL_MS,
   DEFAULT_TIMEOUT_MS,
   PLANNER_AUTHOR,
@@ -16,6 +17,7 @@ import {
   REVIEWER_AUTHOR,
   activitySnapshot,
   agentFlags,
+  applyProjectOverride,
   builderPlanPrompt,
   builderPrompt,
   deathReason,
@@ -86,11 +88,11 @@ afterEach(() => {
   }
 });
 
-/** Records every spawn; the test resolves each one when its "agent" is done. */
+/** Records every spawn (job + spawn ctx); the test resolves each one when its "agent" is done. */
 function fakeSpawn() {
-  const calls: Array<{ job: AgentJob; finish: (result: SpawnResult) => void }> = [];
-  const spawnFn: SpawnFn = (job) =>
-    new Promise<SpawnResult>((resolve) => calls.push({ job, finish: resolve }));
+  const calls: Array<{ job: AgentJob; ctx: SpawnContext; finish: (result: SpawnResult) => void }> = [];
+  const spawnFn: SpawnFn = (job, ctx) =>
+    new Promise<SpawnResult>((resolve) => calls.push({ job, ctx, finish: resolve }));
   return { calls, spawnFn };
 }
 
@@ -149,6 +151,13 @@ function cardInReview(w: KanbanDb, title = "ship it") {
 function cardInPlan(w: KanbanDb, title = "plan me") {
   const card = w.createTask({ title, lane: "plan" });
   w.attach(card.id, "plan", "# plan v1\nstep one");
+  return card;
+}
+
+/** A project-tagged card in review with a builder handoff — the armed state. */
+function cardOnProject(w: KanbanDb, project: string, title = "ship it") {
+  const card = w.createTask({ title, lane: "review", project });
+  w.createComment(card.id, { author: BUILDER_AUTHOR, kind: "handoff", body: "done, please review" });
   return card;
 }
 
@@ -2651,6 +2660,198 @@ test("plannerPrompt names a per-run plan file so concurrent runs never clobber",
   expect(plannerPrompt(task as never, 1234)).toContain("/tmp/plan-k7x9-ya.md");
 });
 
+describe("applyProjectOverride", () => {
+  test("present scalars replace (trimmed), absent keys inherit", () => {
+    expect(
+      applyProjectOverride(
+        {
+          model: "a",
+          provider: "p",
+          thinking: "high",
+          context: "ctx",
+          tools: "bash",
+          skills: ["s1"],
+          extraArgs: ["--x"],
+          timeoutMs: 120_000,
+        },
+        { model: "  b  ", provider: "   ", thinking: "low", context: " c2 " },
+      ),
+    ).toEqual({
+      model: "b",
+      provider: "p",
+      thinking: "low",
+      context: "c2",
+      tools: "bash",
+      skills: ["s1"],
+      extraArgs: ["--x"],
+      timeoutMs: 120_000,
+    });
+  });
+
+  test("a present [] replaces skills and extraArgs wholesale", () => {
+    expect(applyProjectOverride({ model: "a", skills: ["s1"], extraArgs: ["--x"] }, { skills: [] })).toEqual({
+      model: "a",
+      skills: [],
+      extraArgs: ["--x"],
+    });
+    expect(applyProjectOverride({ skills: ["s1"], extraArgs: ["--x"] }, { extraArgs: [] })).toEqual({
+      skills: ["s1"],
+      extraArgs: [],
+    });
+  });
+
+  test("null/empty inputs collapse to null; a lone override builds the config", () => {
+    expect(applyProjectOverride(null, null)).toBeNull();
+    expect(applyProjectOverride(null, {})).toBeNull();
+    expect(applyProjectOverride({}, {})).toBeNull();
+    expect(applyProjectOverride(null, { model: "m" })).toEqual({ model: "m" });
+    expect(applyProjectOverride({ skills: [] }, {})).toEqual({ skills: [] });
+    expect(applyProjectOverride({ model: "a" }, null)).toEqual({ model: "a" });
+    expect(applyProjectOverride({ thinking: "max" }, { thinking: "off" })).toEqual({ thinking: "off" });
+  });
+});
+
+describe("project overrides", () => {
+  test("override beats pool slot and board actor config", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setAgentConfig("reviewer", { model: "a" });
+    w.setPool("rev-pool", {
+      name: "rev",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "b" }],
+    });
+    w.setProjectAgentConfig("demo", "reviewer", { model: "c", thinking: "low" });
+    cardOnProject(w, "demo");
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].ctx.config).toEqual({ model: "c", thinking: "low" });
+    calls[0].finish({ code: 0 });
+    await sleep(150);
+
+    // deleting the override row restores the pool slot
+    w.setProjectAgentConfig("demo", "reviewer", null);
+    cardOnProject(w, "demo", "second");
+    await sleep(150);
+    expect(calls.length).toBe(2);
+    expect(calls[1].ctx.config).toEqual({ model: "b" });
+    calls[1].finish({ code: 0 });
+  });
+
+  test("env model still beats a project override", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setAgentConfig("reviewer", { model: "a" });
+    w.setProjectAgentConfig("demo", "reviewer", { model: "c" });
+    cardOnProject(w, "demo");
+    process.env.KANBAN_AUTOREVIEW_MODEL = "m-env";
+    const seen: Array<{ flags: string[]; model: string | undefined }> = [];
+    const spawnFn: SpawnFn = (job, ctx) => {
+      seen.push({ flags: agentFlags(job.role, ctx.config), model: ctx.config?.model });
+      return Promise.resolve({ code: 1 });
+    };
+    start(spawnFn, dbFile);
+    await sleep(150);
+
+    const modelIdx = seen[0]!.flags.indexOf("--model");
+    expect(seen[0]!.flags[modelIdx + 1]).toBe("m-env"); // env beats at flag time
+    expect(seen[0]!.model).toBe("c"); // the override is still the stored config
+    delete process.env.KANBAN_AUTOREVIEW_MODEL;
+  });
+
+  test("override timeoutMs and skills reach the spawn seam", async () => {
+    const { dbFile, writer: w } = setup();
+    const skillDir = makeSkill("lens", "review with perf in mind");
+    w.setProjectAgentConfig("demo", "reviewer", { timeoutMs: 21 * 60_000, skills: [skillDir] });
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    cardOnProject(w, "demo");
+    await sleep(150);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].ctx.timeoutMs).toBe(21 * 60_000);
+    expect(calls[0].ctx.config?.skills).toEqual([skillDir]);
+    calls[0].finish({ code: 0 });
+    await sleep(150);
+
+    // a card on an un-overridden tag keeps the loop default timeout
+    cardOnProject(w, "other", "un-overridden tag");
+    await sleep(150);
+    expect(calls.length).toBe(2);
+    expect(calls[1].ctx.timeoutMs).toBe(DEFAULT_TIMEOUT_MS);
+    calls[1].finish({ code: 0 });
+    await sleep(150);
+
+    // a present [] means none
+    w.setProjectAgentConfig("demo", "reviewer", { skills: [] });
+    cardOnProject(w, "demo", "no skills");
+    await sleep(150);
+    expect(calls.length).toBe(3);
+    expect(calls[2].ctx.config?.skills).toEqual([]);
+    calls[2].finish({ code: 0 });
+  });
+
+  test("custom lane actor spawn applies the project override", async () => {
+    const { dbFile, writer: w } = setup();
+    w.createLane({ name: "Design" });
+    w.setLaneContext("design", {
+      actors: [{ id: "designer", author: "pi-designer", instructions: "Design {id}." }],
+      triggers: [{ kind: "on-enter" }],
+    });
+    w.setAgentConfig("designer", { model: "board" });
+    w.setProjectAgentConfig("demo", "designer", { model: "d" });
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    const designCard = w.createTask({ title: "design me", lane: "design", project: "demo" });
+    await sleep(150);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("designer");
+    expect(calls[0].job.task.id).toBe(designCard.id);
+    expect(calls[0].ctx.config).toEqual({ model: "d" });
+    calls[0].finish({ code: 0 });
+    await sleep(150);
+
+    // a design card on a tag without an override keeps the board actor config
+    const otherCard = w.createTask({ title: "design me too", lane: "design", project: "other" });
+    await sleep(150);
+    const otherSpawn = calls.find((c) => c.job.task.id === otherCard.id);
+    expect(otherSpawn).toBeDefined();
+    expect(otherSpawn!.ctx.config).toEqual({ model: "board" });
+    otherSpawn!.finish({ code: 0 });
+  });
+
+  test("override marker appears on the spawn start log", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setProjectAgentConfig("demo", "reviewer", { model: "c" });
+    const logs: string[] = [];
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile, { log: (msg) => logs.push(msg) });
+    cardOnProject(w, "demo");
+    await sleep(150);
+
+    expect(calls.length).toBe(1);
+    const markedLine = logs.find((l) => l.includes(`start ${calls[0]!.job.task.id}`));
+    expect(markedLine).toBeDefined();
+    expect(markedLine!.endsWith("via default slot — project 'demo' override")).toBe(true);
+    calls[0]!.finish({ code: 0 });
+    await sleep(150);
+
+    // without an override the line is byte-identical to today's
+    w.setProjectAgentConfig("demo", "reviewer", null);
+    cardOnProject(w, "demo", "un-overridden");
+    await sleep(150);
+    expect(calls.length).toBe(2);
+    const plainLine = logs.find((l) => l.includes(`start ${calls[1]!.job.task.id}`));
+    expect(plainLine).toBeDefined();
+    expect(plainLine!.endsWith("via default slot")).toBe(true);
+    expect(plainLine!.includes("override")).toBe(false);
+    calls[1]!.finish({ code: 0 });
+  });
+});
+
 describe("pre-spawn gate", () => {
   test("red gate: no reviewer session, one gate comment, card disarms", async () => {
     const { dbFile, writer: w } = setup();
@@ -2803,6 +3004,100 @@ describe("pre-spawn gate", () => {
     const comments = w.comments(card.id);
     expect(comments.some((c) => c.body.startsWith("pre-review gate:"))).toBe(true);
   });
+
+  test("gate receives the project's test command; unset passes undefined", async () => {
+    const { dbFile, writer: w } = setup();
+    const alphaDir = join(dir, "alpha-repo");
+    mkdirSync(alphaDir);
+    w.setProjectRepo("alpha", alphaDir);
+    w.setProjectTestCmd("alpha", "cargo test");
+    cardOnProject(w, "alpha", "routed");
+    const gateCalls: Array<{ cwd: string; timeoutMs: number; command: string | undefined }> = [];
+    const gateFn: GateFn = async (cwd, timeoutMs, command) => {
+      gateCalls.push({ cwd, timeoutMs, command });
+      return { ok: true, output: "" };
+    };
+    const logs: string[] = [];
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile, { gate: gateFn, log: (m) => logs.push(m) });
+    await sleep(150);
+
+    expect(calls.length).toBe(1);
+    expect(gateCalls[0]).toEqual({ cwd: alphaDir, timeoutMs: DEFAULT_GATE_TIMEOUT_MS, command: "cargo test" });
+    expect(logs.some((l) => l.includes("running pre-spawn test gate (cargo test)"))).toBe(true);
+    calls[0].finish({ code: 0 });
+    await sleep(150);
+
+    // a tag without a command keeps today's unparenthesised log and an undefined command
+    const betaCard = cardOnProject(w, "beta", "no command");
+    await sleep(150);
+    expect(calls.length).toBe(2);
+    expect(gateCalls[1]!.command).toBeUndefined();
+    const gateLine = logs.find((l) => l.includes(`${betaCard.id}: running pre-spawn test gate`));
+    expect(gateLine).toBeDefined();
+    expect(gateLine!.endsWith("running pre-spawn test gate")).toBe(true);
+    calls[1].finish({ code: 0 });
+  });
+
+  test("gate-red fail comment names the project's command", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setProjectTestCmd("alpha", "cargo test");
+    const alphaCard = cardOnProject(w, "alpha", "routed red");
+    const redGate: GateFn = async () => ({ ok: false, output: "1 fail\nexpected 1, got 2" });
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile, { gate: redGate });
+    await sleep(150);
+
+    expect(calls.length).toBe(0);
+    const lastAlpha = w.comments(alphaCard.id).at(-1)!;
+    expect(lastAlpha.kind).toBe("question");
+    expect(lastAlpha.body.startsWith("pre-review gate: `cargo test` failed — no reviewer session spawned.")).toBe(true);
+    expect(lastAlpha.body).toContain("expected 1, got 2");
+    const parked = w.tasks().find((t) => t.id === alphaCard.id)!;
+    expect(parked.laneId).toBe("waiting");
+
+    // a tag without a command keeps today's `bun test` text
+    const betaCard = cardOnProject(w, "beta", "no command red");
+    await sleep(150);
+    expect(calls.length).toBe(0);
+    const lastBeta = w.comments(betaCard.id).at(-1)!;
+    expect(lastBeta.kind).toBe("question");
+    expect(lastBeta.body.startsWith("pre-review gate: `bun test` failed — no reviewer session spawned.")).toBe(true);
+  });
+
+  test("no v4 settings: gate call, messages, and spawn config are today's", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setAgentConfig("reviewer", { model: "a" });
+    const card = cardInReview(w);
+    let gateRed = true;
+    const gateCalls: Array<{ cwd: string; timeoutMs: number; command: string | undefined }> = [];
+    const gateFn: GateFn = async (cwd, timeoutMs, command) => {
+      gateCalls.push({ cwd, timeoutMs, command });
+      return gateRed ? { ok: false, output: "1 fail" } : { ok: true, output: "" };
+    };
+    const logs: string[] = [];
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile, { gate: gateFn, log: (m) => logs.push(m) });
+    await sleep(150);
+
+    expect(calls.length).toBe(0);
+    expect(gateCalls[0]).toEqual({ cwd: dir, timeoutMs: DEFAULT_GATE_TIMEOUT_MS, command: undefined });
+    const last = w.comments(card.id).at(-1)!;
+    expect(last.kind).toBe("question");
+    expect(last.body.startsWith("pre-review gate: `bun test` failed — no reviewer session spawned.")).toBe(true);
+
+    gateRed = false;
+    const card2 = cardInReview(w, "second");
+    await sleep(150);
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.task.id).toBe(card2.id);
+    expect(calls[0].ctx.config).toEqual({ model: "a" });
+    expect(calls[0].ctx.timeoutMs).toBe(DEFAULT_TIMEOUT_MS);
+    const startLine = logs.find((l) => l.includes(`start ${card2.id}`));
+    expect(startLine).toBeDefined();
+    expect(startLine!.includes("override")).toBe(false);
+    calls[0].finish({ code: 0 });
+  });
 });
 
 describe("defaultGate", () => {
@@ -2849,6 +3144,24 @@ describe("defaultGate", () => {
       rmSync(tmpDir, { recursive: true, force: true });
       expect(res.ok).toBe(false);
       expect(res.output).toContain("bun test timed out after 1s");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("custom command runs via sh -c and names itself in the timeout text", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "kanban-gate-cmd-"));
+    try {
+      const green = await defaultGate(tmpDir, 10_000, "echo gate-ok");
+      expect(green.ok).toBe(true);
+      expect(green.output).toContain("gate-ok");
+
+      const red = await defaultGate(tmpDir, 10_000, "exit 7");
+      expect(red.ok).toBe(false);
+
+      const slow = await defaultGate(tmpDir, 1_000, "sleep 30");
+      expect(slow.ok).toBe(false);
+      expect(slow.output).toContain("sleep 30 timed out after 1s");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

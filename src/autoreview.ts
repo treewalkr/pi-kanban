@@ -121,26 +121,28 @@ export interface GateResult {
   output: string;
 }
 
-/** Fast checks run before a reviewer session is spent; ok=false means red tests. */
-export type GateFn = (cwd: string, timeoutMs: number) => Promise<GateResult>;
+/** Fast checks run before a reviewer session is spent; ok=false means red tests. The project's test command runs via `sh -c` when set. */
+export type GateFn = (cwd: string, timeoutMs: number, command?: string) => Promise<GateResult>;
 
 // gate runs are serialized process-wide: two cards entering Review together used to run two
 // full suites concurrently, and their repro.sh port-pin tests raced each other onto 4615 —
 // the loser hung to its timeout and parked its card on a flake (zfe3f, 2026-11-01)
 let gateChain: Promise<unknown> = Promise.resolve();
 
-export const defaultGate: GateFn = (cwd, timeoutMs) => {
-  const run = () => gateRun(cwd, timeoutMs);
+export const defaultGate: GateFn = (cwd, timeoutMs, command) => {
+  const run = () => gateRun(cwd, timeoutMs, command);
   const next = gateChain.then(run, run);
   gateChain = next.catch(() => {});
   return next;
 };
 
-const gateRun = async (cwd: string, timeoutMs: number): Promise<GateResult> => {
-  // per-test timeout raised from bun's 5s default: spawn-heavy tests (cli.ts subprocesses,
-  // repro server boots) legitimately exceed it under full-suite parallel load and park cards
-  // on flakes — 30s keeps genuinely red tests failing fast while tolerating load
-  const proc = Bun.spawn({ cmd: ["bun", "test", "--timeout", "30000"], cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+const gateRun = async (cwd: string, timeoutMs: number, command?: string): Promise<GateResult> => {
+  // a project's test command runs through sh -c (human-owned, bounded at 500 chars by
+  // setProjectTestCmd); the board default stays bun's 30s per-test timeout: spawn-heavy
+  // tests (cli.ts subprocesses, repro server boots) legitimately exceed bun's 5s default
+  // under full-suite parallel load and park cards on flakes (30s keeps genuinely red
+  // tests failing fast while tolerating load)
+  const proc = Bun.spawn({ cmd: command ? ["sh", "-c", command] : ["bun", "test", "--timeout", "30000"], cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -151,7 +153,7 @@ const gateRun = async (cwd: string, timeoutMs: number): Promise<GateResult> => {
   clearTimeout(timer);
   const output = `${out}\n${err}`.trim().slice(-1500);
   return timedOut
-    ? { ok: false, output: `bun test timed out after ${durationFor(Math.round(timeoutMs / 1000))}\n${output}` }
+    ? { ok: false, output: `${command ?? "bun test"} timed out after ${durationFor(Math.round(timeoutMs / 1000))}\n${output}` }
     : { ok: code === 0, output };
 };
 
@@ -609,6 +611,27 @@ export function mergeSlotConfig(cfg: AgentConfig | null, slot: PoolSlot | undefi
   return Object.keys(result).length > 0 ? result : null;
 }
 
+/**
+ * Merges a project's stored actor override over the merged agent config
+ * (board actor config + pool slot). Present-key semantics: scalars
+ * (provider/model/context/tools) replace only when present and non-empty
+ * after trim; thinking/timeoutMs replace whenever present; skills/extraArgs
+ * replace wholesale when the key is present (a present [] means none) and an
+ * absent key inherits. Returns null only when the merged config is empty.
+ */
+export function applyProjectOverride(cfg: AgentConfig | null, override: AgentConfig | null): AgentConfig | null {
+  const result: AgentConfig = { ...(cfg ?? {}) };
+  if (override?.provider?.trim()) result.provider = override.provider.trim();
+  if (override?.model?.trim()) result.model = override.model.trim();
+  if (override?.context?.trim()) result.context = override.context.trim();
+  if (override?.tools?.trim()) result.tools = override.tools.trim();
+  if (override?.thinking !== undefined) result.thinking = override.thinking;
+  if (override?.skills !== undefined) result.skills = override.skills;
+  if (override?.extraArgs !== undefined) result.extraArgs = override.extraArgs;
+  if (override?.timeoutMs !== undefined) result.timeoutMs = override.timeoutMs;
+  return Object.keys(result).length > 0 ? result : null;
+}
+
 /** The resolved model config of one spawn — what actually ran. */
 export interface ModelConfig {
   provider?: string;
@@ -1032,10 +1055,11 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           log(`${job.role} ${fresh.id}: test gate off for project '${fresh.project}' — skipping`);
         } else {
           inFlight.add(job.task.id); // hold the card so a scan mid-gate can't enqueue a duplicate
-          log(`${job.role} ${job.task.id}: running pre-spawn test gate`);
+          const cmd = db.getProject(fresh.project)?.testCmd ?? null; // fresh per gate run: web edits apply to the next spawn
+          log(`${job.role} ${job.task.id}: running pre-spawn test gate${cmd ? ` (${cmd})` : ""}`);
           let res: GateResult;
           try {
-            res = await gate(cwd, gateTimeoutMs);
+            res = await gate(cwd, gateTimeoutMs, cmd ?? undefined);
           } catch (err) {
             log(`${job.role} ${job.task.id}: gate could not run (${(err as Error).message}) — reviewing anyway`);
             res = { ok: true, output: "" }; // fail-open: the gate is best-effort
@@ -1046,7 +1070,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
             db.comment(job.task.id, {
               author: gateCtx.actors[0]?.author ?? authorForRole(job.role),
               kind: "question",
-              body: `pre-review gate: \`bun test\` failed — no reviewer session spawned.\n\n\`\`\`\n${res.output}\n\`\`\`\nFix the tests, then comment on this card to re-trigger review.`,
+              body: `pre-review gate: \`${cmd ?? "bun test"}\` failed — no reviewer session spawned.\n\n\`\`\`\n${res.output}\n\`\`\`\nFix the tests, then comment on this card to re-trigger review.`,
             });
             log(`${job.role} ${job.task.id}: gate red — no session spawned`);
             return; // the question parks the card in waiting — the lane change disarms it (roleFor ignores waiting)
@@ -1074,12 +1098,14 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         });
       }
       const roleConfig = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
-      const config = mergeSlotConfig(roleConfig, slot);
+      const override = db.projectAgentConfig(fresh.project, job.role);
+      const config = applyProjectOverride(mergeSlotConfig(roleConfig, slot), override);
       const mc = resolvedModelConfig(job.role, config);
       const label = modelConfigLabel(mc);
       const skills = config?.skills?.length ? `${config.skills.length} skill${config.skills.length === 1 ? "" : "s"}` : "";
       const via = pool ? `via pool ${pool.name} slot ${slotIndex}` : "via default slot";
-      log(`${job.role} start ${job.task.id} "${job.task.title}" (${[label, skills].filter(Boolean).join(" · ")}) ${via}`);
+      const overrideNote = override !== null ? ` — project '${fresh.project}' override` : "";
+      log(`${job.role} start ${job.task.id} "${job.task.title}" (${[label, skills].filter(Boolean).join(" · ")}) ${via}${overrideNote}`);
       const session: AgentSessionInfo = {
         taskId: job.task.id,
         role: job.role,
