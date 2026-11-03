@@ -10,11 +10,13 @@
   import TaskDetail from "./lib/TaskDetail.svelte";
   import TaskEditor from "./lib/TaskEditor.svelte";
   import FilePreview from "./lib/FilePreview.svelte";
+  import ProjectPicker from "./lib/ProjectPicker.svelte";
   import DragLayer from "./lib/DragLayer.svelte";
   import AddLane from "./lib/AddLane.svelte";
   import SearchBox from "./lib/SearchBox.svelte";
   import Palette from "./lib/CommandPalette.svelte";
   import { palette } from "./lib/palette.svelte";
+  import { projectPicker } from "./lib/projectPicker.svelte.js";
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import ManagerChat from "./lib/ManagerChat.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -40,7 +42,7 @@
 
   // the handle stacks above the modal overlays (z 45 > 40), so hide it while any is open
   const modalOpen = $derived(
-    !!board.editing || !!files.preview || agents.open || manager.open || palette.open,
+    !!board.editing || !!files.preview || agents.open || manager.open || palette.open || projectPicker.open,
   );
 
   function startResize(e: PointerEvent): void {
@@ -378,6 +380,10 @@
 
   {#if files.preview}
     <FilePreview />
+  {/if}
+
+  {#if projectPicker.open}
+    <ProjectPicker />
   {/if}
 
   {#if agents.open}

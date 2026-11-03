@@ -33,6 +33,16 @@ class ProjectsStore {
     return data as DirListing;
   }
 
+  /** POST /fs/mkdir; returns the created absolute path, or null with the message in board.error. */
+  async makeDir(parentPath: string, name: string): Promise<{ path: string } | null> {
+    const { data, error } = await api.fs.mkdir.post({ path: parentPath, name });
+    if (error) {
+      this.fail(error);
+      return null;
+    }
+    return data as { path: string };
+  }
+
   async save(route: { name: string; repoPath: string | null; testGate: boolean }): Promise<boolean> {
     const { data, error } = await api.projects({ name: route.name }).put({
       repoPath: route.repoPath,

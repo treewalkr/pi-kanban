@@ -405,6 +405,8 @@ export interface CardWorkspace {
 /** GET /board response: board + sparse live workspace per card. */
 export interface BoardPayload extends Board {
   workspaces: Record<string, CardWorkspace>; // absent key = no live workspace
+  /** Every project name the server knows — stored routes ∪ card tags, sorted (feeds the picker, not the stats view). */
+  projectNames: string[];
 }
 
 export interface TaskPatch {

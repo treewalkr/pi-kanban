@@ -744,4 +744,49 @@ describe("boardview show empty lanes", () => {
       delete (globalThis as any).localStorage;
     }
   });
+
+  test("project filter survives a refresh for a registered project with no cards", async () => {
+    const originalFetch = globalThis.fetch;
+    let stubProjectNames = ["fresh"];
+
+    globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/stats") {
+        return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (pathname === "/board") {
+        return new Response(
+          JSON.stringify({
+            lanes: [makeLane("backlog", "Backlog")],
+            tasks: [],
+            plans: {},
+            waiting: {},
+            blockedBy: {},
+            projectNames: stubProjectNames,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      await board.refresh();
+      expect(board.projects).toContain("fresh");
+
+      board.projectFilter = "fresh";
+      await board.refresh();
+      expect(board.projectFilter).toBe("fresh");
+
+      stubProjectNames = [];
+      await board.refresh();
+      expect(board.projectFilter).toBe("");
+    } finally {
+      globalThis.fetch = originalFetch;
+      board.projectFilter = "";
+      board.projectNames = [];
+      board.lanes = [];
+      board.tasks = [];
+    }
+  });
 });
