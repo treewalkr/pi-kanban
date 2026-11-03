@@ -115,6 +115,29 @@ const LaneContextBody = t.Object({
   testGate: t.Optional(t.Boolean()),
 });
 
+/** Body shared verbatim by PUT /agents/:role and PUT /projects/:name/agents/:actor. */
+const AgentConfigBody = t.Object({
+  provider: t.Optional(t.String()),
+  model: t.Optional(t.String()),
+  thinking: t.Optional(
+    t.Union([
+      t.Literal(""),
+      t.Literal("off"),
+      t.Literal("minimal"),
+      t.Literal("low"),
+      t.Literal("medium"),
+      t.Literal("high"),
+      t.Literal("xhigh"),
+      t.Literal("max"),
+    ]),
+  ),
+  skills: t.Optional(t.Array(t.String({ minLength: 1 }))),
+  context: t.Optional(t.String()),
+  tools: t.Optional(t.String()),
+  extraArgs: t.Optional(t.Array(t.String({ minLength: 1 }))),
+  timeoutMs: t.Optional(t.Number({ minimum: 60_000, maximum: 86_400_000 })),
+});
+
 /**
  * Map KanbanError to a typed `status()` response (treaty moves it to `error.value`);
  * anything else is a real bug and rethrows. Generic so a handler can declare its
@@ -1096,27 +1119,7 @@ export const createApp = (
       },
       {
         params: t.Object({ role: t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer"), t.Literal("elaborator"), t.Literal("manager"), t.Literal("worker")]) }),
-        body: t.Object({
-          provider: t.Optional(t.String()),
-          model: t.Optional(t.String()),
-          thinking: t.Optional(
-            t.Union([
-              t.Literal(""),
-              t.Literal("off"),
-              t.Literal("minimal"),
-              t.Literal("low"),
-              t.Literal("medium"),
-              t.Literal("high"),
-              t.Literal("xhigh"),
-              t.Literal("max"),
-            ]),
-          ),
-          skills: t.Optional(t.Array(t.String({ minLength: 1 }))),
-          context: t.Optional(t.String()),
-          tools: t.Optional(t.String()),
-          extraArgs: t.Optional(t.Array(t.String({ minLength: 1 }))),
-          timeoutMs: t.Optional(t.Number({ minimum: 60_000, maximum: 86_400_000 })),
-        }),
+        body: AgentConfigBody,
       },
     )
     .get("/pools", (): { pools: WorkerPool[]; settings: { maxWorkers: number } } => ({
@@ -1177,12 +1180,13 @@ export const createApp = (
       "/projects/:name",
       ({ params, body, status }): { project: ProjectRoute } | unknown => {
         try {
-          if (body.repoPath === undefined && body.testGate === undefined) {
-            throw new KanbanError("provide repoPath and/or testGate", "invalid");
+          if (body.repoPath === undefined && body.testGate === undefined && body.testCmd === undefined) {
+            throw new KanbanError("provide repoPath, testGate, and/or testCmd", "invalid");
           }
           let project: ProjectRoute | null = null;
           if (body.repoPath !== undefined) project = db.setProjectRepo(params.name, body.repoPath);
           if (body.testGate !== undefined) project = db.setProjectGate(params.name, body.testGate);
+          if (body.testCmd !== undefined) project = db.setProjectTestCmd(params.name, body.testCmd);
           return status(200, { project });
         } catch (e) {
           return fail(e, status);
@@ -1193,6 +1197,48 @@ export const createApp = (
         body: t.Object({
           repoPath: t.Optional(t.Union([t.String(), t.Null()])),
           testGate: t.Optional(t.Boolean()),
+          testCmd: t.Optional(t.Union([t.String({ minLength: 1, maxLength: 500 }), t.Null()])),
+        }),
+      },
+    )
+    .get(
+      "/projects/:name/agents",
+      ({ params }): { agents: Array<{ actor: string; config: AgentConfig }> } => ({
+        agents: db.listProjectAgentConfigs(params.name),
+      }),
+      { params: t.Object({ name: t.String({ minLength: 1, maxLength: 48 }) }) },
+    )
+    .put(
+      "/projects/:name/agents/:actor",
+      ({ params, body, status }): { agent: AgentConfig | null } | unknown => {
+        try {
+          return status(200, { agent: db.setProjectAgentConfig(params.name, params.actor, body) });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        params: t.Object({
+          name: t.String({ minLength: 1, maxLength: 48 }),
+          actor: t.String({ minLength: 1, maxLength: 48 }),
+        }),
+        body: AgentConfigBody,
+      },
+    )
+    .delete(
+      "/projects/:name/agents/:actor",
+      ({ params, status }): { ok: true } | unknown => {
+        try {
+          db.setProjectAgentConfig(params.name, params.actor, null);
+          return { ok: true as const };
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        params: t.Object({
+          name: t.String({ minLength: 1, maxLength: 48 }),
+          actor: t.String({ minLength: 1, maxLength: 48 }),
         }),
       },
     )

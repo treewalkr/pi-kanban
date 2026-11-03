@@ -1575,6 +1575,23 @@ export class KanbanDb {
     }
   }
 
+  /** All stored overrides for a project, sorted by actor; unknown or empty project reads as []. */
+  listProjectAgentConfigs(project: string): Array<{ actor: string; config: AgentConfig }> {
+    if (!project) return [];
+    const rows = this.q(
+      "SELECT actor, config FROM project_agent_configs WHERE project = ? ORDER BY actor",
+    ).all(project) as Array<{ actor: string; config: string }>;
+    const out: Array<{ actor: string; config: AgentConfig }> = [];
+    for (const row of rows) {
+      try {
+        out.push({ actor: row.actor, config: JSON.parse(row.config) as AgentConfig });
+      } catch {
+        /* corrupt row reads as absent — same policy as projectAgentConfig */
+      }
+    }
+    return out;
+  }
+
   /**
    * Set or delete a per-project actor override. Null deletes.
    * Unknown roles throw KanbanError; un-registered project tags materialize with v1 defaults.

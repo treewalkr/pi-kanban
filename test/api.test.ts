@@ -1401,7 +1401,7 @@ test("GET/PUT /projects roundtrip; empty body 400; bad path 400; schema violatio
     }),
   );
   expect(empty.status).toBe(400);
-  expect(((await empty.json()) as { error?: string }).error).toBe("provide repoPath and/or testGate");
+  expect(((await empty.json()) as { error?: string }).error).toBe("provide repoPath, testGate, and/or testCmd");
 
   // wrong-typed repoPath → 422 (Elysia schema)
   const bad = await app.handle(
@@ -1423,6 +1423,294 @@ test("GET/PUT /projects roundtrip; empty body 400; bad path 400; schema violatio
   );
   expect(unroute.status).toBe(200);
   expect(((await unroute.json()) as { project: unknown }).project).toEqual({ name: "e2e-proj", repoPath: null, testGate: true, testCmd: null });
+});
+
+test("PUT /projects stores and clears testCmd; the full route comes back", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+
+  // testCmd-only body upserts with v1 defaults; the db trims the command
+  const put = await app.handle(
+    new Request("http://localhost/projects/cmd-proj", { method: "PUT", ...putBody({ testCmd: " cargo test " }) }),
+  );
+  expect(put.status).toBe(200);
+  expect(((await put.json()) as { project: unknown }).project).toEqual({ name: "cmd-proj", repoPath: null, testGate: true, testCmd: "cargo test" });
+
+  // repoPath-only body preserves the stored testCmd
+  const repoDir = join(dir, "repo");
+  mkdirSync(repoDir);
+  const putRepo = await app.handle(
+    new Request("http://localhost/projects/cmd-proj", { method: "PUT", ...putBody({ repoPath: repoDir }) }),
+  );
+  expect(putRepo.status).toBe(200);
+  expect(((await putRepo.json()) as { project: unknown }).project).toEqual({ name: "cmd-proj", repoPath: repoDir, testGate: true, testCmd: "cargo test" });
+
+  // testCmd-only body preserves the stored repo/gate
+  const putCmd2 = await app.handle(
+    new Request("http://localhost/projects/cmd-proj", { method: "PUT", ...putBody({ testCmd: "cargo test --release" }) }),
+  );
+  expect(putCmd2.status).toBe(200);
+  expect(((await putCmd2.json()) as { project: unknown }).project).toEqual({ name: "cmd-proj", repoPath: repoDir, testGate: true, testCmd: "cargo test --release" });
+
+  // null clears the command, leaving the rest of the route intact
+  const putNull = await app.handle(
+    new Request("http://localhost/projects/cmd-proj", { method: "PUT", ...putBody({ testCmd: null }) }),
+  );
+  expect(putNull.status).toBe(200);
+  expect(((await putNull.json()) as { project: unknown }).project).toEqual({ name: "cmd-proj", repoPath: repoDir, testGate: true, testCmd: null });
+
+  // a testCmd on an un-registered name materializes the row with v1 defaults
+  const fresh = await app.handle(
+    new Request("http://localhost/projects/fresh-proj", { method: "PUT", ...putBody({ testCmd: "x" }) }),
+  );
+  expect(fresh.status).toBe(200);
+  expect(((await fresh.json()) as { project: unknown }).project).toEqual({ name: "fresh-proj", repoPath: null, testGate: true, testCmd: "x" });
+
+  // GET /projects lists the row with its testCmd
+  const got = (await (await app.handle(new Request("http://localhost/projects"))).json()) as {
+    projects: Array<{ name: string; repoPath: string | null; testGate: boolean; testCmd: string | null }>;
+  };
+  expect(got.projects).toContainEqual({ name: "fresh-proj", repoPath: null, testGate: true, testCmd: "x" });
+});
+
+test("PUT /projects applies repoPath then testGate then testCmd", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+  const repoA = join(dir, "repo-a");
+  const repoB = join(dir, "repo-b");
+  mkdirSync(repoA);
+  mkdirSync(repoB);
+  const seed = await app.handle(
+    new Request("http://localhost/projects/ord-proj", { method: "PUT", ...putBody({ repoPath: repoA }) }),
+  );
+  expect(seed.status).toBe(200);
+
+  // the whitespace testCmd fails last, so the earlier fields stay applied
+  const put = await app.handle(
+    new Request("http://localhost/projects/ord-proj", { method: "PUT", ...putBody({ repoPath: repoB, testGate: false, testCmd: "   " }) }),
+  );
+  expect(put.status).toBe(400);
+  expect(((await put.json()) as { error?: string }).error).toBe("test command must be 1 to 500 characters");
+  expect(db.getProject("ord-proj")).toEqual({ name: "ord-proj", repoPath: repoB, testGate: false, testCmd: null });
+});
+
+test("PUT /projects testCmd validates: 422 schema, 400 whitespace", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+  const url = "http://localhost/projects/val-proj";
+
+  // materialize the row so the whitespace failure is observably a no-op
+  const seed = await app.handle(new Request(url, { method: "PUT", ...putBody({ testGate: false }) }));
+  expect(seed.status).toBe(200);
+
+  const wrongType = await app.handle(new Request(url, { method: "PUT", ...putBody({ testCmd: 5 }) }));
+  expect(wrongType.status).toBe(422);
+  const emptyStr = await app.handle(new Request(url, { method: "PUT", ...putBody({ testCmd: "" }) }));
+  expect(emptyStr.status).toBe(422);
+  const tooLong = await app.handle(new Request(url, { method: "PUT", ...putBody({ testCmd: "x".repeat(501) }) }));
+  expect(tooLong.status).toBe(422);
+
+  // schema-clean whitespace reaches the db, whose 1–500 rule answers 400
+  const whitespace = await app.handle(new Request(url, { method: "PUT", ...putBody({ testCmd: "   " }) }));
+  expect(whitespace.status).toBe(400);
+  expect(((await whitespace.json()) as { error?: string }).error).toBe("test command must be 1 to 500 characters");
+  expect(db.getProject("val-proj")?.testCmd).toBeNull();
+
+  // 49-char :name violates the params schema
+  const longName = await app.handle(new Request(`http://localhost/projects/${"n".repeat(49)}`, { method: "PUT", ...putBody({ testCmd: "x" }) }));
+  expect(longName.status).toBe(422);
+});
+
+test("PUT /projects keeps v1 bodies identical and updates the empty-body error", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+  const url = "http://localhost/projects/v1-proj";
+
+  const empty = await app.handle(new Request(url, { method: "PUT", ...putBody({}) }));
+  expect(empty.status).toBe(400);
+  expect(((await empty.json()) as { error?: string }).error).toBe("provide repoPath, testGate, and/or testCmd");
+
+  const repoDir = join(dir, "repo");
+  mkdirSync(repoDir);
+  const put = await app.handle(new Request(url, { method: "PUT", ...putBody({ repoPath: repoDir }) }));
+  expect(put.status).toBe(200);
+  expect(((await put.json()) as { project: unknown }).project).toEqual({ name: "v1-proj", repoPath: repoDir, testGate: true, testCmd: null });
+
+  // gate-only body preserves the stored repoPath
+  const gate = await app.handle(new Request(url, { method: "PUT", ...putBody({ testGate: false }) }));
+  expect(gate.status).toBe(200);
+  expect(((await gate.json()) as { project: unknown }).project).toEqual({ name: "v1-proj", repoPath: repoDir, testGate: false, testCmd: null });
+
+  const rel = await app.handle(new Request(url, { method: "PUT", ...putBody({ repoPath: "rel/x" }) }));
+  expect(rel.status).toBe(400);
+  expect(((await rel.json()) as { error?: string }).error).toContain("repo path must be an absolute path to an existing directory");
+
+  const unroute = await app.handle(new Request(url, { method: "PUT", ...putBody({ repoPath: null }) }));
+  expect(unroute.status).toBe(200);
+  expect(((await unroute.json()) as { project: unknown }).project).toEqual({ name: "v1-proj", repoPath: null, testGate: false, testCmd: null });
+});
+
+test("GET /projects/:name/agents lists overrides sorted by actor", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+
+  // a custom lane hosts actor designer, extending the valid key space
+  const lane = db.createLane({ name: "Design" });
+  db.setLaneContext(lane.id, {
+    actors: [{ id: "designer", author: "pi-designer", instructions: "Design {id}" }],
+    triggers: [{ kind: "on-enter" }],
+  });
+  for (const [actor, body] of [
+    ["reviewer", { model: "r" }],
+    ["builder", { model: "b" }],
+    ["designer", { model: "d" }],
+  ] as const) {
+    const put = await app.handle(new Request(`http://localhost/projects/list-proj/agents/${actor}`, { method: "PUT", ...putBody(body) }));
+    expect(put.status).toBe(200);
+  }
+
+  // rows come back sorted by actor ascending
+  const got = await app.handle(new Request("http://localhost/projects/list-proj/agents"));
+  expect(got.status).toBe(200);
+  expect(await got.json()).toEqual({
+    agents: [
+      { actor: "builder", config: { model: "b" } },
+      { actor: "designer", config: { model: "d" } },
+      { actor: "reviewer", config: { model: "r" } },
+    ],
+  });
+
+  // an un-registered name reads as empty, never 404
+  const none = await app.handle(new Request("http://localhost/projects/nowhere/agents"));
+  expect(none.status).toBe(200);
+  expect(await none.json()).toEqual({ agents: [] });
+
+  // deleting the lane does not hide the stored row — storage is the truth
+  db.setLaneContext(lane.id, null);
+  const stale = await app.handle(new Request("http://localhost/projects/list-proj/agents"));
+  expect(await stale.json()).toEqual({
+    agents: [
+      { actor: "builder", config: { model: "b" } },
+      { actor: "designer", config: { model: "d" } },
+      { actor: "reviewer", config: { model: "r" } },
+    ],
+  });
+
+  // 49-char :name violates the params schema
+  const longName = await app.handle(new Request(`http://localhost/projects/${"n".repeat(49)}/agents`));
+  expect(longName.status).toBe(422);
+});
+
+test("PUT /projects/:name/agents/:actor stores the present-key config", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+  const url = "http://localhost/projects/ov-proj/agents/reviewer";
+
+  const put = await app.handle(
+    new Request(url, { method: "PUT", ...putBody({ model: "m", thinking: "high", skills: ["~/.pi/agent/skills/rust"] }) }),
+  );
+  expect(put.status).toBe(200);
+  expect(await put.json()).toEqual({ agent: { model: "m", thinking: "high", skills: ["~/.pi/agent/skills/rust"] } });
+
+  // an explicitly empty skills array is stored as present (present-key rule)
+  const emptySkills = await app.handle(new Request(url, { method: "PUT", ...putBody({ skills: [] }) }));
+  expect(emptySkills.status).toBe(200);
+  expect(await emptySkills.json()).toEqual({ agent: { skills: [] } });
+
+  // an empty body stores an empty override — it is listed, not treated as a delete
+  const emptyOverride = await app.handle(new Request(url, { method: "PUT", ...putBody({}) }));
+  expect(emptyOverride.status).toBe(200);
+  expect(await emptyOverride.json()).toEqual({ agent: {} });
+  const listed = await app.handle(new Request("http://localhost/projects/ov-proj/agents"));
+  expect(await listed.json()).toEqual({ agents: [{ actor: "reviewer", config: {} }] });
+
+  // a custom-lane actor is a valid key
+  const lane = db.createLane({ name: "Design" });
+  db.setLaneContext(lane.id, {
+    actors: [{ id: "designer", author: "pi-designer", instructions: "Design {id}" }],
+    triggers: [{ kind: "on-enter" }],
+  });
+  const designer = await app.handle(new Request("http://localhost/projects/ov-proj/agents/designer", { method: "PUT", ...putBody({ model: "design-v1" }) }));
+  expect(designer.status).toBe(200);
+  expect(await designer.json()).toEqual({ agent: { model: "design-v1" } });
+
+  // the override's upsert registers the project tag with v1 defaults
+  const projects = (await (await app.handle(new Request("http://localhost/projects"))).json()) as {
+    projects: Array<{ name: string; repoPath: string | null; testGate: boolean; testCmd: string | null }>;
+  };
+  expect(projects.projects).toContainEqual({ name: "ov-proj", repoPath: null, testGate: true, testCmd: null });
+});
+
+test("PUT /projects/:name/agents/:actor validates actor, params and body", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+
+  // unknown actor → db-side 400 with the exact role list
+  const chief = await app.handle(new Request("http://localhost/projects/val-proj/agents/chief", { method: "PUT", ...putBody({}) }));
+  expect(chief.status).toBe(400);
+  expect(((await chief.json()) as { error?: string }).error).toBe(
+    "unknown agent role 'chief' (reviewer | builder | planner | plan-reviewer | elaborator | manager | worker)",
+  );
+
+  // 49-char actor and name violate the params schema
+  const longActor = await app.handle(new Request(`http://localhost/projects/val-proj/agents/${"a".repeat(49)}`, { method: "PUT", ...putBody({}) }));
+  expect(longActor.status).toBe(422);
+  const longName = await app.handle(new Request(`http://localhost/projects/${"n".repeat(49)}/agents/reviewer`, { method: "PUT", ...putBody({}) }));
+  expect(longName.status).toBe(422);
+
+  // body validation matches PUT /agents/:role verbatim
+  const badThinking = await app.handle(new Request("http://localhost/projects/val-proj/agents/reviewer", { method: "PUT", ...putBody({ thinking: "ultra" }) }));
+  expect(badThinking.status).toBe(422);
+  const shortTimeout = await app.handle(new Request("http://localhost/projects/val-proj/agents/reviewer", { method: "PUT", ...putBody({ timeoutMs: 5 }) }));
+  expect(shortTimeout.status).toBe(422);
+  const longTimeout = await app.handle(new Request("http://localhost/projects/val-proj/agents/reviewer", { method: "PUT", ...putBody({ timeoutMs: 90_000_000 }) }));
+  expect(longTimeout.status).toBe(422);
+  const twoHourTimeout = await app.handle(new Request("http://localhost/projects/val-proj/agents/reviewer", { method: "PUT", ...putBody({ timeoutMs: 7_200_000 }) }));
+  expect(twoHourTimeout.status).toBe(200);
+  expect(await twoHourTimeout.json()).toEqual({ agent: { timeoutMs: 7_200_000 } });
+});
+
+test("DELETE /projects/:name/agents/:actor clears, repeats and never registers", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+
+  const put = await app.handle(new Request("http://localhost/projects/del-proj/agents/reviewer", { method: "PUT", ...putBody({ model: "m" }) }));
+  expect(put.status).toBe(200);
+  const del = await app.handle(new Request("http://localhost/projects/del-proj/agents/reviewer", { method: "DELETE" }));
+  expect(del.status).toBe(200);
+  expect(await del.json()).toEqual({ ok: true });
+  const listed = await app.handle(new Request("http://localhost/projects/del-proj/agents"));
+  expect(await listed.json()).toEqual({ agents: [] });
+
+  // deleting again is idempotent
+  const delAgain = await app.handle(new Request("http://localhost/projects/del-proj/agents/reviewer", { method: "DELETE" }));
+  expect(delAgain.status).toBe(200);
+  expect(await delAgain.json()).toEqual({ ok: true });
+
+  // a delete on a name with no projects row succeeds without materializing it
+  const ghost = await app.handle(new Request("http://localhost/projects/ghost-proj/agents/reviewer", { method: "DELETE" }));
+  expect(ghost.status).toBe(200);
+  expect(await ghost.json()).toEqual({ ok: true });
+  expect(db.getProject("ghost-proj")).toBeNull();
+
+  // unknown actor → 400 even with no row to delete
+  const chief = await app.handle(new Request("http://localhost/projects/del-proj/agents/chief", { method: "DELETE" }));
+  expect(chief.status).toBe(400);
+  expect(((await chief.json()) as { error?: string }).error).toBe(
+    "unknown agent role 'chief' (reviewer | builder | planner | plan-reviewer | elaborator | manager | worker)",
+  );
+
+  // 49-char actor violates the params schema
+  const longActor = await app.handle(new Request(`http://localhost/projects/del-proj/agents/${"a".repeat(49)}`, { method: "DELETE" }));
+  expect(longActor.status).toBe(422);
 });
 
 
