@@ -3581,6 +3581,10 @@ a.dep-chip.gh-link .gh-state {
   overflow: hidden;
 }
 
+.overlay.project-add .pp-panel:focus {
+  outline: none;
+}
+
 .overlay.project-add .pp-head {
   display: flex;
   align-items: center;

@@ -13,7 +13,7 @@ test.describe("add-project directory modal", () => {
     suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     rootDirName = `kanban-e2e-add-${suffix}`;
     root = join(homedir(), rootDirName);
-    projName = `kanban-e2e-proj-${suffix}`;
+    projName = `kanban-picker-e2e-${suffix}`;
     mkdirSync(join(root, "alpha-repo", ".git"), { recursive: true });
     mkdirSync(join(root, "beta-repo"), { recursive: true });
   });
@@ -32,6 +32,7 @@ test.describe("add-project directory modal", () => {
     await page.click("button[aria-label='add project from directory']");
     const dialog = page.getByRole("dialog", { name: "Select directory" });
     await expect(dialog).toBeVisible();
+    await expect(dialog).toBeFocused();
     await expect(dialog.locator("input[aria-label='directory path']")).toHaveValue(homedir());
     return dialog;
   }
@@ -43,6 +44,7 @@ test.describe("add-project directory modal", () => {
     await page.click("button[aria-label='add project from directory']");
     const dialog = page.getByRole("dialog", { name: "Select directory" });
     await expect(dialog).toBeVisible();
+    await expect(dialog).toBeFocused();
     await expect(dialog.locator("input[aria-label='directory path']")).toHaveValue(homedir());
     await expect(dialog.locator(`button[aria-label='open directory ${rootDirName}']`)).toBeVisible();
   });

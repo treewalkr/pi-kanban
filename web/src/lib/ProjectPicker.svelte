@@ -85,6 +85,10 @@
     }
   }
 
+  function autofocus(node: HTMLElement) {
+    node.focus();
+  }
+
   function handleBackdropClick(e: MouseEvent): void {
     if (!busy && e.target === e.currentTarget) {
       projectPicker.close();
@@ -111,7 +115,7 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="overlay project-add" role="presentation" onclick={handleBackdropClick}>
-  <div class="pp-panel" role="dialog" aria-modal="true" aria-label="Select directory">
+  <div class="pp-panel" role="dialog" aria-modal="true" aria-label="Select directory" tabindex="-1" use:autofocus>
     <div class="pp-head">
       <h3>Select directory</h3>
       <button
@@ -210,7 +214,7 @@
             class="pp-path"
             aria-label="new directory name"
             bind:value={newName}
-            autofocus
+            use:autofocus
           />
           <button
             type="submit"
