@@ -85,6 +85,12 @@ card's own element shown at the target position while a lifted clone follows
 the cursor. Replaces the old 2px drop-gap line.
 _Avoid_: Drop gap, placeholder, spacer
 
+**Settled layout**:
+The transform-immune position of a card (its offsetTop/offsetHeight place in
+the lane) while `animate:flip` runs; drag hints are decided against settled
+layout so measurement never chases moving cards.
+_Avoid_: resting position, final position
+
 **Ghost**:
 The inert DOM clone of the dragged card that follows the cursor during a
 pointer drag, removed on settle or cancel; `pointer-events: none` keeps hit
