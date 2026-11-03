@@ -2610,3 +2610,34 @@ test("migrates a pre-context board: adds lanes.context, seeds defaults folding a
   reader.close();
   expect(dataVersion()).toBe(before);
 });
+
+// ---------- priority reorders the lane (hquwn) ----------
+
+test("setting high rises a card to the lane top, low sinks it to the bottom; normal leaves position", () => {
+  const a = db.createTask({ title: "a", lane: "backlog" });
+  const b = db.createTask({ title: "b", lane: "backlog" });
+  const c = db.createTask({ title: "c", lane: "backlog" });
+  const order = () => db.laneTasks("backlog").map((t) => t.title);
+  expect(order()).toEqual(["a", "b", "c"]);
+
+  // c → high: rises above a
+  db.updateTask(c.id, { priority: "high" });
+  expect(order()).toEqual(["c", "a", "b"]);
+
+  // b → low: sinks below the rest
+  db.updateTask(b.id, { priority: "low" });
+  expect(order()).toEqual(["c", "a", "b"]);
+
+  // a → high: joins the top behind the other high? no — explicit top
+  db.updateTask(a.id, { priority: "high" });
+  expect(order()).toEqual(["a", "c", "b"]);
+
+  // c → normal: position untouched (drag still rules)
+  db.updateTask(c.id, { priority: "normal" });
+  expect(order()).toEqual(["a", "c", "b"]);
+
+  // an explicit index move wins over the priority nudge
+  db.updateTask(c.id, { priority: "high", index: 2 });
+  expect(order()).toEqual(["a", "b", "c"]);
+  expect(db.resolveTask(c.id).priority).toBe("high");
+});

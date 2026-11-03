@@ -100,7 +100,7 @@
     <button
       class="chip prio-chip prio-{task.priority}"
       aria-label={`priority ${task.id}: ${task.priority}`}
-      title={`priority ${task.priority} — click to set ${nextPriority(task.priority)}; affects what agents pick next`}
+      title={`priority ${task.priority} — click to set ${nextPriority(task.priority)}; high rises to the lane top, low sinks to the bottom`}
       onclick={(e) => {
         e.stopPropagation();
         void board.cyclePriority(task.id);

@@ -52,6 +52,34 @@ test("clicking the chip cycles high → normal → low and persists after reload
   await expect(chip(page, ids.click)).toHaveClass(/prio-normal/);
 });
 
+test("setting high reorders the card to the lane top, low to the bottom", async ({ page }) => {
+  await page.goto("/");
+  // seed a lane-bottom card, promote it to high, and it renders first
+  const c = chip(page, ids.click);
+  await c.waitFor();
+  const laneIndex = (id: string) =>
+    page.evaluate(
+      (tid) =>
+        [...document.querySelector(`section.lane[data-lane="backlog"]`)!.querySelectorAll(".card")].findIndex(
+          (el) => el.querySelector(`[data-card="${tid}"]`) !== null || (el as HTMLElement).dataset.card === tid,
+        ),
+      id,
+    );
+  // backlog lanes render newest-first? assert relative movement, not absolute index
+  const laneSize = await page.locator('section.lane[data-lane="backlog"] .card').count();
+  await c.click(); // → low: sinks to the lane bottom
+  await expect(c).toHaveText("▼");
+  // the chip flips optimistically; the reorder lands with the PATCH's refresh — poll for it
+  await expect.poll(() => laneIndex(ids.click)).toBe(laneSize - 1); // last
+  await c.click(); // → high: rises to the lane top
+  await expect(c).toHaveText("▲");
+  await expect.poll(() => laneIndex(ids.click)).toBe(0); // first
+
+  await page.reload();
+  await chip(page, ids.click).waitFor();
+  expect(await laneIndex(ids.click)).toBe(0); // persisted: still first
+});
+
 test("the chip is keyboard-activated and the detail head shows the same state", async ({ page }) => {
   await page.goto("/");
   const c = chip(page, ids.keys);

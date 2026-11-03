@@ -202,7 +202,7 @@ Tight, quiet corners: 8px on panels/modals, 7px on controls/cards/inputs/code bl
 - **Focus:** `:focus-visible` only — 2px solid accent outline, 2px offset. Never `outline: none` without a replacement.
 
 ### Chips
-Pills (`999px`, `0 8px` padding, 10–12px) on `bg-subtle` with text-muted — tags, lane counts, WIP warnings, waiting-state markers. Priority glyphs (▲ ▼) and state glyphs (⊘ ‖ ✓) are text, not icons; icon vocabulary belongs to Lucide buttons only. Multi-value filters live in a popover, never as inline chip rows in chrome. The priority chip is the one interactive chip: clicking cycles high → normal → low (glyph-only `▲ · ▼` on cards, with text in the detail head), the glyph itself is the state cue, and the tooltip says the click affects what agents pick next — never the card's visual position.
+Pills (`999px`, `0 8px` padding, 10–12px) on `bg-subtle` with text-muted — tags, lane counts, WIP warnings, waiting-state markers. Priority glyphs (▲ ▼) and state glyphs (⊘ ‖ ✓) are text, not icons; icon vocabulary belongs to Lucide buttons only. Multi-value filters live in a popover, never as inline chip rows in chrome. The priority chip is the one interactive chip: clicking cycles high → normal → low (glyph-only `▲ · ▼` on cards, with text in the detail head), the glyph itself is the state cue, and setting high reorders the card to the lane top, low to the bottom (normal leaves the position to drag) — visual order and agent-pick order stay aligned.
 
 ### Cards / Containers
 - **Corner Style:** 7px.

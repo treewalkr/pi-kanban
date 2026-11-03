@@ -354,7 +354,7 @@
       <button
         class="chip prio-chip prio-{me.priority}"
         aria-label={`priority ${me.id}: ${me.priority}`}
-        title={`priority ${me.priority} — click to set ${nextPriority(me.priority)}; affects what agents pick next`}
+        title={`priority ${me.priority} — click to set ${nextPriority(me.priority)}; high rises to the lane top, low sinks to the bottom`}
         onclick={() => void board.cyclePriority(me.id)}
       >
         {me.priority === "high" ? "▲ high" : me.priority === "low" ? "▼ low" : "normal"}

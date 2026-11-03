@@ -2122,10 +2122,23 @@ export class KanbanDb {
       beforeIndex = this.laneTasks(laneId).filter((t) => t.id !== task.id).findIndex((t) => t.id === anchor.id);
     }
     const hasIndex = patch.index !== undefined;
+    // An explicit priority change reorders the lane (hquwn): high rises to the
+    // top, low sinks to the bottom — visual order and `next` order stay aligned;
+    // normal leaves the position to drag. An explicit index/lane move wins.
+    const priorityReposition =
+      patch.priority !== undefined &&
+      patch.priority !== task.priority &&
+      !patch.lane &&
+      !hasIndex &&
+      beforeIndex === undefined;
     const position =
       patch.lane || hasIndex || beforeIndex !== undefined
         ? this.insertPosition(laneId, beforeIndex ?? patch.index, task.id)
-        : task.position;
+        : priorityReposition && patch.priority === "high"
+          ? this.insertPosition(laneId, 0, task.id)
+          : priorityReposition && patch.priority === "low"
+            ? this.insertPosition(laneId, undefined, task.id)
+            : task.position;
     const parentId =
       patch.parent === undefined ? task.parentId : (this.resolveParent(task.id, patch.parent)?.id ?? null);
 
