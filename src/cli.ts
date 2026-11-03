@@ -8,6 +8,7 @@ import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
 import { searchBoard, HARD_RESULT_LIMIT, MAX_RESULTS } from "./search";
 import { cardFileDiff } from "./diff";
 import { VERSION, headState } from "./version";
+import type { IncidentCause, PoolHealthSummary, SlotIncident } from "./incidents";
 
 export const HELP = `kanban ${VERSION} — task board for the pi agent
 
@@ -237,7 +238,13 @@ function ageShort(ms: number): string {
 }
 
 export interface ServeWarning {
-  kind: "serve-down" | "serve-stale" | "serve-dirty" | "serve-version-split" | "serve-head-split";
+  kind:
+    | "serve-down"
+    | "serve-stale"
+    | "serve-dirty"
+    | "serve-version-split"
+    | "serve-head-split"
+    | "pool-no-healthy-slots";
   message: string;
 }
 
@@ -295,6 +302,8 @@ interface ActivityQueued {
 interface ActivitySnapshot {
   sessions: ActivitySession[];
   queued: ActivityQueued[];
+  incidents?: SlotIncident[];
+  pools?: PoolHealthSummary[];
 }
 
 /** pid liveness via signal 0 — EPERM (alive but not ours) still counts; ESRCH means gone. */
@@ -383,6 +392,21 @@ export async function serveWarnings(port: number): Promise<ServeWarning[]> {
       kind: "serve-version-split",
       message: `serve ${health.version} ≠ cli ${VERSION} — restart serve (symlinked cli runs new code against an old server)`,
     });
+  }
+  try {
+    const actRes = await fetch(`http://127.0.0.1:${port}/activity`, { signal: AbortSignal.timeout(1500) });
+    const act = (await actRes.json().catch(() => null)) as Partial<ActivitySnapshot> | null;
+    for (const pool of act?.pools ?? []) {
+      if (pool.totalSlots > 0 && pool.coolingSlots === pool.totalSlots) {
+        const lastPart = pool.lastCause ? `, last ${pool.lastCause}` : "";
+        out.push({
+          kind: "pool-no-healthy-slots",
+          message: `pool '${pool.poolName}' has no healthy slots (${pool.coolingSlots}/${pool.totalSlots} cooling${lastPart}) — edit the pool to reset cooldowns`,
+        });
+      }
+    }
+  } catch {
+    /* skip silently */
   }
   return out;
 }
@@ -1156,7 +1180,14 @@ async function main(): Promise<number> {
               const res = await fetch(`http://127.0.0.1:${s.port}/activity`, { signal: AbortSignal.timeout(1500) });
               const parsed = (await res.json().catch(() => null)) as Partial<ActivitySnapshot> | null;
               // look-alike servers answer /activity with their health body — arrays normalize to empty
-              return parsed ? { sessions: parsed.sessions ?? [], queued: parsed.queued ?? [] } : null;
+              return parsed
+                ? {
+                    sessions: parsed.sessions ?? [],
+                    queued: parsed.queued ?? [],
+                    incidents: parsed.incidents ?? [],
+                    pools: parsed.pools ?? [],
+                  }
+                : null;
             } catch {
               return null; // serve gone mid-scan — treat as no sessions
             }
@@ -1183,6 +1214,8 @@ async function main(): Promise<number> {
               versionSplit: !!s.version && s.version !== VERSION,
               sessions: activity[i]?.sessions ?? [],
               queued: activity[i]?.queued ?? [],
+              incidents: activity[i]?.incidents ?? [],
+              pools: activity[i]?.pools ?? [],
             })),
             abandonedLeases: abandoned,
           });
@@ -1207,7 +1240,22 @@ async function main(): Promise<number> {
           }
           for (const q of act?.queued ?? [])
             out(c.dim(`  queued  ${q.taskId}  ${q.role}  ${ageShort(Date.now() - q.enqueuedAt)}`));
-          if (act && act.sessions.length === 0 && (act.queued?.length ?? 0) === 0)
+          const now = Date.now();
+          for (const inc of act?.incidents ?? []) {
+            const cooldownStr =
+              inc.cooldownUntil <= now
+                ? "cooldown expired"
+                : `cooldown ${ageShort(inc.cooldownUntil - now)} left`;
+            out(
+              `  incident  ${inc.poolName} slot ${inc.slotIndex}  ${inc.cause} ×${inc.count}  first ${ageShort(now - inc.firstSeenAt)} ago  ${cooldownStr}`,
+            );
+          }
+          if (
+            act &&
+            act.sessions.length === 0 &&
+            (act.queued?.length ?? 0) === 0 &&
+            (act.incidents?.length ?? 0) === 0
+          )
             out(c.dim("  no live agent sessions"));
         }
         for (const l of abandoned)

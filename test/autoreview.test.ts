@@ -841,6 +841,267 @@ describe("auto-review", () => {
     expect(capturedConfig.model).toBe("b");
   });
 
+  test("a provider-quota death cools the slot and the next spawn fails over to the healthy slot", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("rev-pool", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "zcode" }, { model: "okay" }],
+    });
+    const card1 = cardInReview(w, "card 1");
+    const spawnedModels: string[] = [];
+    const spawnFn: SpawnFn = async (job, ctx) => {
+      const model = ctx.config?.model ?? "";
+      spawnedModels.push(model);
+      if (model === "zcode") {
+        return {
+          code: 1,
+          stderrTail:
+            "Start Plan has no active model quota (expired, pending or exhausted)\nNo fallback to another plan was made",
+        };
+      }
+      ctx.emit("text: working");
+      return { code: 0 };
+    };
+
+    start(spawnFn, dbFile);
+    await sleep(60);
+
+    // Card 1 spawned on zcode and died with quota error
+    expect(spawnedModels).toEqual(["zcode"]);
+
+    // Create card 2: slot 0 (zcode) is cooling, so card 2 must fail over to slot 1 (okay)
+    const card2 = cardInReview(w, "card 2");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["zcode", "okay"]);
+
+    // Create card 3: slot 0 (zcode) is still cooling, card 3 must also get okay, never zcode
+    const card3 = cardInReview(w, "card 3");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["zcode", "okay", "okay"]);
+  });
+
+  test("a cooling slot requalifies after cooldown expiry; re-saving a pool resets cooldowns instantly", async () => {
+    const { dbFile, writer: w } = setup();
+    const pool = w.setPool("rev-pool", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "s0" }, { model: "s1" }],
+    });
+    const spawnedModels: string[] = [];
+    let s0ShouldFail = true;
+    const spawnFn: SpawnFn = async (job, ctx) => {
+      const model = ctx.config?.model ?? "";
+      spawnedModels.push(model);
+      if (model === "s0" && s0ShouldFail) {
+        return {
+          code: 1,
+          stderrTail: "Start Plan has no active model quota (expired, pending or exhausted)",
+        };
+      }
+      ctx.emit("text: working");
+      return { code: 0 };
+    };
+
+    // Card 1 and Card 2 in review before start
+    cardInReview(w, "card 1");
+    await sleep(2);
+    cardInReview(w, "card 2");
+
+    start(spawnFn, dbFile, { cooldownMs: 50 });
+
+    // Card 1 on s0 dies and cools slot 0. Card 2 immediately gets slot 1 (s1) because s0 is cooling
+    await sleep(60);
+    expect(spawnedModels).toEqual(["s0", "s1"]);
+
+    // Wait for 50ms cooldown to expire, and let s0 succeed
+    await sleep(60);
+    s0ShouldFail = false;
+
+    // Card 3 created after expiry -> slot 0 (s0) is re-allocated!
+    cardInReview(w, "card 3");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["s0", "s1", "s0"]);
+
+    // Separately: fail slot 0 again
+    s0ShouldFail = true;
+    cardInReview(w, "card 4");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["s0", "s1", "s0", "s0"]);
+
+    // Slot 0 is cooling. Re-saving the pool bumps updatedAt and resets cooldowns instantly!
+    w.setPool("rev-pool", {
+      name: pool.name,
+      enabled: pool.enabled,
+      roles: pool.roles,
+      slots: pool.slots,
+    });
+    s0ShouldFail = false;
+
+    // Card 5 created -> slot 0 is allocatable immediately!
+    cardInReview(w, "card 5");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["s0", "s1", "s0", "s0", "s0"]);
+  });
+
+  test("a quota-reached-with-wait-hint death applies the capped cooldown to the slot", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("p1", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "m1" }],
+    });
+    cardInReview(w, "card 1");
+    const spawnFn: SpawnFn = async () => ({
+      code: 1,
+      stderrTail:
+        "Quota reached. Please wait 4h55m33s. Next: switch models or try again after reset.",
+    });
+
+    start(spawnFn, dbFile);
+    await sleep(60);
+
+    const snapshot = activitySnapshot();
+    expect(snapshot.incidents).toHaveLength(1);
+    const inc = snapshot.incidents[0];
+    expect(inc.cause).toBe("provider-quota");
+    // Capped from 4h55m33s to 60 min (3_600_000 ms)
+    expect(inc.cooldownUntil - inc.lastSeenAt).toBe(60 * 60_000);
+  });
+
+  test("activitySnapshot exposes incidents and pool summaries after a provider-quota death", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("rev-pool", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "zcode" }, { model: "okay" }],
+    });
+    cardInReview(w, "card 1");
+    const spawnFn: SpawnFn = async () => ({
+      code: 1,
+      stderrTail: "Start Plan has no active model quota (expired, pending or exhausted)",
+    });
+
+    const now = Date.now();
+    start(spawnFn, dbFile);
+    await sleep(60);
+
+    const snapshot = activitySnapshot();
+    expect(snapshot.incidents).toHaveLength(1);
+    expect(snapshot.incidents[0]).toEqual({
+      poolId: "rev-pool",
+      poolName: "Reviewers",
+      slotIndex: 0,
+      cause: "provider-quota",
+      count: 1,
+      firstSeenAt: expect.any(Number),
+      lastSeenAt: expect.any(Number),
+      cooldownUntil: expect.any(Number),
+    });
+    expect(snapshot.incidents[0].cooldownUntil).toBeGreaterThan(now);
+
+    expect(snapshot.pools).toEqual([
+      {
+        poolId: "rev-pool",
+        poolName: "Reviewers",
+        totalSlots: 2,
+        coolingSlots: 1,
+        lastCause: "provider-quota",
+      },
+    ]);
+  });
+
+  test("a rate-limit death auto-retries via the resume queue, bounded at two, then parks as today", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const spawnedCalls: Array<{ mode?: string; sessionId?: string }> = [];
+    const spawnFn: SpawnFn = async (job) => {
+      spawnedCalls.push({ mode: job.mode, sessionId: job.sessionId });
+      return { code: 1, stderrTail: "429 Too Many Requests" };
+    };
+
+    start(spawnFn, dbFile, { retryDelayMs: 5 });
+    // Wait for all 3 spawns: spawn 1 (dies, queues 5ms delay) -> spawn 2 (dies, queues 10ms delay) -> spawn 3 (dies, exhausts retries)
+    await sleep(200);
+
+    expect(spawnedCalls).toHaveLength(3);
+    expect(spawnedCalls[0].mode).toBeUndefined();
+    expect(spawnedCalls[1].mode).toBe("resume");
+    expect(spawnedCalls[1].sessionId).toBeDefined();
+    expect(spawnedCalls[2].mode).toBe("resume");
+    expect(spawnedCalls[2].sessionId).toBe(spawnedCalls[1].sessionId);
+
+    const comments = db!.comments(card.id);
+    const diedComments = comments.filter((c) => c.body.startsWith(KanbanDb.SESSION_DIED_PREFIX));
+    expect(diedComments).toHaveLength(3);
+    expect(diedComments[0].body).toEndWith("— auto-retry 1/2 (rate-limit)");
+    expect(diedComments[1].body).toEndWith("— auto-retry 2/2 (rate-limit)");
+    expect(diedComments[2].body).toEndWith("; comment on this card to re-trigger.");
+    expect(diedComments[2].body).not.toContain("auto-retry");
+
+    // Total spawns cap at 3, no 4th after exhaustion
+    await sleep(50);
+    expect(spawnedCalls).toHaveLength(3);
+    expect(db!.resumeRequests()).toHaveLength(0);
+  });
+
+  test("a non-retryable death parks with today's comment, unchanged", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    let spawns = 0;
+    const spawnFn: SpawnFn = async () => {
+      spawns++;
+      return { code: 1, stderrTail: "Error: ECONNREFUSED" };
+    };
+    start(spawnFn, dbFile, { retryDelayMs: 5 });
+    await sleep(50);
+
+    expect(spawns).toBe(1);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(REVIEWER_AUTHOR);
+    expect(last.body).toStartWith(
+      "session died: auto-review failed (exit 1 — Error: ECONNREFUSED) after",
+    );
+    expect(last.body).toEndWith("; comment on this card to re-trigger.");
+    expect(last.body).not.toContain("auto-retry");
+    expect(db!.resumeRequests()).toHaveLength(0);
+  });
+
+  test("all slots cooling parks the card with one consolidated incident comment", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("p1", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "zcode" }],
+    });
+    const card = cardInReview(w);
+    let spawns = 0;
+    const spawnFn: SpawnFn = async () => {
+      spawns++;
+      return {
+        code: 1,
+        stderrTail:
+          "Start Plan has no active model quota (expired, pending or exhausted)\nNo fallback to another plan was made",
+      };
+    };
+
+    start(spawnFn, dbFile);
+    await sleep(60);
+
+    expect(spawns).toBe(1);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.body).toStartWith(KanbanDb.SESSION_DIED_PREFIX);
+    expect(last.body).toContain("'Reviewers': slot 0 provider-quota ×1");
+    expect(last.body).toContain("— every slot is cooling down:");
+    expect(last.body).toEndWith("; comment on this card to re-trigger.");
+    expect(db!.resumeRequests()).toHaveLength(0);
+  });
+
   test("pool edits apply to the next spawn", async () => {
     const { dbFile, writer: w } = setup();
     w.setPool("p-edit", {
@@ -1303,7 +1564,7 @@ describe("auto-review", () => {
     expect(last.author).toBe(REVIEWER_AUTHOR);
     expect(last.body).toStartWith("session died: auto-review stalled after");
     expect(last.body).toContain("no output for 10 min");
-    expect(last.body).toEndWith("; comment on this card to re-trigger.");
+    expect(last.body).toEndWith("— auto-retry 1/2 (stall)");
   });
 
   test("defaultSpawn kills a silent session at the stall window and reports stalled", async () => {
@@ -1402,7 +1663,7 @@ describe("auto-review", () => {
     const last = db!.comments(card.id).at(-1)!;
     expect(last.body).toContain("session died: auto-review ended without a verdict after");
     expect(last.body).toContain("model returned no output");
-    expect(last.body).toContain("; comment on this card to re-trigger.");
+    expect(last.body).toEndWith("— auto-retry 1/2 (no-output)");
     const logs = db!.attachments(card.id, "session");
     expect(logs.length).toBe(1);
     expect(logs[0]!.content).toContain("stderr tail:");

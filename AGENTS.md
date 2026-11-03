@@ -13,6 +13,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 - Card ownership — `tasks.owner` column (`src/db.ts`), `kanban claim`, auto-set on entry to Test + Implement (`handoff`/`approve`; `review --block` → lane builder), auto-clear on any exit; shown in `overview`, `ls --owner`, `show`
 - `data/kanban.db` — SQLite DB (gitignored); `KANBAN_DB` env var overrides the path (tests use this)
 - `worker_pools` table (`src/db.ts`) + `/pools` routes (`src/app.ts`) — parallel worker pools for the serve --agents loop
+- `src/incidents.ts` — spawn failure classification, provider wait hint parsing, in-memory slot health and cooldowns for the loop
 - `lane_events` table (`src/db.ts`) + `/stats` route (`src/app.ts`) + `kanban stats` — audit trail and board analytics
 - Lane workflows — `lanes.context` (`LaneContext` in `src/db.ts`, seeded by `defaultLaneContext`) drives the auto-agent loop (`src/autoreview.ts` `evaluateLaneContext`): actor chains, instructions, templates, triggers/exits/gates/caps per lane; `kanban lane context` (`src/cli.ts`) + `/lanes/:id/context` (`src/app.ts`) edit it, the web Agents panel groups by lane, `agent_configs` and lane actor configs stay bidirectionally synced
 - WIP limits — `lanes.wip_limit` column (`src/db.ts`), `kanban lane limit` (`src/cli.ts`), `wip-over-limit` in `kanban check`, lane count chip in the web UI
