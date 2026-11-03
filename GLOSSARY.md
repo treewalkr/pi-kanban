@@ -29,6 +29,14 @@ The stored mapping from a project tag to a repo path (`projects` table) that
 decides which repo a card's agents spawn in; un-routed tags fall back to the
 serve launch dir. _Avoid_: repo mapping, project binding, workspace.
 
+**Project picker**:
+The sidebar dropdown (`Sidebar.svelte`, `.picker-wrap`) that switches the board's project focus between `all projects` and one **Project**, carrying the per-project running/waiting badges.
+_Avoid_: project switcher, workspace picker, project menu
+
+**Directory picker**:
+The modal that browses directories under `$HOME` (`GET /fs/dirs`, `POST /fs/mkdir`) and registers the chosen folder as a **Project** with a **Project route**; opened from the **Project picker**'s `add project…` row, distinct from the settings Projects tab's inline browser.
+_Avoid_: folder browser, path chooser, add-project dialog
+
 **Thread**:
 The chronological conversation on a card where humans and agents record questions, handoffs, reviews, and gate verdicts.
 _Avoid_: Activity log, comment feed, discussion, chat history
