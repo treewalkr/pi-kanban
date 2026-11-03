@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { DEFAULT_LANES, PLAN_REVIEWER_AUTHOR, BUILDER_AUTHOR, KanbanDb, KanbanError, type LaneContext } from "../src/db";
+import { DEFAULT_LANES, PLAN_REVIEWER_AUTHOR, BUILDER_AUTHOR, KanbanDb, KanbanError, defaultLaneContext, type LaneContext } from "../src/db";
 
 let dir = "";
 let db: KanbanDb;
@@ -1770,6 +1770,61 @@ test("ownership: handoff and approve set it, every exit from implement clears it
   expect(approved.laneId).toBe("implement");
   expect(approved.owner).toBe(BUILDER_AUTHOR);
   expect(BUILDER_AUTHOR).toBe("pi-builder");
+});
+
+test("ownership: a review return goes to the implement lane's lead actor, never the reviewer", () => {
+  const card = db.createTask({ title: "blocked card 1", lane: "review" });
+  const { task: returned } = db.handoff(card.id, "implement", {
+    kind: "review",
+    author: "pi-reviewer",
+    message: "blocked",
+    findings: ["fix x"],
+  });
+  expect(returned.owner).toBe(BUILDER_AUTHOR);
+  expect(db.resolveTask(card.id).owner).toBe(BUILDER_AUTHOR);
+
+  // with no author -> still BUILDER_AUTHOR (not "user")
+  const cardNoAuthor = db.createTask({ title: "blocked card no author", lane: "review" });
+  const { task: returnedNoAuthor } = db.handoff(cardNoAuthor.id, "implement", {
+    kind: "review",
+    message: "blocked without author",
+  });
+  expect(returnedNoAuthor.owner).toBe(BUILDER_AUTHOR);
+  expect(db.resolveTask(cardNoAuthor.id).owner).toBe(BUILDER_AUTHOR);
+
+  // human handoff is never overridden by the lead actor, even with the seeded context present
+  const cardHuman = db.createTask({ title: "human handoff", lane: "plan" });
+  const { task: returnedHuman } = db.handoff(cardHuman.id, "implement", {
+    author: "ada",
+    message: "mine",
+  });
+  expect(returnedHuman.owner).toBe("ada");
+  expect(db.resolveTask(cardHuman.id).owner).toBe("ada");
+
+  // owner follows lane config, not a hardcoded constant
+  db.setLaneContext("implement", {
+    ...defaultLaneContext("implement")!,
+    actors: [{ ...defaultLaneContext("implement")!.actors[0]!, author: "pi-smith" }],
+  });
+  const cardCustom = db.createTask({ title: "blocked card 2", lane: "review" });
+  const { task: returnedCustom } = db.handoff(cardCustom.id, "implement", {
+    kind: "review",
+    author: "pi-reviewer",
+    message: "blocked again",
+  });
+  expect(returnedCustom.owner).toBe("pi-smith");
+  expect(db.resolveTask(cardCustom.id).owner).toBe("pi-smith");
+
+  // no-context fallback: clears owner (null), does not fall back to reviewer
+  db.setLaneContext("implement", null);
+  const cardNoContext = db.createTask({ title: "blocked card 3", lane: "review" });
+  const { task: returnedNoContext } = db.handoff(cardNoContext.id, "implement", {
+    kind: "review",
+    author: "pi-reviewer",
+    message: "blocked no context",
+  });
+  expect(returnedNoContext.owner).toBeNull();
+  expect(db.resolveTask(cardNoContext.id).owner).toBeNull();
 });
 
 test("claimTask: set, idempotent re-claim, foreign owner refuses without force, force takes over", () => {

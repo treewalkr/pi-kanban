@@ -3024,14 +3024,22 @@ export class KanbanDb {
     const findings = (input.findings ?? []).map((f) => f.trim()).filter(Boolean);
     return this.tx((): { task: Task; comment: Comment } => {
       const note = findings.length > 0 ? `${task.note}\n${findings.map((f) => `- [ ] ${f}`).join("\n")}` : undefined;
-      // Entering Test + Implement assigns ownership to the handing-off actor.
-      const entersImplement = this.resolveLane(laneRef).id === "implement";
+      // Entering Test + Implement assigns ownership: a review return goes to the lane's lead actor (never the reviewer); any other handoff to its author.
+      const target = this.resolveLane(laneRef);
+      const entersImplement = target.id === "implement";
       const moved = this.updateTask(
         task.id,
         {
           ...(note !== undefined ? { note } : {}),
           lane: laneRef,
-          ...(entersImplement ? { owner: input.author?.trim() || "user" } : {}),
+          ...(entersImplement
+            ? {
+                owner:
+                  input.kind === "review"
+                    ? (this.laneContext(target.id)?.actors[0]?.author ?? null)
+                    : input.author?.trim() || "user",
+              }
+            : {}),
         },
         { cause: input.kind === "review" ? "review" : "handoff", actor: input.author?.trim() || "user" },
       );
