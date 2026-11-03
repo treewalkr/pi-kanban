@@ -983,6 +983,7 @@ export const createApp = (
           name: t.Optional(t.String()),
           description: t.Optional(t.String()),
           index: t.Optional(t.Number({ minimum: 0 })),
+          before: t.Optional(t.Union([t.String(), t.Null()])),
           wipLimit: t.Optional(t.Union([t.Number({ minimum: 1, maximum: 999 }), t.Null()])),
         }),
       },
