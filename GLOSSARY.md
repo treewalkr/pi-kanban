@@ -75,8 +75,9 @@ owner when no context exists is none (`null`).
 _Avoid_: Primary actor, default builder, first agent
 
 **Anchor**:
-The card a move is positioned relative to (`mv <id> <lane> --before <anchorId>`),
-so placement survives concurrent edits instead of drifting like an index.
+The card or lane a move is positioned relative to (`mv <id> <lane> --before <anchorId>`;
+`lane mv <ref> <before:<ref>|last>`), so placement survives concurrent edits
+instead of drifting like an index.
 _Avoid_: Reference card, pivot, position marker
 
 **Slot**:
@@ -88,8 +89,15 @@ _Avoid_: Drop gap, placeholder, spacer
 **Ghost**:
 The inert DOM clone of the dragged card that follows the cursor during a
 pointer drag, removed on settle or cancel; `pointer-events: none` keeps hit
-testing honest.
+testing honest. Lane drags (board headers, settings rows) reuse the name for
+their name-only floating chip (`.lane-ghost`).
 _Avoid_: Drag image, browser ghost, floating card
+
+**Fixed lane**:
+A lane the workflow pins in place (`lanes.fixed`): Waiting on you, Backlog,
+Done, Archive. It refuses reorder and deletion everywhere — db guards, CLI,
+palette, drag — and the Settings lanes tab renders it dimmed without a grip.
+_Avoid_: System lane, built-in lane, pinned column
 
 **Gate**:
 The human-only decision point (`approve` or `reject`) between plan review and implementation that agents are forbidden to run themselves.
