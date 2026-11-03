@@ -118,15 +118,15 @@
   <div class="pp-panel" role="dialog" aria-modal="true" aria-label="Select directory" tabindex="-1" use:autofocus>
     <div class="pp-head">
       <h3>Select directory</h3>
-      <button
-        type="button"
-        class="icon-btn"
-        aria-label="close directory picker"
-        disabled={busy}
-        onclick={() => projectPicker.close()}
-      >
-        <X size={16} />
-      </button>
+        <button
+          type="button"
+          class="icon-btn"
+          aria-label="close directory picker"
+          disabled={busy}
+          onclick={() => projectPicker.close()}
+        >
+          <X size={16} strokeWidth={1.75} />
+        </button>
     </div>
 
     {#if step === "dirs"}
@@ -145,7 +145,7 @@
             if (listing?.parent) navigate(listing.parent);
           }}
         >
-          <ArrowUp size={16} />
+          <ArrowUp size={16} strokeWidth={1.75} />
         </button>
         <input
           class="pp-path"
@@ -178,7 +178,7 @@
 
       <div class="pp-list">
         {#if !listing}
-          <!-- loading -->
+          <div class="pp-empty">Loading directories…</div>
         {:else if listing.dirs.length === 0}
           <div class="pp-empty">No subdirectories</div>
         {:else if visibleDirs.length === 0}
@@ -192,7 +192,7 @@
               title={dir.path}
               onclick={() => navigate(dir.path)}
             >
-              <Folder size={14} />
+              <Folder size={14} strokeWidth={1.75} />
               <span class="pp-name">{dir.name}</span>
               {#if dir.isGitRepo}
                 <span class="pp-git">.git</span>
@@ -203,42 +203,52 @@
       </div>
 
       {#if createOpen}
-        <form
-          class="pp-create"
-          onsubmit={(e) => {
-            e.preventDefault();
-            create();
-          }}
-        >
-          <input
-            class="pp-path"
-            aria-label="new directory name"
-            bind:value={newName}
-            use:autofocus
-          />
-          <button
-            type="submit"
-            aria-label="create directory"
-            disabled={busy || newName.trim() === ""}
-          >
-            Create
-          </button>
-          <button
-            type="button"
-            aria-label="cancel new directory"
-            disabled={busy}
-            onclick={() => {
-              createOpen = false;
-              newName = "";
-              loadError = "";
-            }}
-          >
-            Cancel
-          </button>
-          {#if loadError}
-            <div class="pp-alert" role="alert">{loadError}</div>
-          {/if}
-        </form>
+        <div class="pp-sub">
+          <div class="pp-sub-panel">
+            <div class="pp-sub-head">New directory</div>
+            <form
+              class="pp-sub-body"
+              onsubmit={(e) => {
+                e.preventDefault();
+                create();
+              }}
+            >
+              <label class="pp-sub-label" for="pp-new-name">New directory name</label>
+              <input
+                id="pp-new-name"
+                class="pp-path"
+                aria-label="new directory name"
+                bind:value={newName}
+                use:autofocus
+              />
+              {#if loadError}
+                <div class="pp-alert" role="alert">{loadError}</div>
+              {/if}
+              <div class="pp-sub-actions">
+                <button
+                  type="button"
+                  aria-label="cancel new directory"
+                  disabled={busy}
+                  onclick={() => {
+                    createOpen = false;
+                    newName = "";
+                    loadError = "";
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  class="primary-btn"
+                  aria-label="create directory"
+                  disabled={busy || newName.trim() === ""}
+                >
+                  Create
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       {/if}
 
       <div class="pp-foot">
@@ -284,10 +294,13 @@
       <div class="pp-confirm">
         <h4>Add project</h4>
         <div class="pp-confirm-row">
+          <span class="pp-confirm-label">Folder</span>
           <code class="pp-chosen">{listing?.path}</code>
         </div>
         <div class="pp-confirm-row">
+          <label class="pp-confirm-label" for="pp-project-name">Project name</label>
           <input
+            id="pp-project-name"
             class="pp-path"
             aria-label="project name"
             bind:value={name}
