@@ -1015,6 +1015,93 @@ describe("auto-review", () => {
     ]);
   });
 
+  test("a rate-limit death auto-retries via the resume queue, bounded at two, then parks as today", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const spawnedCalls: Array<{ mode?: string; sessionId?: string }> = [];
+    const spawnFn: SpawnFn = async (job) => {
+      spawnedCalls.push({ mode: job.mode, sessionId: job.sessionId });
+      return { code: 1, stderrTail: "429 Too Many Requests" };
+    };
+
+    start(spawnFn, dbFile, { retryDelayMs: 5 });
+    // Wait for all 3 spawns: spawn 1 (dies, queues 5ms delay) -> spawn 2 (dies, queues 10ms delay) -> spawn 3 (dies, exhausts retries)
+    await sleep(200);
+
+    expect(spawnedCalls).toHaveLength(3);
+    expect(spawnedCalls[0].mode).toBeUndefined();
+    expect(spawnedCalls[1].mode).toBe("resume");
+    expect(spawnedCalls[1].sessionId).toBeDefined();
+    expect(spawnedCalls[2].mode).toBe("resume");
+    expect(spawnedCalls[2].sessionId).toBe(spawnedCalls[1].sessionId);
+
+    const comments = db!.comments(card.id);
+    const diedComments = comments.filter((c) => c.body.startsWith(KanbanDb.SESSION_DIED_PREFIX));
+    expect(diedComments).toHaveLength(3);
+    expect(diedComments[0].body).toEndWith("— auto-retry 1/2 (rate-limit)");
+    expect(diedComments[1].body).toEndWith("— auto-retry 2/2 (rate-limit)");
+    expect(diedComments[2].body).toEndWith("; comment on this card to re-trigger.");
+    expect(diedComments[2].body).not.toContain("auto-retry");
+
+    // Total spawns cap at 3, no 4th after exhaustion
+    await sleep(50);
+    expect(spawnedCalls).toHaveLength(3);
+    expect(db!.resumeRequests()).toHaveLength(0);
+  });
+
+  test("a non-retryable death parks with today's comment, unchanged", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    let spawns = 0;
+    const spawnFn: SpawnFn = async () => {
+      spawns++;
+      return { code: 1, stderrTail: "Error: ECONNREFUSED" };
+    };
+    start(spawnFn, dbFile, { retryDelayMs: 5 });
+    await sleep(50);
+
+    expect(spawns).toBe(1);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.author).toBe(REVIEWER_AUTHOR);
+    expect(last.body).toStartWith(
+      "session died: auto-review failed (exit 1 — Error: ECONNREFUSED) after",
+    );
+    expect(last.body).toEndWith("; comment on this card to re-trigger.");
+    expect(last.body).not.toContain("auto-retry");
+    expect(db!.resumeRequests()).toHaveLength(0);
+  });
+
+  test("all slots cooling parks the card with one consolidated incident comment", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("p1", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "zcode" }],
+    });
+    const card = cardInReview(w);
+    let spawns = 0;
+    const spawnFn: SpawnFn = async () => {
+      spawns++;
+      return {
+        code: 1,
+        stderrTail:
+          "Start Plan has no active model quota (expired, pending or exhausted)\nNo fallback to another plan was made",
+      };
+    };
+
+    start(spawnFn, dbFile);
+    await sleep(60);
+
+    expect(spawns).toBe(1);
+    const last = db!.comments(card.id).at(-1)!;
+    expect(last.body).toStartWith(KanbanDb.SESSION_DIED_PREFIX);
+    expect(last.body).toContain("'Reviewers': slot 0 provider-quota ×1");
+    expect(last.body).toContain("— every slot is cooling down:");
+    expect(last.body).toEndWith("; comment on this card to re-trigger.");
+    expect(db!.resumeRequests()).toHaveLength(0);
+  });
+
   test("pool edits apply to the next spawn", async () => {
     const { dbFile, writer: w } = setup();
     w.setPool("p-edit", {
@@ -1477,7 +1564,7 @@ describe("auto-review", () => {
     expect(last.author).toBe(REVIEWER_AUTHOR);
     expect(last.body).toStartWith("session died: auto-review stalled after");
     expect(last.body).toContain("no output for 10 min");
-    expect(last.body).toEndWith("; comment on this card to re-trigger.");
+    expect(last.body).toEndWith("— auto-retry 1/2 (stall)");
   });
 
   test("defaultSpawn kills a silent session at the stall window and reports stalled", async () => {
@@ -1576,7 +1663,7 @@ describe("auto-review", () => {
     const last = db!.comments(card.id).at(-1)!;
     expect(last.body).toContain("session died: auto-review ended without a verdict after");
     expect(last.body).toContain("model returned no output");
-    expect(last.body).toContain("; comment on this card to re-trigger.");
+    expect(last.body).toEndWith("— auto-retry 1/2 (no-output)");
     const logs = db!.attachments(card.id, "session");
     expect(logs.length).toBe(1);
     expect(logs[0]!.content).toContain("stderr tail:");

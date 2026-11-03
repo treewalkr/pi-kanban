@@ -6,11 +6,16 @@ import {
   classifySpawnFailure,
   DEFAULT_COOLDOWN_MS,
   PROVIDER_LEVEL_CAUSES,
+  RETRYABLE_CAUSES,
   SlotHealth,
   type IncidentCause,
   type PoolHealthSummary,
   type SlotIncident,
 } from "./incidents";
+
+export const RETRY_LIMIT = 2;
+export const RETRY_MARKER = "— auto-retry ";
+export const DEFAULT_RETRY_DELAY_MS = 30_000;
 
 export type { AgentRole, BuiltinAgentRole, LaneActor, LaneContext };
 export { PLAN_REVIEWER_AUTHOR };
@@ -1224,17 +1229,99 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           waitHintMs != null ? { waitHintMs } : undefined,
         );
       }
-      // deathHint carries its own separator (the seeded voices differ: " — " vs "; ")
+
+      // backward scan for retriesUsed:
+      // Scan comments newest→oldest from the new death: count bodies that start with
+      // SESSION_DIED_PREFIX and include RETRY_MARKER; continue over any SESSION_DIED_PREFIX
+      // comment (marked or plain) and any SESSION_RESUMED_PREFIX comment; break at the first
+      // comment that is neither.
+      const taskComments = db.comments(task.id);
+      let retriesUsed = 0;
+      for (let i = taskComments.length - 1; i >= 0; i--) {
+        const c = taskComments[i];
+        const isDied = c.body.startsWith(KanbanDb.SESSION_DIED_PREFIX);
+        const isResumed = c.body.startsWith(KanbanDb.SESSION_RESUMED_PREFIX);
+        if (isDied) {
+          if (c.body.includes(RETRY_MARKER)) {
+            retriesUsed++;
+          }
+          continue;
+        }
+        if (isResumed) {
+          continue;
+        }
+        break;
+      }
+
+      const covering = db.pools().filter((p) => p.enabled && p.roles.includes(job.role as BuiltinAgentRole));
+      const allCooling =
+        covering.length > 0 &&
+        covering.every((p) => {
+          const cap = p.maxWorkers ?? p.slots.length;
+          for (let i = 0; i < cap; i++) {
+            if (!health.isCooling(p.id, i)) return false;
+          }
+          return true;
+        });
+      const anyHealthy = covering.length > 0 && !allCooling;
+
+      const label = actor?.deathLabel ?? job.role;
       const tail =
         actor?.deathHint ??
         (job.mode === "plan"
           ? " — plan not built, needs a human. comment on this card to re-trigger."
           : " — findings unaddressed, needs a human. comment on this card to re-trigger.");
-      db.createComment(task.id, {
-        author,
-        kind: "comment",
-        body: `${KanbanDb.SESSION_DIED_PREFIX}${actor?.deathLabel ?? job.role} ${reason}${tail}`,
-      });
+
+      if (PROVIDER_LEVEL_CAUSES.has(cause) && allCooling) {
+        // Consolidated park when every slot is cooling
+        const desc = covering
+          .map((pool) => {
+            const cap = pool.maxWorkers ?? pool.slots.length;
+            const slotParts: string[] = [];
+            for (let i = 0; i < cap; i++) {
+              const inc = health.incident(pool.id, i);
+              if (inc) {
+                slotParts.push(`slot ${i} ${inc.cause} ×${inc.count}`);
+              }
+            }
+            return `'${pool.name}': ${slotParts.join(", ")}`;
+          })
+          .join("; ");
+        db.createComment(task.id, {
+          author,
+          kind: "comment",
+          body: `${KanbanDb.SESSION_DIED_PREFIX}${label} ${reason} — every slot is cooling down: ${desc}${tail}`,
+        });
+      } else if (
+        retriesUsed < RETRY_LIMIT &&
+        (RETRYABLE_CAUSES.has(cause) ||
+          (PROVIDER_LEVEL_CAUSES.has(cause) && allocated.pool && anyHealthy))
+      ) {
+        // Retry
+        const n = retriesUsed + 1;
+        db.createComment(task.id, {
+          author,
+          kind: "comment",
+          body: `${KanbanDb.SESSION_DIED_PREFIX}${label} ${reason} ${RETRY_MARKER}${n}/${RETRY_LIMIT} (${cause})`,
+        });
+        const delayMs = (opts.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS) * n;
+        const timer = setTimeout(() => {
+          try {
+            db.queueResume(task.id);
+            scan();
+          } catch {
+            /* db may be closed */
+          }
+        }, delayMs);
+        timer.unref?.();
+      } else {
+        // Plain park
+        db.createComment(task.id, {
+          author,
+          kind: "comment",
+          body: `${KanbanDb.SESSION_DIED_PREFIX}${label} ${reason}${tail}`,
+        });
+      }
     }
   }
 
