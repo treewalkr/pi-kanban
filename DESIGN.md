@@ -172,7 +172,7 @@ Dark grays stepped one from another; the accent is a pastel blue that reads as "
 
 A fixed left sidebar (resizable, default 260px, collapsible) and a horizontal lane scroller filling the rest. Lanes are equal-width columns (~260–300px) with a header row (name, WIP count chip) and a card stack; fixed lanes "Waiting on you" and "Backlog" lead, Done trails. Cards are 2-line-max dense blocks (id + title + chips).
 
-Modals overlay centered (max 720px wide for the card editor, 500px detail panels); drawers slide from the right (chat) or bottom. The chrome z-ladder is fixed: content < sticky headers < modals (40) < palettes/confirm (45) < expanded chat (55); any persistent chrome above 40 hides while a modal is open.
+Modals overlay centered (min(720px, 90vw) for the card editor and the card detail; min(960px, 94vw) for the file preview); drawers slide from the right (chat) or bottom. The chrome z-ladder is fixed: content < sticky headers < modals (40) < palettes/confirm (45) < expanded chat (55); any persistent chrome above 40 hides while a modal is open.
 
 Breakpoints: 640px (sidebar becomes a slide-in overlay, touch targets grow to 44px), 450px (header folds to two rows, search first), 420px (three rows). Spacing rhythm is 6/8/10/12px; card interiors pad 8px 10px; row gaps 6–8px. Density beats air: the board is meant to be scanned, not admired.
 

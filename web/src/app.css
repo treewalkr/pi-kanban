@@ -2121,6 +2121,11 @@ body.drag-live {
     max-height: calc(100dvh - 24px);
   }
 
+  .editor .editor-toggle-btn {
+    height: 44px;
+    padding: 0 14px;
+  }
+
   .editor-actions, .composer-actions {
     flex-wrap: wrap;
   }
@@ -2561,7 +2566,7 @@ body.drag-live {
 }
 
 .editor {
-  width: 500px;
+  width: min(720px, 90vw);
   max-width: 100%;
   max-height: calc(100vh - 40px); /* overlay has 20px padding all around */
   overflow-y: auto; /* fallback if pinned sections alone fill the viewport */
@@ -2623,6 +2628,42 @@ body.drag-live {
 .settings-form .row label {
   flex: 1;
   min-width: 0;
+}
+
+/* note field: label + the edit|preview toggle on one row */
+.editor .field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* rides .ghost for the 28px metric, border, radius and hover fill; the pressed
+   state stacks icon + label + accent pill (REVIEW.md a59042a) */
+.editor-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.editor-toggle-btn[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.editor-toggle-btn[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* preview scrolls instead of growing the dialog past half the viewport,
+   mirroring fitNote's cap on the textarea */
+.editor-note-preview {
+  max-height: 50vh;
+  overflow-y: auto;
 }
 
 /* the settings agents section keeps the editor dialog's column rhythm */
@@ -3525,11 +3566,7 @@ a.dep-chip.gh-link .gh-state {
 }
 
 /* ---------- card detail dialog ---------- */
-
-/* wider than the 500px edit form: use the space on wide screens, clamp to the overlay on small ones */
-.editor.detail {
-  width: min(720px, 90vw);
-}
+/* the detail modal shares the editor's width: the base .editor rule, no override */
 
 /* ---------- file preview dialog ---------- */
 
@@ -4544,6 +4581,11 @@ a.dep-chip.gh-link .gh-state {
   .dep-x {
     min-height: 28px;
     padding: 4px 8px;
+  }
+
+  .editor .editor-toggle-btn {
+    height: 44px;
+    padding: 0 14px;
   }
 }
 
