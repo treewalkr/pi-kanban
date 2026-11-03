@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent, type Stats } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent, type Stats } from "node:fs";
 import * as path from "node:path";
 import { KanbanError } from "./db";
 
@@ -150,9 +150,20 @@ export async function listFiles(root: string, dirPath: string): Promise<FileEntr
   return entries;
 }
 
+/** Expand a leading "~" / "~/" against homeRoot; anything else (including "~user") is returned trimmed, unchanged. */
+export function expandHome(homeRoot: string, input: string): string {
+  const trimmed = input.trim();
+  if (trimmed === "") return "";
+  if (trimmed === "~") return path.resolve(homeRoot);
+  if (trimmed.startsWith("~/")) {
+    return path.join(path.resolve(homeRoot), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
 export async function listDirs(homeRoot: string, dirPath = ""): Promise<DirListing> {
   const rootResolved = path.resolve(homeRoot);
-  const raw = dirPath.trim();
+  const raw = expandHome(rootResolved, dirPath);
   const target = raw === "" ? rootResolved : path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(rootResolved, raw);
 
   const rootWithSep = rootResolved.endsWith(path.sep) ? rootResolved : rootResolved + path.sep;
@@ -228,6 +239,48 @@ export async function listDirs(homeRoot: string, dirPath = ""): Promise<DirListi
     isGitRepo: existsSync(path.join(target, ".git")),
     dirs,
   };
+}
+
+/** Create one child directory of parentPath under homeRoot; refuses escapes, non-single-segment or dot names, and existing targets. */
+export async function createDir(
+  homeRoot: string,
+  parentPath: string,
+  name: string,
+): Promise<{ path: string }> {
+  const clean = name.trim();
+  if (
+    clean === "" ||
+    clean === "." ||
+    clean === ".." ||
+    clean.startsWith(".") ||
+    clean.includes("/") ||
+    clean.includes("\\")
+  ) {
+    throw new KanbanError(
+      `invalid directory name '${name}': use a single name without slashes or a leading dot`,
+      "invalid",
+    );
+  }
+
+  const parent = await listDirs(homeRoot, parentPath);
+  const target = path.join(parent.path, clean);
+
+  if (existsSync(target)) {
+    throw new KanbanError(`directory '${clean}' already exists in ${parent.path}`, "conflict");
+  }
+
+  try {
+    mkdirSync(target, { mode: 0o755 });
+  } catch (err: any) {
+    if (err.code === "EEXIST") {
+      throw new KanbanError(`directory '${clean}' already exists in ${parent.path}`, "conflict");
+    }
+    throw err;
+  }
+
+  chmodSync(target, 0o755);
+
+  return { path: target };
 }
 
 function pathDepth(p: string): number {

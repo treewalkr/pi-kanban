@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ProjectRoute } from "../../../src/db";
   import type { DirListing } from "../../../src/files";
+  import { projectNameFromPath } from "./projectPicker";
   import { projects } from "./projects.svelte";
 
   let saving = $state<Record<string, boolean>>({});
@@ -29,7 +30,7 @@
       const nextListing = await projects.listDirs(dirPath);
       if (nextListing) {
         listing = nextListing;
-        pickerName = nextListing.path.split("/").filter(Boolean).pop() ?? "";
+        pickerName = projectNameFromPath(nextListing.path);
       }
     } finally {
       loadingDirs = false;

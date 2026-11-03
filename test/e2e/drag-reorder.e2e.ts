@@ -31,6 +31,7 @@ async function pointerDrag(
   if (place === "none") {
     const lastCard = page.locator(`${targetSel} [data-card]`).last();
     if ((await lastCard.count()) > 0) {
+      await lastCard.scrollIntoViewIfNeeded();
       const lBox = await lastCard.boundingBox();
       if (lBox) {
         destX = lBox.x + lBox.width / 2;

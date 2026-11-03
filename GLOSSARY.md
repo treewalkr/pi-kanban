@@ -29,6 +29,14 @@ The stored mapping from a project tag to a repo path (`projects` table) that
 decides which repo a card's agents spawn in; un-routed tags fall back to the
 serve launch dir. _Avoid_: repo mapping, project binding, workspace.
 
+**Project picker**:
+The sidebar dropdown (`Sidebar.svelte`, `.picker-wrap`) that switches the board's project focus between `all projects` and one **Project**, carrying the per-project running/waiting badges.
+_Avoid_: project switcher, workspace picker, project menu
+
+**Directory picker**:
+The modal that browses directories under `$HOME` (`GET /fs/dirs`, `POST /fs/mkdir`) and registers the chosen folder as a **Project** with a **Project route**; opened from the **Project picker**'s `add project…` row, distinct from the settings Projects tab's inline browser.
+_Avoid_: folder browser, path chooser, add-project dialog
+
 **Thread**:
 The chronological conversation on a card where humans and agents record questions, handoffs, reviews, and gate verdicts.
 _Avoid_: Activity log, comment feed, discussion, chat history
@@ -84,6 +92,13 @@ The card or lane a move is positioned relative to (`mv <id> <lane> --before <anc
 `lane mv <ref> <before:<ref>|last>`), so placement survives concurrent edits
 instead of drifting like an index.
 _Avoid_: Reference card, pivot, position marker
+
+**Blocked**:
+A card with a `blocked_by` edge to at least one blocker outside Done or Archive
+(soft blocking) — `ls` prints `⊘`, the web dims it, `next` and the auto-agent
+loop skip it (no lane agent, no session resume), moves still proceed, and it
+unblocks when the last blocker leaves those lanes while the edge stays for history.
+_Avoid_: gated, locked, dependency, waiting
 
 **Slot**:
 The card-sized opening rendered at the drop hint while dragging — the dragged

@@ -314,8 +314,12 @@ class BoardStore {
   /** Queued agent jobs, no session yet, keyed by task id. */
   queued = $state<Record<string, QueuedJobInfo>>({});
 
+  /** Server-known project names from the board payload (stored routes ∪ card tags) — refreshed over SSE. */
+  projectNames = $state<string[]>([]);
+
+  /** Every project the picker may switch to: card tags plus registered, possibly card-less routes. */
   readonly projects = $derived(
-    [...new Set(this.tasks.map((t) => t.project).filter((p) => p !== ""))].sort(),
+    [...new Set([...this.tasks.map((t) => t.project).filter((p) => p !== ""), ...this.projectNames])].sort(),
   );
 
   /** Every tag on any card, incl. archive — derived live, no tag table. */
@@ -495,6 +499,7 @@ class BoardStore {
     this.ghLinks = boardRes.data.ghLinks ?? {};
     this.workspaces = boardRes.data.workspaces ?? {};
     this.laneContexts = boardRes.data.laneContexts ?? {}; // guards the dev-restart window like the other optional fields
+    this.projectNames = boardRes.data.projectNames ?? [];
     this.loading = false;
     const laneIds = new Set(this.lanes.map((l) => l.id));
     const liveCollapsed = new Set([...this.collapsedLanes].filter((id) => laneIds.has(id)));
