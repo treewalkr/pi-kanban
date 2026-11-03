@@ -178,12 +178,35 @@ describe("small-screen dialogs and inputs (app.css)", () => {
     expect(actionsRule).toBeDefined();
     expect(actionsRule!.style.flexWrap).toBe("wrap");
 
+    // the tab row never wraps inside the fixed-height header; it scrolls
+    // horizontally and the title yields so all sections stay reachable (q8x8g)
     const tabsRule = allInnerRules.find(
       (r) => r.selectorText === ".settings-tabs",
     );
     expect(tabsRule).toBeDefined();
-    expect(tabsRule!.style.flexWrap).toBe("wrap");
-    expect(tabsRule!.style.height).toBe("auto");
+    expect(tabsRule!.style.flexWrap).toBe("");
+    const tabRules = allInnerRules.filter((r) => r.selectorText === ".settings-tabs");
+    expect(tabRules.some((r) => r.style.marginLeft === "0px")).toBe(true);
+
+    const closeRule = allInnerRules.find(
+      (r) => r.selectorText === ".settings-close",
+    );
+    expect(closeRule).toBeDefined();
+    expect(closeRule!.style.width).toBe("44px");
+    expect(closeRule!.style.height).toBe("44px");
+
+    const titleRule = allInnerRules.find(
+      (r) => r.selectorText === ".settings-title",
+    );
+    expect(titleRule).toBeDefined();
+    expect(titleRule!.style.display).toBe("none");
+
+    const baseTabs = Array.from(dom.window.document.styleSheets[0].cssRules).find(
+      (r): r is CSSStyleRule =>
+        "selectorText" in r && (r as CSSStyleRule).selectorText === ".settings-tabs",
+    );
+    expect(baseTabs).toBeDefined();
+    expect(baseTabs!.style.overflowX).toBe("auto");
 
     const metaRule = allInnerRules.find(
       (r) =>
