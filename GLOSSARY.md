@@ -134,6 +134,20 @@ _Avoid_: Role, agent slot, worker
 The `pre-commit` + `pre-merge-commit` hooks (`scripts/hooks/`, wired via `core.hooksPath` by `install.sh`) that run `bun run check` + `bun test` before a commit or workspace merge lands. Docs-only commits skip it; `git commit --no-verify` is the WIP escape hatch (merges have none).
 _Avoid_: Pre-commit hook, husky, lint gate
 
+**Project override**:
+A per-project agent config (`project_agent_configs`) keyed by actor id —
+the same key space lane contexts use — that replaces fields of the merged
+actor config (board actor config + pool slot) for spawns on that project's
+cards; env vars still beat it, and a present key replaces even when empty
+(`skills: []` = no skills) while an absent key inherits.
+_Avoid_: project role, scoped config, project agent.
+
+**Per-project test command**:
+The `projects.test_cmd` string (null = board default `bun test`) the
+pre-spawn gate runs via `sh -c` in the project's routed repo before a
+reviewer session is spent, independent of the on/off `testGate` switch.
+_Avoid_: test script, gate command, custom runner.
+
 ## Autoreview roles
 
 **Planner** (`pi-planner`):
