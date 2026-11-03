@@ -300,6 +300,14 @@ class BoardStore {
     this.#persistCollapsed();
   }
 
+  #persistExpanded(): void {
+    try {
+      localStorage.setItem("kanban-expanded-parents", JSON.stringify([...this.expanded]));
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
   laneSearchHit(laneId: string): boolean {
     return this.search.trim() !== "" && this.visibleTasks(laneId).length > 0;
   }
@@ -457,6 +465,7 @@ class BoardStore {
     const next = new Set(this.expanded);
     if (!next.delete(id)) next.add(id);
     this.expanded = next;
+    this.#persistExpanded();
   }
 
   /** Jump from a search result: reveal the task on the board, then open it. */
@@ -464,6 +473,7 @@ class BoardStore {
     const next = new Set(this.expanded);
     for (const ancestor of this.ancestorsOf(task.id)) next.add(ancestor.id);
     this.expanded = next;
+    this.#persistExpanded();
     this.setLaneCollapsed(task.laneId, false);
     this.flashId = task.id;
     this.search = "";
