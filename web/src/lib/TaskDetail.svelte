@@ -10,7 +10,7 @@
   import { copyText } from "./copy";
   import { renderMarkdown, toggleTaskLine } from "./markdown";
   import { collapseDiff, parseUnifiedDiff } from "./fileview";
-  import { canPromoteToPlan, laneColor, roleAuthor, timeAgo } from "./util";
+  import { canPromoteToPlan, laneColor, nextPriority, roleAuthor, timeAgo } from "./util";
   import { canResume } from "./waiting";
   import { blockerCandidates } from "./blockerPicker";
 
@@ -351,6 +351,14 @@
       <span class="detail-lane">{laneName}</span>
       {#if me.project}<span class="chip">{me.project}</span>{/if}
       {#if me.tags.length > 0}{#each me.tags as tag (tag)}<span class="chip tag">#{tag}</span>{/each}{/if}
+      <button
+        class="chip prio-chip prio-{me.priority}"
+        aria-label={`priority ${me.id}: ${me.priority}`}
+        title={`priority ${me.priority} — click to set ${nextPriority(me.priority)}; affects what agents pick next`}
+        onclick={() => void board.cyclePriority(me.id)}
+      >
+        {me.priority === "high" ? "▲ high" : me.priority === "low" ? "▼ low" : "normal"}
+      </button>
       {#if board.workspaces[me.id]}
         {@const ws = board.workspaces[me.id]}
         <span class="chip ws" title={ws.path ?? "branch exists — no worktree checked out"}>
