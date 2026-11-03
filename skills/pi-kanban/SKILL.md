@@ -325,9 +325,11 @@ kanban help | version                                                 # CLI help
   its board writes land as ordinary thread entries; approve/reject stay
   human-owned.
 - **Ownership (`owner`)**: one visible fact for "who's on this". `handoff` into
-  Test + Implement sets it to `--author ?? user`; `approve` sets it to `pi-builder`;
-  leaving Test + Implement (mv, done, archive, park) clears it. `kanban claim <id>`
-  sets it manually; a foreign owner refuses without `--force`.
+  Test + Implement sets it to `--author ?? user`; `review --block` sets it to
+  the implement lane's lead actor (`pi-builder`), never the reviewer; `approve`
+  sets it to `pi-builder`; leaving Test + Implement (mv, done, archive, park)
+  clears it. `kanban claim <id>` sets it manually; a foreign owner refuses
+  without `--force`.
 - **Board notice**: `scripts/install.sh` symlinks `src/notice.ts` into
   `~/.pi/agent/extensions/kanban-notice.ts` — every pi session gets one
   `display:false` `[kanban board]` message at start and again only when the board's

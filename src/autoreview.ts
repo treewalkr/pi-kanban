@@ -2,6 +2,20 @@ import { homedir } from "node:os";
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, defaultLaneContext, PLAN_SECTIONS, PLAN_TEMPLATE, type AgentConfig, type AgentRole, type AgentThinking, type BuiltinAgentRole, type LaneActor, type LaneCapRule, type LaneContext, type LeaseOwner, type PoolSlot, type Task, type WorkerPool } from "./db";
+import {
+  classifySpawnFailure,
+  DEFAULT_COOLDOWN_MS,
+  PROVIDER_LEVEL_CAUSES,
+  RETRYABLE_CAUSES,
+  SlotHealth,
+  type IncidentCause,
+  type PoolHealthSummary,
+  type SlotIncident,
+} from "./incidents";
+
+export const RETRY_LIMIT = 2;
+export const RETRY_MARKER = "— auto-retry ";
+export const DEFAULT_RETRY_DELAY_MS = 30_000;
 
 export type { AgentRole, BuiltinAgentRole, LaneActor, LaneContext };
 export { PLAN_REVIEWER_AUTHOR };
@@ -90,6 +104,8 @@ export interface AutoReviewOptions {
   /** Pre-spawn test gate for reviewer jobs; null disables. Default: defaultGate, unless KANBAN_AUTOREVIEW_GATE=0. */
   gate?: GateFn | null;
   gateTimeoutMs?: number;
+  cooldownMs?: number;
+  retryDelayMs?: number;
 }
 
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 60_000;
@@ -160,6 +176,8 @@ export interface QueuedJobInfo {
 export interface ActivityReport {
   sessions: AgentSessionInfo[];
   queued: QueuedJobInfo[];
+  incidents: SlotIncident[];
+  pools: PoolHealthSummary[];
 }
 
 const activityProviders = new Set<() => ActivityReport>();
@@ -168,12 +186,16 @@ const activityProviders = new Set<() => ActivityReport>();
 export function activitySnapshot(): ActivityReport {
   const sessions: AgentSessionInfo[] = [];
   const queued: QueuedJobInfo[] = [];
+  const incidents: SlotIncident[] = [];
+  const pools: PoolHealthSummary[] = [];
   for (const provide of activityProviders) {
     const report = provide();
     sessions.push(...report.sessions);
     queued.push(...report.queued);
+    incidents.push(...report.incidents);
+    pools.push(...report.pools);
   }
-  return { sessions, queued };
+  return { sessions, queued, incidents, pools };
 }
 
 const pauseKillers = new Set<() => number>();
@@ -809,9 +831,12 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const queue: Array<AgentJob & { enqueuedAt: number }> = [];
   const inFlight = new Set<string>();
   const sessions = new Map<string, AgentSessionInfo>();
+  const health = new SlotHealth(opts.cooldownMs ?? DEFAULT_COOLDOWN_MS);
   const provide = (): ActivityReport => ({
     sessions: [...sessions.values()],
     queued: queue.map(({ task, role, enqueuedAt }) => ({ taskId: task.id, role, enqueuedAt })),
+    incidents: health.incidents(),
+    pools: health.poolSummaries(db.pools()),
   });
   activityProviders.add(provide);
   // kills holds cleanup handles (spawn kills *and* heartbeat clears), so the
@@ -840,6 +865,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
 
   function freeSlotFor(role: AgentRole): AllocatedSlot | null {
     const pools = db.pools();
+    health.syncPools(pools);
     // pools serve built-in loop roles only; a custom lane actor always takes the default slot
     const covering = pools.filter((p) => p.enabled && p.roles.includes(role as BuiltinAgentRole));
     if (covering.length > 0) {
@@ -847,7 +873,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         const cap = pool.maxWorkers ?? pool.slots.length;
         for (let i = 0; i < cap; i++) {
           const key = `${pool.id}:${i}`;
-          if (!busySlots.has(key)) {
+          if (!busySlots.has(key) && !health.isCooling(pool.id, i)) {
             return { key, slot: pool.slots[i], pool, slotIndex: i };
           }
         }
@@ -1102,7 +1128,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       inFlight.delete(job.task.id);
       if (!stopped) {
         try {
-          afterJob(job, result, session);
+          afterJob(job, result, session, allocated);
         } catch (err) {
           log(`${job.role} ${job.task.id}: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1160,7 +1186,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   /** Log the outcome; if the session died without leaving a trace, say so on the card.
    *  Shape comes from the job's lane context (card 3n96c): a gated lane's reviewer
    *  reports verdicts, any other actor reports where its handoff landed. */
-  function afterJob(job: AgentJob, result: SpawnResult, session: AgentSessionInfo): void {
+  function afterJob(job: AgentJob, result: SpawnResult, session: AgentSessionInfo, allocated: AllocatedSlot): void {
     const task = db.tasks().find((t) => t.id === job.task.id);
     if (!task) return;
     const last = db.comments(task.id).at(-1);
@@ -1194,17 +1220,108 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         log(`${job.role} ${task.id}: ${last.kind === "review" ? "verdict recorded" : "left a comment, no verdict"}`);
       }
     } else {
-      // deathHint carries its own separator (the seeded voices differ: " — " vs "; ")
+      const { cause, waitHintMs } = classifySpawnFailure(result, session.log);
+      if (allocated.pool && allocated.slotIndex !== undefined && PROVIDER_LEVEL_CAUSES.has(cause)) {
+        health.record(
+          allocated.pool,
+          allocated.slotIndex,
+          cause,
+          waitHintMs != null ? { waitHintMs } : undefined,
+        );
+      }
+
+      // backward scan for retriesUsed:
+      // Scan comments newest→oldest from the new death: count bodies that start with
+      // SESSION_DIED_PREFIX and include RETRY_MARKER; continue over any SESSION_DIED_PREFIX
+      // comment (marked or plain) and any SESSION_RESUMED_PREFIX comment; break at the first
+      // comment that is neither.
+      const taskComments = db.comments(task.id);
+      let retriesUsed = 0;
+      for (let i = taskComments.length - 1; i >= 0; i--) {
+        const c = taskComments[i];
+        const isDied = c.body.startsWith(KanbanDb.SESSION_DIED_PREFIX);
+        const isResumed = c.body.startsWith(KanbanDb.SESSION_RESUMED_PREFIX);
+        if (isDied) {
+          if (c.body.includes(RETRY_MARKER)) {
+            retriesUsed++;
+          }
+          continue;
+        }
+        if (isResumed) {
+          continue;
+        }
+        break;
+      }
+
+      const covering = db.pools().filter((p) => p.enabled && p.roles.includes(job.role as BuiltinAgentRole));
+      const allCooling =
+        covering.length > 0 &&
+        covering.every((p) => {
+          const cap = p.maxWorkers ?? p.slots.length;
+          for (let i = 0; i < cap; i++) {
+            if (!health.isCooling(p.id, i)) return false;
+          }
+          return true;
+        });
+      const anyHealthy = covering.length > 0 && !allCooling;
+
+      const label = actor?.deathLabel ?? job.role;
       const tail =
         actor?.deathHint ??
         (job.mode === "plan"
           ? " — plan not built, needs a human. comment on this card to re-trigger."
           : " — findings unaddressed, needs a human. comment on this card to re-trigger.");
-      db.createComment(task.id, {
-        author,
-        kind: "comment",
-        body: `${KanbanDb.SESSION_DIED_PREFIX}${actor?.deathLabel ?? job.role} ${reason}${tail}`,
-      });
+
+      if (PROVIDER_LEVEL_CAUSES.has(cause) && allCooling) {
+        // Consolidated park when every slot is cooling
+        const desc = covering
+          .map((pool) => {
+            const cap = pool.maxWorkers ?? pool.slots.length;
+            const slotParts: string[] = [];
+            for (let i = 0; i < cap; i++) {
+              const inc = health.incident(pool.id, i);
+              if (inc) {
+                slotParts.push(`slot ${i} ${inc.cause} ×${inc.count}`);
+              }
+            }
+            return `'${pool.name}': ${slotParts.join(", ")}`;
+          })
+          .join("; ");
+        db.createComment(task.id, {
+          author,
+          kind: "comment",
+          body: `${KanbanDb.SESSION_DIED_PREFIX}${label} ${reason} — every slot is cooling down: ${desc}${tail}`,
+        });
+      } else if (
+        retriesUsed < RETRY_LIMIT &&
+        (RETRYABLE_CAUSES.has(cause) ||
+          (PROVIDER_LEVEL_CAUSES.has(cause) && allocated.pool && anyHealthy))
+      ) {
+        // Retry
+        const n = retriesUsed + 1;
+        db.createComment(task.id, {
+          author,
+          kind: "comment",
+          body: `${KanbanDb.SESSION_DIED_PREFIX}${label} ${reason} ${RETRY_MARKER}${n}/${RETRY_LIMIT} (${cause})`,
+        });
+        const delayMs = (opts.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS) * n;
+        const timer = setTimeout(() => {
+          try {
+            db.queueResume(task.id);
+            scan();
+          } catch {
+            /* db may be closed */
+          }
+        }, delayMs);
+        timer.unref?.();
+      } else {
+        // Plain park
+        db.createComment(task.id, {
+          author,
+          kind: "comment",
+          body: `${KanbanDb.SESSION_DIED_PREFIX}${label} ${reason}${tail}`,
+        });
+      }
     }
   }
 

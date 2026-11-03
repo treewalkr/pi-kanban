@@ -64,8 +64,9 @@ _Avoid_: Dashboard, board summary, digest, glance
 
 **Owner**:
 The actor currently responsible for a card, recorded as a `tasks.owner` value
-set when a card enters Test + Implement and cleared when it leaves, making
-"who's on this" a fact rather than a thread-read.
+set when a card enters Test + Implement — the handing-off actor, or the lane's
+lead actor on a review return — and cleared when it leaves, making "who's on
+this" a fact rather than a thread-read.
 _Avoid_: Assignee, claimant, holder, session binding
 
 **Lead actor**:
@@ -90,6 +91,18 @@ The transform-immune position of a card (its offsetTop/offsetHeight place in
 the lane) while `animate:flip` runs; drag hints are decided against settled
 layout so measurement never chases moving cards.
 _Avoid_: resting position, final position
+
+**Pool slot**:
+One concurrency opening of a worker pool (`worker_pools`): a `{provider, model, thinking}` override the loop merges over the role's agent config when it spawns there. Distinct from the drag-and-drop **Slot**.
+_Avoid_: worker, lane slot, agent seat.
+
+**Incident**:
+A terminal spawn failure recorded against a pool slot, classified by cause (`provider-quota`, `auth`, `rate-limit`, `timeout`, `stall`, `no-output`, `other`); aggregated per (pool, slot) in `kanban ps` and `kanban check`.
+_Avoid_: Error, failure event, crash log.
+
+**Cooldown**:
+The temporary window during which the loop's allocator skips a pool slot after a provider-level incident — 15 min by default, or the provider's parsed wait hint clamped to 1–60 min; expiry requalifies the slot (the next spawn is the probe) and a pool edit resets it instantly. Never permanent.
+_Avoid_: Disable, ban, blocklist.
 
 **Ghost**:
 The inert DOM clone of the dragged card that follows the cursor during a

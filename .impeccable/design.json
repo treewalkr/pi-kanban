@@ -1,0 +1,418 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-03T05:30:45.734Z",
+  "title": "Design System: Pi Kanban",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Quiet Blue",
+        "canonical": "#a4c2f4",
+        "tonalRamp": [
+          "#292f39",
+          "#424c5e",
+          "#5a6a84",
+          "#7387a9",
+          "#a4c2f4",
+          "#b7cff6",
+          "#cbdcf9",
+          "#dee9fb"
+        ]
+      },
+      "accent_hover": {
+        "role": "primary",
+        "displayName": "Quiet Blue Hover",
+        "canonical": "#c3d8fa",
+        "tonalRamp": [
+          "#2f333a",
+          "#4d5460",
+          "#6a7587",
+          "#8896ad",
+          "#c3d8fa",
+          "#d0e0fb",
+          "#dde9fc",
+          "#e9f1fd"
+        ]
+      },
+      "bg": {
+        "role": "neutral",
+        "displayName": "Canvas",
+        "canonical": "#1a1a1a",
+        "tonalRamp": [
+          "#0d0d0d",
+          "#101010",
+          "#121212",
+          "#151515",
+          "#1a1a1a",
+          "#4b4b4b",
+          "#7c7c7c",
+          "#acacac"
+        ]
+      },
+      "bg_panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "canonical": "#242424",
+        "tonalRamp": [
+          "#0f0f0f",
+          "#131313",
+          "#171717",
+          "#1c1c1c",
+          "#242424",
+          "#535353",
+          "#818181",
+          "#b0b0b0"
+        ]
+      },
+      "bg_hover": {
+        "role": "neutral",
+        "displayName": "Hover",
+        "canonical": "#2e2e2e",
+        "tonalRamp": [
+          "#111111",
+          "#171717",
+          "#1d1d1d",
+          "#222222",
+          "#2e2e2e",
+          "#5b5b5b",
+          "#878787",
+          "#b4b4b4"
+        ]
+      },
+      "bg_selected": {
+        "role": "neutral",
+        "displayName": "Selected",
+        "canonical": "#383838",
+        "tonalRamp": [
+          "#131313",
+          "#1a1a1a",
+          "#222222",
+          "#292929",
+          "#383838",
+          "#626262",
+          "#8d8d8d",
+          "#b7b7b7"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#454545",
+        "tonalRamp": [
+          "#161616",
+          "#1f1f1f",
+          "#292929",
+          "#323232",
+          "#454545",
+          "#6d6d6d",
+          "#949494",
+          "#bcbcbc"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Text",
+        "canonical": "#e8e8e8",
+        "tonalRamp": [
+          "#363636",
+          "#5a5a5a",
+          "#7d7d7d",
+          "#a1a1a1",
+          "#e8e8e8",
+          "#ededed",
+          "#f2f2f2",
+          "#f7f7f7"
+        ]
+      },
+      "text_muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "canonical": "#b7b7b7",
+        "tonalRamp": [
+          "#2d2d2d",
+          "#494949",
+          "#646464",
+          "#808080",
+          "#b7b7b7",
+          "#c6c6c6",
+          "#d6d6d6",
+          "#e5e5e5"
+        ]
+      },
+      "text_dim": {
+        "role": "neutral",
+        "displayName": "Dim",
+        "canonical": "#a4a4a4",
+        "tonalRamp": [
+          "#292929",
+          "#424242",
+          "#5a5a5a",
+          "#737373",
+          "#a4a4a4",
+          "#b7b7b7",
+          "#cbcbcb",
+          "#dedede"
+        ]
+      },
+      "error": {
+        "role": "tertiary",
+        "displayName": "Error Red",
+        "canonical": "#f87171",
+        "tonalRamp": [
+          "#3a1f1f",
+          "#602f2f",
+          "#864040",
+          "#ac5050",
+          "#f87171",
+          "#fa8f8f",
+          "#fbaeae",
+          "#fdcccc"
+        ]
+      },
+      "warn": {
+        "role": "tertiary",
+        "displayName": "Warn Amber",
+        "canonical": "#d29922",
+        "tonalRamp": [
+          "#32270f",
+          "#523e13",
+          "#725517",
+          "#926b1a",
+          "#d29922",
+          "#dcaf51",
+          "#e5c580",
+          "#efdaaf"
+        ]
+      },
+      "lane_blue": {
+        "role": "tertiary",
+        "displayName": "Lane Blue",
+        "canonical": "#a4c2f4",
+        "tonalRamp": [
+          "#292f39",
+          "#424c5e",
+          "#5a6a84",
+          "#7387a9",
+          "#a4c2f4",
+          "#b7cff6",
+          "#cbdcf9",
+          "#dee9fb"
+        ]
+      },
+      "lane_amber": {
+        "role": "tertiary",
+        "displayName": "Lane Amber",
+        "canonical": "#e8b27a",
+        "tonalRamp": [
+          "#362c20",
+          "#5a4732",
+          "#7d6244",
+          "#a17c56",
+          "#e8b27a",
+          "#edc296",
+          "#f2d3b3",
+          "#f7e3cf"
+        ]
+      },
+      "lane_green": {
+        "role": "tertiary",
+        "displayName": "Lane Green",
+        "canonical": "#acccb7",
+        "tonalRamp": [
+          "#2a312d",
+          "#445049",
+          "#5e6f64",
+          "#788e80",
+          "#acccb7",
+          "#bed7c6",
+          "#d0e2d6",
+          "#e1ece5"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "body": {
+        "displayName": "Body",
+        "purpose": "Base UI text."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Card titles, column headers, sections."
+      },
+      "display": {
+        "displayName": "Display",
+        "purpose": "Brand mark and modal titles — one per surface."
+      },
+      "meta": {
+        "displayName": "Meta (Mono)",
+        "purpose": "Ids, paths, counts, timestamps — machine-adjacent strings."
+      }
+    },
+    "shadows": [
+      {
+        "name": "popover",
+        "value": "0 6px 20px rgba(0, 0, 0, 0.1)",
+        "purpose": "Floating menus, palettes, search dropdown — with a 1px border."
+      },
+      {
+        "name": "drawer",
+        "value": "8px 0 24px rgba(0, 0, 0, 0.25)",
+        "purpose": "Directional shadow for the slide-in chat drawer."
+      },
+      {
+        "name": "overlay-scrim",
+        "value": "rgba(0, 0, 0, 0.35)",
+        "purpose": "Modal backdrops — never opaque."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state",
+        "value": "0.12s ease",
+        "purpose": "Hover/fill/color state changes."
+      },
+      {
+        "name": "panel",
+        "value": "0.2s ease",
+        "purpose": "Sidebar width, drawer slide, panel transitions."
+      },
+      {
+        "name": "card-flash",
+        "value": "1.5s ease-out",
+        "purpose": "Locate-card highlight pulse."
+      },
+      {
+        "name": "flip",
+        "value": "300ms",
+        "purpose": "Lane drag FLIP reordering (animate:flip)."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "header-2row",
+        "value": "450px"
+      },
+      {
+        "name": "header-3row",
+        "value": "420px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The rare accent-filled action — approve, save, send.",
+      "html": "<button class=\"ds-btn-primary\">Approve</button>",
+      "css": ".ds-btn-primary { background: var(--accent); color: var(--accent-contrast); border: none; border-radius: 7px; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; transition: background 0.12s ease; } .ds-btn-primary:hover { background: var(--accent-hover); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Default button of the app — quiet until hovered.",
+      "html": "<button class=\"ds-btn-ghost\">Edit</button>",
+      "css": ".ds-btn-ghost { background: transparent; color: var(--text-muted); border: none; border-radius: 5px; padding: 2px 7px; font: inherit; font-size: 12px; cursor: pointer; transition: background 0.12s ease, color 0.12s ease; } .ds-btn-ghost:hover { background: var(--bg-hover); color: var(--text); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A board card: 3px lane-accent top bar, dense two-line body.",
+      "html": "<div class=\"ds-card\"><span class=\"ds-card-id\">r52wu</span><span class=\"ds-card-title\">Fix drag jerk in lane</span></div>",
+      "css": ".ds-card { position: relative; background: var(--bg-hover); border: 1px solid var(--border); border-top: 3px solid var(--accent); border-radius: 7px; padding: 8px 10px; cursor: grab; } .ds-card-id { display: block; font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; color: var(--text-dim); } .ds-card-title { display: block; margin-top: 2px; font-size: 12px; color: var(--text); }"
+    },
+    {
+      "name": "Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Pill chip for tags, counts, WIP warnings.",
+      "html": "<span class=\"ds-chip\">#web · 2</span>",
+      "css": ".ds-chip { display: inline-block; background: var(--bg-subtle, rgba(255,255,255,0.04)); color: var(--text-muted); border-radius: 999px; padding: 0 8px; font-size: 10px; line-height: 1.6; }"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Text field — mono variant for ids/paths.",
+      "html": "<input class=\"ds-input\" placeholder=\"/absolute/path\" />",
+      "css": ".ds-input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 4px 8px; font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 12px; } .ds-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }"
+    },
+    {
+      "name": "Modal",
+      "kind": "custom",
+      "refersTo": "modal",
+      "description": "Centered overlay panel — card editor, confirmations.",
+      "html": "<div class=\"ds-modal\"><h3 class=\"ds-modal-title\">Card r52wu</h3><p class=\"ds-modal-body\">Move to Review?</p></div>",
+      "css": ".ds-modal { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; box-shadow: 0 6px 20px rgba(0,0,0,0.1); max-width: 400px; } .ds-modal-title { margin: 0 0 6px; font-size: 13px; font-weight: 600; } .ds-modal-body { margin: 0; font-size: 12px; color: var(--text-muted); }"
+    },
+    {
+      "name": "Code Block",
+      "kind": "custom",
+      "refersTo": "code-block",
+      "description": "Mono block with header strip — scrolls, never wraps.",
+      "html": "<div class=\"ds-code\"><div class=\"ds-code-head\">ts</div><pre class=\"ds-code-body\">const lane = board.lanes[0];</pre></div>",
+      "css": ".ds-code { border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--bg); } .ds-code-head { padding: 4px 10px; background: var(--bg-panel); border-bottom: 1px solid var(--border); color: var(--text-muted); font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; } .ds-code-body { margin: 0; padding: 8px 10px; font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; color: var(--text); overflow-x: auto; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Workbench",
+    "overview": "A board is an operations room, not a landing page. Everything is flat, bordered, and quiet: neutral gray surfaces stack by tone, hairline borders do the separating, and exactly one soft blue accent is allowed to speak. Density is a feature — a kanban card carries an id, a title, chips, and a lane color in two lines of 12px text, and the board still breathes. The work is the color; the interface is the wall it hangs on.\n\nThe mono voice carries all metadata. Card ids, paths, lane names, counts, timestamps, and version chips are 11px JetBrains Mono in muted grays — the terminal cadence of the pi agent the board serves. Body and titles are the native system stack, never decorative.\n\nLight theme is the same system on white: the gray ladder flips direction, the accent deepens for contrast on white, and nothing else changes. Themes swap token values only; no component ever hardcodes a theme.",
+    "keyCharacteristics": [
+      "Flat surfaces, 1px borders, tonal layering — shadows only for floating layers (modals, drawers, popovers)",
+      "One accent (soft slate blue) at ≤10% of any screen; eight muted lane hues are the only other colors",
+      "Mono 11px for all meta; system sans for body and titles",
+      "Tight radii: 8px panels, 7px controls, 5px small bits",
+      "Focus-visible outlines everywhere: 2px accent, offset 2px",
+      "Scrollbars invisible until their container scrolls"
+    ],
+    "rules": [
+      {
+        "name": "The One Voice Rule",
+        "body": "The accent appears on ≤10% of any screen. If everything is accented, nothing is.",
+        "section": "colors"
+      },
+      {
+        "name": "The Hairline Rule",
+        "body": "Separation is a 1px border or a tone step, never a shadow at rest and never a second border color.",
+        "section": "colors"
+      },
+      {
+        "name": "The Fixed Palette Rule",
+        "body": "No new hues. UI color = grays + accent; lanes = the eight lane hues; status = error/warn. Anything else is a bug in the design, not a feature.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mono-Meta Rule",
+        "body": "If a string would be typed into a terminal (id, path, sha, command, count), it renders in mono at meta size. If a human wrote it as prose, it's sans.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-By-Default Rule",
+        "body": "Nothing at rest casts a shadow. A shadow means \"I float above the board\" — popover, drawer, modal — and nothing else.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use color-mix(in srgb, var(--border) N%, transparent) for translucent borders — one border token, infinite alphas.",
+      "Do give every interactive element a :focus-visible style (2px accent, 2px offset) — the board is keyboard-driven as much as mouse-driven.",
+      "Do render ids, paths, counts, and commands in mono meta text.",
+      "Do stack toggle states with multiple cues (filled icon + tinted pill + accent), never hue alone.",
+      "Do keep touch targets ≥44px under 640px and on coarse pointers.",
+      "Do check the z-ladder before adding any fixed/overlay element (40 / 45 / 55), and hide chrome above 40 when a modal opens."
+    ],
+    "donts": [
+      "Don't add a new hue, gradient, or font — grays + accent + lane eight + error/warn is the whole palette; system stacks are the whole type system.",
+      "Don't shadow anything at rest, or use borders on floating layers without their popover shadow.",
+      "Don't wrap code blocks; they scroll.",
+      "Don't use emoji or icon fonts in the UI; Lucide SVGs for buttons, text glyphs for chips and CLI-rendered states.",
+      "Don't let an accent fill exceed ~10% of a screen — primary buttons stay small and rare.",
+      "Don't invent per-component colors that bypass the token vars; theme switching (dark ↔ light) must stay a pure token swap."
+    ]
+  }
+}
