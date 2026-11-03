@@ -539,6 +539,55 @@ test("createLane slugifies and dedupes ids", () => {
   expect(second.id).toBe("blocked-2");
 });
 
+test("moveLane: before-anchor and last round-trip; order persists via lanes()", () => {
+  db.createLane({ name: "Staging" });
+  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "done", "archive", "staging"]);
+
+  const moved = db.moveLane("staging", "review");
+  expect(moved.id).toBe("staging");
+  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "staging", "review", "done", "archive"]);
+
+  db.moveLane("staging", null); // null anchor = literal last
+  expect(db.lanes().map((l) => l.id).at(-1)).toBe("staging");
+
+  // anchors resolve like every other lane ref (name and ordinal forms)
+  expect(db.moveLane("staging", "Done").id).toBe("staging");
+  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "staging", "done", "archive"]);
+
+  const path = join(dir, "t.db");
+  db.close();
+  const reopened = new KanbanDb(path);
+  expect(reopened.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "staging", "done", "archive"]);
+  reopened.close();
+  db = new KanbanDb(path);
+});
+
+test("fixed lanes refuse reorder and delete; self-anchor and index+before refused", () => {
+  expect(() => db.moveLane("waiting", "review")).toThrow(/lane 'waiting' is fixed and cannot be reordered/);
+  expect(() => db.updateLane("done", { index: 0 })).toThrow(/is fixed and cannot be reordered/);
+  expect(() => db.moveLane("archive", null)).toThrow(/is fixed and cannot be reordered/);
+  expect(() => db.deleteLane("waiting")).toThrow(/lane 'waiting' is fixed and cannot be deleted/);
+  expect(() => db.moveLane("review", "review")).toThrow(/lane 'review' cannot be moved before itself/);
+  expect(() => db.updateLane("review", { index: 1, before: "plan" })).toThrow(/pass either index or before, not both/);
+  // anchors may be fixed lanes — only the moved lane's fixedness is refused
+  expect(db.moveLane("review", "done").id).toBe("review");
+  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "done", "archive"]);
+});
+
+test("lane positions renormalize to GAP spacing when squeezed", () => {
+  const raw = new Database(join(dir, "t.db"));
+  raw.run("UPDATE lanes SET position = 100.005 WHERE id = 'plan'");
+  raw.run("UPDATE lanes SET position = 100.01 WHERE id = 'implement'");
+  raw.close();
+
+  db.moveLane("review", "plan"); // a reorder write triggers the renormalize
+  const positions = db.lanes().map((l) => l.position);
+  expect(positions.length).toBeGreaterThan(2);
+  for (let i = 1; i < positions.length; i++) {
+    expect(positions[i] - positions[i - 1]).toBeCloseTo(100);
+  }
+});
+
 test("board groups tasks by lane order", () => {
   db.createTask({ title: "a", lane: "done" });
   db.createTask({ title: "b" });

@@ -1566,6 +1566,47 @@ test("search --tag scopes results to tagged cards", async () => {
   expect(results.results.every((r) => byId.get(r.id)?.tags.includes("ui"))).toBe(true);
 });
 
+test("lane mv reorders before a ref or last; usage error; fixed lane refused", async () => {
+  const mvDb = join(dir, "lane-mv.db");
+  const run = (...args: string[]) => {
+    const proc = Bun.spawn(["bun", "src/cli.ts", ...args], {
+      cwd: root,
+      env: { ...process.env, KANBAN_DB: mvDb, NO_COLOR: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code }));
+  };
+  const order = async (): Promise<string[]> =>
+    ((JSON.parse((await run("lane", "ls", "--json")).stdout) as Array<{ id: string }>)).map((l) => l.id);
+
+  const before = await run("lane", "mv", "review", "before:implement");
+  expect(before.code).toBe(0);
+  expect(before.stdout).toContain("review  moved before implement");
+  expect(await order()).toEqual(["waiting", "backlog", "plan", "review", "implement", "done", "archive"]);
+
+  const last = await run("lane", "mv", "review", "last");
+  expect(last.code).toBe(0);
+  expect(last.stdout).toContain("review  moved last");
+  expect((await order()).at(-1)).toBe("review");
+
+  const usage = await run("lane", "mv", "review");
+  expect(usage.code).not.toBe(0);
+  expect(usage.stderr).toContain("usage: kanban lane mv <ref> <before:<ref>|last>");
+
+  const badFlag = await run("lane", "mv", "review", "plan");
+  expect(badFlag.code).not.toBe(0);
+  expect(badFlag.stderr).toContain("usage: kanban lane mv");
+
+  const fixed = await run("lane", "mv", "waiting", "last");
+  expect(fixed.code).not.toBe(0);
+  expect(fixed.stderr).toContain("is fixed and cannot be reordered");
+});
+
 test("lane limit sets, shows in lane ls, clears with off", async () => {
   const wipDb = join(dir, "lane-limit.db");
   const run = (...args: string[]) => {

@@ -50,7 +50,7 @@ usage:
   kanban check [--json] [--port <n>]        (board-health lint: done parents w/ active children, children behind parent, planless build cards, lanes over WIP limit, stale/down serve; advisory, exit 0)
   kanban stats [id]                     (board summary, or one card's lane times / cycle / gate metrics)
   kanban rm <id> [--force]                   (deleting a parent needs --force)
-  kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force] | limit <ref> <n|off>
+  kanban lane ls | add <name> | rename <ref> <name> | rm <ref> [--force] | limit <ref> <n|off> | mv <ref> <before:<ref>|last>
   kanban lane context <ref> [--json]        (a lane's workflow context: actors, triggers, exits, gate, cap)
   kanban lane context <ref> --actor <id> --author <pi-name> --instructions <text|@file>
                           [--template <text|@file>] [--artifact <name>] [--trigger <on-enter|human-comment>]…
@@ -1334,6 +1334,17 @@ async function main(): Promise<number> {
             const lane = db.deleteLane(subRest[0] ?? "", !!flags.force);
             if (json) jsonOut({ ok: true, removed: lane });
             else out(`${lane.id}  removed`);
+            return 0;
+          }
+          case "mv": {
+            const ref = subRest[0] ?? "";
+            const raw = subRest[1] ?? "";
+            const anchor = raw === "last" ? null : raw.startsWith("before:") && raw.length > "before:".length ? raw.slice("before:".length) : undefined;
+            if (!ref || anchor === undefined)
+              throw new KanbanError("usage: kanban lane mv <ref> <before:<ref>|last>", "invalid");
+            const lane = db.moveLane(ref, anchor);
+            if (json) jsonOut(lane);
+            else out(anchor === null ? `${lane.id}  moved last` : `${lane.id}  moved before ${anchor}`);
             return 0;
           }
           case "context": {

@@ -19,7 +19,7 @@ const emptyConfigs = (): Record<SettingsRole, AgentConfig> => ({
 /** A config-assignable role: the loop's AgentRole union plus the manager/worker keys (card d26pe). */
 export type SettingsRole = AgentRole | "manager" | "worker";
 
-export type SettingsSection = "general" | "agents" | "pools" | "projects";
+export type SettingsSection = "general" | "agents" | "pools" | "projects" | "lanes";
 
 export const DEBOUNCE_MS = 800;
 export type AgentSaveState = "idle" | "saving" | "saved" | "failed";

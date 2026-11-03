@@ -92,33 +92,40 @@ test("AC3: Enter on a project match switches the board's project", async ({ page
   await expect(page).not.toHaveURL(/#project=/);
 });
 
-test("AC4: move lane left reorders the board", async ({ page }) => {
+test("AC4: move lane left reorders the board; fixed lanes offer no moves", async ({ page }) => {
   await page.goto("/");
   await page.waitForSelector("main.board");
   await openPalette(page);
 
-  await page.keyboard.type("move backlog left");
-  await expect(page.locator(".palette-item").first()).toContainText("move Backlog left");
+  await page.keyboard.type("move review left");
+  await expect(page.locator(".palette-item").first()).toContainText("move Review left");
   await page.keyboard.press("Enter");
 
   await page.waitForFunction(() => {
     const order = Array.from(document.querySelectorAll("section.lane")).map(
       (el) => (el as HTMLElement).dataset.lane,
     );
-    return order.indexOf("backlog") !== -1 && order.indexOf("backlog") < order.indexOf("waiting");
+    return order.indexOf("review") !== -1 && order.indexOf("review") < order.indexOf("implement");
   });
 
   // restore the board order — later suites (responsive/wip) must not see the move
   await openPalette(page);
-  await page.keyboard.type("move backlog right");
-  await expect(page.locator(".palette-item").first()).toContainText("move Backlog right");
+  await page.keyboard.type("move review right");
+  await expect(page.locator(".palette-item").first()).toContainText("move Review right");
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => {
     const order = Array.from(document.querySelectorAll("section.lane")).map(
       (el) => (el as HTMLElement).dataset.lane,
     );
-    return order.indexOf("waiting") !== -1 && order.indexOf("waiting") < order.indexOf("backlog");
+    return order.indexOf("implement") !== -1 && order.indexOf("implement") < order.indexOf("review");
   });
+
+  // fixed lanes stay pinned: the palette offers no move items for Backlog
+  await openPalette(page);
+  await page.keyboard.type("backlog");
+  await expect(page.locator(".palette-item").first()).toContainText("go to Backlog");
+  await expect(page.locator(".palette-item", { hasText: "move Backlog" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
 });
 
 test("AC4: go to archive expands and reveals the archive lane", async ({ page }) => {

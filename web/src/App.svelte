@@ -21,7 +21,7 @@
   import { theme, setTheme } from "./lib/theme.svelte";
   import { notify } from "./lib/notify.svelte";
   import { files } from "./lib/files.svelte";
-  import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu, Hash, MessagesSquare } from "@lucide/svelte";
+  import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu, Hash, MessagesSquare, Eye, EyeOff } from "@lucide/svelte";
   import { wheelPan } from "./lib/wheel";
   import { service, pollServe, restartService } from "./lib/service.svelte";
 
@@ -271,6 +271,18 @@
           title="filter cards waiting on you"
         >
           ☉ {board.waitingCount} waiting
+        </button>
+        <button
+          class:active={board.showEmptyLanes}
+          onclick={() => (board.showEmptyLanes = !board.showEmptyLanes)}
+          title="show empty lanes"
+          aria-label="show empty lanes"
+        >
+          {#if board.showEmptyLanes}
+            <Eye size={12} strokeWidth={1.75} />
+          {:else}
+            <EyeOff size={12} strokeWidth={1.75} />
+          {/if}
         </button>
         {#if board.tags.length > 0}
           <div class="tag-filter" bind:this={tagWrap}>

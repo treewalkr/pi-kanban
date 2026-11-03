@@ -1002,6 +1002,44 @@ test("PATCH /lanes/:id wipLimit roundtrip; shape violations 422, null clears", a
   expect(((await create.json()) as { wipLimit: number | null }).wipLimit).toBeNull();
 });
 
+test("PATCH /lanes/:id before round-trip; null=last; fixed 409; both fields 400", async () => {
+  const app = createApp(db);
+
+  const patch = async (id: string, body: Record<string, unknown>) =>
+    app.handle(
+      new Request(`http://localhost/lanes/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+  const order = async (): Promise<string[]> => {
+    const board = (await (await app.handle(new Request("http://localhost/board"))).json()) as {
+      lanes: Array<{ id: string }>;
+    };
+    return board.lanes.map((l) => l.id);
+  };
+
+  const first = await patch("review", { before: "waiting" }); // fixed anchor allowed
+  expect(first.status).toBe(200);
+  expect((await order())[0]).toBe("review");
+
+  const last = await patch("review", { before: null });
+  expect(last.status).toBe(200);
+  expect((await order()).at(-1)).toBe("review");
+
+  const fixed = await patch("waiting", { before: "review" });
+  expect(fixed.status).toBe(409);
+  expect(((await fixed.json()) as { code: string }).code).toBe("conflict");
+
+  const both = await patch("review", { index: 1, before: "plan" });
+  expect(both.status).toBe(400);
+  expect(((await both.json()) as { code: string }).code).toBe("invalid");
+
+  const missing = await patch("review", { before: "nope" });
+  expect(missing.status).toBe(404);
+});
+
 test("PATCH /tasks/:id {lane:'plan'} moves a backlog card; /board reflects it", async () => {
   const app = createApp(db);
   const task = db.createTask({ title: "one", lane: "backlog" });

@@ -425,6 +425,7 @@ export interface LanePatch {
   name?: string;
   description?: string;
   index?: number; // 0-based position among lanes
+  before?: string | null; // anchor lane ref: move directly before it; null = last
   wipLimit?: number | null; // integer 1–999 sets, null clears, undefined leaves
 }
 
@@ -3767,7 +3768,12 @@ export class KanbanDb {
     if (patch.wipLimit !== undefined && patch.wipLimit !== null && !(Number.isInteger(patch.wipLimit) && patch.wipLimit >= 1 && patch.wipLimit <= 999))
       throw new KanbanError("wip limit must be an integer from 1 to 999 (or null to clear)", "invalid");
     const wipLimit = patch.wipLimit === undefined ? lane.wipLimit : patch.wipLimit;
-    if (patch.index === undefined) {
+    if (patch.index !== undefined && patch.before !== undefined)
+      throw new KanbanError("pass either index or before, not both", "invalid");
+    const reordering = patch.index !== undefined || patch.before !== undefined;
+    if (reordering && lane.fixed)
+      throw new KanbanError(`lane '${lane.id}' is fixed and cannot be reordered`, "conflict");
+    if (!reordering) {
       this.q("UPDATE lanes SET name = ?, description = ?, wip_limit = ? WHERE id = ?").run(
         name ?? lane.name,
         patch.description ?? lane.description,
@@ -3776,7 +3782,19 @@ export class KanbanDb {
       );
     } else {
       const lanes = this.lanes().filter((l) => l.id !== lane.id);
-      const clamped = Math.max(0, Math.min(Math.floor(patch.index), lanes.length));
+      let index: number;
+      if (patch.before !== undefined) {
+        if (patch.before === null) {
+          index = lanes.length; // null anchor = literal last
+        } else {
+          const anchor = this.resolveLane(patch.before);
+          if (anchor.id === lane.id) throw new KanbanError(`lane '${lane.id}' cannot be moved before itself`, "invalid");
+          index = lanes.findIndex((l) => l.id === anchor.id);
+        }
+      } else {
+        index = Math.floor(patch.index!); // both-present already threw above
+      }
+      const clamped = Math.max(0, Math.min(index, lanes.length));
       const position =
         clamped === 0
           ? (lanes[0]?.position ?? 0) / 2
@@ -3790,8 +3808,36 @@ export class KanbanDb {
         wipLimit,
         lane.id,
       );
+      this.renormalizeLanesIfTight();
     }
     return this.resolveLane(lane.id);
+  }
+
+  /** Move a lane before another lane (any lane ref; null appends literal last). Fixed lanes refuse. */
+  moveLane(prefix: string, before: string | null): Lane {
+    const lane = this.resolveLane(prefix);
+    if (before !== null) {
+      const anchor = this.resolveLane(before);
+      if (anchor.id === lane.id) throw new KanbanError(`lane '${lane.id}' cannot be moved before itself`, "invalid");
+      const index = this.lanes().filter((l) => l.id !== lane.id).findIndex((l) => l.id === anchor.id);
+      return this.updateLane(lane.id, { index });
+    }
+    return this.updateLane(lane.id, { index: this.lanes().length - 1 });
+  }
+
+  /** Rewrite lanes' positions as 100/200/... when midpoint halving gets too tight. */
+  private renormalizeLanesIfTight(): void {
+    const lanes = this.lanes();
+    let tight = false;
+    for (let i = 1; i < lanes.length; i++) {
+      if (lanes[i].position - lanes[i - 1].position < MIN_GAP) {
+        tight = true;
+        break;
+      }
+    }
+    if (!tight) return;
+    const update = this.q("UPDATE lanes SET position = ? WHERE id = ?");
+    lanes.forEach((l, i) => update.run((i + 1) * GAP, l.id));
   }
 
   deleteLane(prefix: string, force = false): Lane {
