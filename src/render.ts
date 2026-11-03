@@ -352,9 +352,9 @@ export function laneList(db: KanbanDb): string {
     .join("\n");
 }
 
-/** One project-route row: `name  repo (or — (fallback))  test gate on|off`. */
+/** One project-route row: `name  repo (or — (fallback))  test gate on|off  cmd <command>`. */
 export function projectRow(route: ProjectRoute): string {
-  return `${route.name}  ${route.repoPath ?? "— (fallback)"}  test gate ${route.testGate ? "on" : "off"}`;
+  return `${route.name}  ${route.repoPath ?? "— (fallback)"}  test gate ${route.testGate ? "on" : "off"}  cmd ${route.testCmd ?? "bun test"}`;
 }
 
 /** Project list for `kanban project ls` — one row per route, sorted by name. */

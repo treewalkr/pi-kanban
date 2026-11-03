@@ -2311,23 +2311,23 @@ test("project ls / show / set round-trip: route, flip gate, clear", async () => 
 
   const set = await cli("project", "set", "kanban", "--repo", repoDir);
   expect(set.code).toBe(0);
-  expect(set.stdout.trim()).toBe(`saved  kanban  ${repoDir}  test gate on`);
+  expect(set.stdout.trim()).toBe(`saved  kanban  ${repoDir}  test gate on  cmd bun test`);
 
   const ls = await cli("project", "ls");
-  expect(ls.stdout).toContain(`kanban  ${repoDir}  test gate on`);
-  expect(ls.stdout).toContain("sometag  — (fallback)  test gate on"); // un-routed tag listed lazily
+  expect(ls.stdout).toContain(`kanban  ${repoDir}  test gate on  cmd bun test`);
+  expect(ls.stdout).toContain("sometag  — (fallback)  test gate on  cmd bun test"); // un-routed tag listed lazily
 
   const off = await cli("project", "set", "kanban", "--no-test-gate");
   expect(off.code).toBe(0);
-  expect(off.stdout.trim()).toBe(`saved  kanban  ${repoDir}  test gate off`);
+  expect(off.stdout.trim()).toBe(`saved  kanban  ${repoDir}  test gate off  cmd bun test`);
 
   const show = await cli("project", "show", "kanban");
   expect(show.code).toBe(0);
-  expect(show.stdout.trim()).toBe(`kanban  ${repoDir}  test gate off`);
+  expect(show.stdout.trim()).toBe(`kanban  ${repoDir}  test gate off  cmd bun test`);
 
   const cleared = await cli("project", "set", "kanban", "--clear-repo");
   expect(cleared.code).toBe(0);
-  expect(cleared.stdout.trim()).toBe("saved  kanban  — (fallback)  test gate off");
+  expect(cleared.stdout.trim()).toBe("saved  kanban  — (fallback)  test gate off  cmd bun test");
 
   const nope = await cli("project", "show", "nope");
   expect(nope.code).toBe(1);
@@ -2353,7 +2353,7 @@ test("project set validation: relative/missing paths and conflicting flags", asy
 
   const bare = await cli("project", "set", "x");
   expect(bare.code).toBe(1);
-  expect(bare.stderr).toContain("usage: kanban project set <name> (--repo <path> | --clear-repo) [--test-gate | --no-test-gate]");
+  expect(bare.stderr).toContain("usage: kanban project set <name> (--repo <path> | --clear-repo) [--test-gate | --no-test-gate] [--test-cmd <cmd> | --clear-test-cmd]");
 });
 
 test("project add: explicit path, dot pwd, --name override, duplicate refusal, and non-git warning", async () => {
@@ -2363,7 +2363,7 @@ test("project add: explicit path, dot pwd, --name override, duplicate refusal, a
 
   const added = await cli("project", "add", gitDir);
   expect(added.code).toBe(0);
-  expect(added.stdout.trim()).toBe(`added  my-repo  ${gitDir}  test gate on`);
+  expect(added.stdout.trim()).toBe(`added  my-repo  ${gitDir}  test gate on  cmd bun test`);
   expect(added.stdout).not.toContain("⚠");
 
   const dotRepoDir = join(dir, "dot-repo");
@@ -2371,13 +2371,13 @@ test("project add: explicit path, dot pwd, --name override, duplicate refusal, a
   mkdirSync(join(dotRepoDir, ".git"), { recursive: true });
   const dotAdded = await cliIn(dotRepoDir, "project", "add", ".");
   expect(dotAdded.code).toBe(0);
-  expect(dotAdded.stdout.trim()).toBe(`added  dot-repo  ${dotRepoDir}  test gate on`);
+  expect(dotAdded.stdout.trim()).toBe(`added  dot-repo  ${dotRepoDir}  test gate on  cmd bun test`);
 
   const plainDir = join(dir, "plain-dir");
   mkdirSync(plainDir, { recursive: true });
   const custom = await cli("project", "add", plainDir, "--name", "custom");
   expect(custom.code).toBe(0);
-  expect(custom.stdout).toContain(`added  custom  ${plainDir}  test gate on`);
+  expect(custom.stdout).toContain(`added  custom  ${plainDir}  test gate on  cmd bun test`);
   expect(custom.stdout).toContain(`⚠ ${plainDir} is not a git repo root (no .git)`);
 
   const dup = await cli("project", "add", plainDir, "--name", "custom");
@@ -2387,6 +2387,99 @@ test("project add: explicit path, dot pwd, --name override, duplicate refusal, a
   const bare = await cli("project", "add");
   expect(bare.code).toBe(1);
   expect(bare.stderr).toContain("usage: kanban project add <path> [--name <n>]");
+});
+
+test("project set --test-cmd round-trip: trim, json, clear, unregistered upsert", async () => {
+  const set = await cli("project", "set", "tc-set", "--test-cmd", "  cargo test  ");
+  expect(set.code).toBe(0);
+  expect(set.stdout.trim()).toBe("saved  tc-set  — (fallback)  test gate on  cmd cargo test");
+
+  const shown = await cli("project", "show", "tc-set", "--json");
+  expect(shown.code).toBe(0);
+  const shownRoute = JSON.parse(shown.stdout) as { testCmd: string | null };
+  expect(shownRoute.testCmd).toBe("cargo test");
+
+  const cleared = await cli("project", "set", "tc-set", "--clear-test-cmd");
+  expect(cleared.code).toBe(0);
+  expect(cleared.stdout.trim()).toBe("saved  tc-set  — (fallback)  test gate on  cmd bun test");
+
+  await cli("project", "set", "tc-set", "--test-cmd", "make test");
+  const clearedByEmpty = await cli("project", "set", "tc-set", "--test-cmd", "");
+  expect(clearedByEmpty.code).toBe(0);
+  expect(clearedByEmpty.stdout.trim()).toBe("saved  tc-set  — (fallback)  test gate on  cmd bun test");
+
+  const json = await cli("project", "set", "tc-json", "--test-cmd", "pytest", "--json");
+  expect(json.code).toBe(0);
+  const route = JSON.parse(json.stdout) as { name: string; repoPath: string | null; testGate: boolean; testCmd: string | null };
+  expect(route).toEqual({ name: "tc-json", repoPath: null, testGate: true, testCmd: "pytest" });
+
+  const ls = await cli("project", "ls");
+  expect(ls.stdout).toContain("tc-json  — (fallback)  test gate on  cmd pytest");
+});
+
+test("project rows carry the cmd segment: add, ls, show, saved line", async () => {
+  const repoDir = join(dir, "tc-add-repo");
+  mkdirSync(repoDir, { recursive: true });
+  mkdirSync(join(repoDir, ".git"), { recursive: true });
+
+  const added = await cli("project", "add", repoDir, "--name", "tc-add");
+  expect(added.code).toBe(0);
+  expect(added.stdout.trim()).toBe(`added  tc-add  ${repoDir}  test gate on  cmd bun test`);
+
+  const set = await cli("project", "set", "tc-add", "--test-cmd", "make check");
+  expect(set.code).toBe(0);
+  expect(set.stdout.trim()).toBe(`saved  tc-add  ${repoDir}  test gate on  cmd make check`);
+
+  const ls = await cli("project", "ls");
+  expect(ls.stdout).toContain(`tc-add  ${repoDir}  test gate on  cmd make check`);
+
+  const show = await cli("project", "show", "tc-add");
+  expect(show.code).toBe(0);
+  expect(show.stdout.trim()).toBe(`tc-add  ${repoDir}  test gate on  cmd make check`);
+});
+
+test("project set --test-cmd errors: usage, mutual exclusion, db bounds", async () => {
+  const bare = await cli("project", "set", "tc-err");
+  expect(bare.code).toBe(1);
+  expect(bare.stderr).toContain("usage: kanban project set <name> (--repo <path> | --clear-repo) [--test-gate | --no-test-gate] [--test-cmd <cmd> | --clear-test-cmd]");
+
+  const both = await cli("project", "set", "tc-err", "--test-cmd", "x", "--clear-test-cmd");
+  expect(both.code).toBe(1);
+  expect(both.stderr).toContain("--test-cmd and --clear-test-cmd are mutually exclusive");
+
+  const tooLong = await cli("project", "set", "tc-err", "--test-cmd", "x".repeat(501));
+  expect(tooLong.code).toBe(1);
+  expect(tooLong.stderr).toContain("test command must be 1 to 500 characters");
+
+  const blank = await cli("project", "set", "tc-err", "--test-cmd", "   ");
+  expect(blank.code).toBe(1);
+  expect(blank.stderr).toContain("test command must be 1 to 500 characters");
+
+  const nope = await cli("project", "show", "tc-err");
+  expect(nope.code).toBe(1);
+  expect(nope.stderr).toContain("unknown project 'tc-err'"); // a rejected value created no row
+});
+
+test("project set applies repo, gate, and test-cmd in order", async () => {
+  const repoDir = join(dir, "tc-order-repo");
+  mkdirSync(repoDir, { recursive: true });
+
+  const all = await cli("project", "set", "tc-order", "--test-cmd", "cargo test", "--no-test-gate", "--repo", repoDir);
+  expect(all.code).toBe(0);
+  expect(all.stdout.trim()).toBe(`saved  tc-order  ${repoDir}  test gate off  cmd cargo test`);
+
+  const clearRepo = await cli("project", "set", "tc-order", "--clear-repo", "--test-gate");
+  expect(clearRepo.code).toBe(0);
+  expect(clearRepo.stdout.trim()).toBe("saved  tc-order  — (fallback)  test gate on  cmd cargo test");
+
+  const both = await cli("project", "set", "tc-order", "--repo", repoDir, "--test-cmd", "yarn test");
+  expect(both.code).toBe(0);
+  expect(both.stdout.trim()).toBe(`saved  tc-order  ${repoDir}  test gate on  cmd yarn test`);
+
+  const help = await cli("help");
+  expect(help.stdout).toContain(
+    "kanban project ls | show <name> | add <path> [--name <n>] | set <name> [--repo <path> | --clear-repo] [--test-gate | --no-test-gate]",
+  ); // help line unchanged — no new verb
 });
 
 

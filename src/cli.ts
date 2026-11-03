@@ -85,8 +85,8 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus", "actor", "instructions", "template", "artifact", "approve-to", "cap", "provider", "model", "thinking", "repo", "name"])
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear", "test-gate", "no-test-gate", "clear-repo"])
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus", "actor", "instructions", "template", "artifact", "approve-to", "cap", "provider", "model", "thinking", "repo", "test-cmd", "name"])
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear", "test-gate", "no-test-gate", "clear-repo", "clear-test-cmd"])
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag", "trigger"]) // repeatable: each occurrence appends one value
 export function parse(argv: string[]): Parsed {
   const flags: Record<string, string | true | string[]> = {};
@@ -1535,20 +1535,29 @@ async function main(): Promise<number> {
           }
           case "set": {
             const name = subRest.join(" ");
-            const usage = "usage: kanban project set <name> (--repo <path> | --clear-repo) [--test-gate | --no-test-gate]";
+            const usage =
+              "usage: kanban project set <name> (--repo <path> | --clear-repo) [--test-gate | --no-test-gate] [--test-cmd <cmd> | --clear-test-cmd]";
             if (!name) throw new KanbanError(usage, "invalid");
             const repo = str(flags, "repo");
             const clearRepo = !!flags["clear-repo"];
             const gateOn = !!flags["test-gate"];
             const gateOff = !!flags["no-test-gate"];
-            if (!repo && !clearRepo && !gateOn && !gateOff) throw new KanbanError(usage, "invalid");
+            const rawTestCmd = str(flags, "test-cmd"); // undefined when absent, "" when passed empty
+            const testCmdGiven = rawTestCmd !== undefined;
+            const clearTestCmd = !!flags["clear-test-cmd"];
+            if (!repo && !clearRepo && !gateOn && !gateOff && !testCmdGiven && !clearTestCmd)
+              throw new KanbanError(usage, "invalid");
             if (repo && clearRepo) throw new KanbanError("--repo and --clear-repo are mutually exclusive", "invalid");
             if (gateOn && gateOff) throw new KanbanError("--test-gate and --no-test-gate are mutually exclusive", "invalid");
+            if (testCmdGiven && clearTestCmd)
+              throw new KanbanError("--test-cmd and --clear-test-cmd are mutually exclusive", "invalid");
             let route: ProjectRoute | null = null;
             if (repo) route = db.setProjectRepo(name, repo);
             else if (clearRepo) route = db.setProjectRepo(name, null);
             if (gateOn) route = db.setProjectGate(name, true);
             else if (gateOff) route = db.setProjectGate(name, false);
+            if (clearTestCmd) route = db.setProjectTestCmd(name, null);
+            else if (testCmdGiven) route = db.setProjectTestCmd(name, rawTestCmd ?? null);
             if (json) jsonOut(route);
             else out(`saved  ${projectRow(route!)}`);
             return 0;
