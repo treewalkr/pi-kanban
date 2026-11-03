@@ -142,11 +142,11 @@
     {/if}
 
     {#each projects.projects as route (route.name)}
-      <div class="project-row settings-form">
-        <span class="project-name">{route.name}</span>
+      <div class="project-row">
+        <span class="project-name" title={route.name}>{route.name}</span>
         <label class="project-repo">
           repo path
-          <input aria-label={`repo path ${route.name}`} bind:value={route.repoPath} placeholder="serve directory (fallback)" />
+          <input aria-label={`repo path ${route.name}`} bind:value={route.repoPath} title={route.repoPath ?? ""} placeholder="serve directory (fallback)" />
           {#if !route.repoPath}
             <span class="fallback-hint">fallback</span>
           {/if}
@@ -157,12 +157,14 @@
         </label>
         <button
           type="button"
-          class="primary"
+          class="project-save"
+          class:primary={projects.isDirty(route)}
+          class:ghost={!projects.isDirty(route)}
           aria-label={`save project ${route.name}`}
-          disabled={saving[route.name]}
+          disabled={saving[route.name] || !projects.isDirty(route)}
           onclick={() => save(route)}
         >
-          {saving[route.name] ? "saving…" : "save"}
+          {saving[route.name] ? "saving…" : projects.isDirty(route) ? "save" : "saved"}
         </button>
       </div>
     {/each}
@@ -174,17 +176,17 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 5px;
+    margin-bottom: 8px;
   }
   .projects-header-row .settings-general-heading {
     margin: 0;
   }
   .project-picker {
     border: 1px solid var(--border);
-    border-radius: var(--radius-small);
+    border-radius: var(--radius-control);
     padding: 12px;
     margin-bottom: 16px;
-    background: var(--bg-surface);
+    background: var(--bg-panel);
   }
   .picker-path-bar {
     display: flex;
@@ -207,9 +209,9 @@
   }
   .picker-git-badge {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     padding: 1px 5px;
-    border-radius: 3px;
+    border-radius: var(--radius-small);
     background: color-mix(in srgb, var(--accent) 15%, transparent);
     color: var(--accent);
     font-weight: 600;
@@ -254,6 +256,7 @@
   }
   .picker-footer {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
   }
@@ -270,28 +273,50 @@
   .picker-name-field input {
     flex: 1;
   }
+  /* one row per project: name · path · gate · save. The old .settings-form
+     class made this a centered column (flex-direction:column inherited). */
   .project-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 10px;
+    display: grid;
+    grid-template-columns: minmax(96px, 150px) minmax(0, 1fr) auto auto;
+    align-items: end;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   }
   .project-name {
-    width: 140px;
+    align-self: center;
+    overflow: hidden;
     color: var(--text-muted);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .project-repo {
-    flex: 1;
     display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 5px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
   }
   .project-repo input {
-    flex: 1;
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-small);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono); /* paths keep the mono voice (Mono-Meta) */
+    font-size: 11px;
+  }
+  .project-repo input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
   }
   .fallback-hint {
     color: var(--text-muted);
@@ -303,6 +328,14 @@
     flex-direction: row;
     align-items: center;
     gap: 6px;
+    align-self: end;
+    padding-bottom: 7px;
     white-space: nowrap;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .project-save {
+    align-self: end;
   }
 </style>
