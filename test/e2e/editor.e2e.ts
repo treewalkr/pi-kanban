@@ -14,7 +14,7 @@ const openEditor = async (page: Page, id: string): Promise<void> => {
 };
 
 const toggle = (page: Page) => page.locator(".editor button.editor-toggle-btn");
-const noteBox = (page: Page) => page.locator("div.editor[aria-label='edit card']");
+const editorDialog = (page: Page) => page.locator("div.editor[aria-label='edit card']");
 
 test.describe("widened card editor and markdown preview toggle", () => {
   test("AC1: the editor is 720px wide on a desktop viewport and clamps to 90vw on a narrow one", async ({
@@ -25,13 +25,13 @@ test.describe("widened card editor and markdown preview toggle", () => {
     try {
       await page.setViewportSize({ width: 1280, height: 800 });
       await openEditor(page, id);
-      const box1280 = (await noteBox(page).boundingBox())!;
+      const box1280 = (await editorDialog(page).boundingBox())!;
       expect(box1280.width).toBeGreaterThanOrEqual(719);
       expect(box1280.width).toBeLessThanOrEqual(721);
 
       await page.setViewportSize({ width: 700, height: 800 });
       await page.waitForTimeout(100);
-      const box700 = (await noteBox(page).boundingBox())!;
+      const box700 = (await editorDialog(page).boundingBox())!;
       expect(box700.width).toBeGreaterThanOrEqual(629);
       expect(box700.width).toBeLessThanOrEqual(631);
     } finally {
@@ -97,6 +97,16 @@ test.describe("widened card editor and markdown preview toggle", () => {
       await expect(page.locator(".editor pre code.hljs")).toContainText("const x = 1");
       await expect(page.locator(".editor blockquote")).toContainText("quote");
       await expect(page.locator(".editor textarea")).toHaveCount(0);
+
+      const typography = await page.locator(".editor .editor-note-preview").evaluate((el) => {
+        const s = window.getComputedStyle(el);
+        return {
+          fontFamily: s.fontFamily,
+          fontWeight: s.fontWeight,
+        };
+      });
+      expect(typography.fontFamily.toLowerCase()).not.toContain("mono");
+      expect(typography.fontWeight).toBe("400");
     } finally {
       await request.delete(`/tasks/${id}?force=true`);
     }
@@ -115,6 +125,14 @@ test.describe("widened card editor and markdown preview toggle", () => {
       await expect(page.locator(".editor .detail-note.empty")).toHaveText("no note");
       await expect(page.locator(".editor .detail-note .detail-note")).toHaveCount(0);
       await expect(page.locator(".editor .editor-note-preview.detail-note.md")).toHaveCount(0);
+
+      const emptyTypography = await page.locator(".editor .detail-note.empty").evaluate((el) => {
+        const s = window.getComputedStyle(el);
+        return {
+          fontWeight: s.fontWeight,
+        };
+      });
+      expect(emptyTypography.fontWeight).toBe("400");
     } finally {
       await request.delete(`/tasks/${id}?force=true`);
     }
@@ -182,7 +200,7 @@ test.describe("widened card editor and markdown preview toggle", () => {
         );
         expect(diff).toBeLessThanOrEqual(1);
 
-        const box = (await noteBox(page).boundingBox())!;
+        const box = (await editorDialog(page).boundingBox())!;
         expect(box.x).toBeGreaterThanOrEqual(0);
         expect(box.x + box.width).toBeLessThanOrEqual(w);
 

@@ -2664,6 +2664,8 @@ body.drag-live {
 .editor-note-preview {
   max-height: 50vh;
   overflow-y: auto;
+  font-family: var(--font-ui);
+  font-weight: 400;
 }
 
 /* the settings agents section keeps the editor dialog's column rhythm */

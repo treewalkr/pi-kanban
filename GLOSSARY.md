@@ -12,6 +12,10 @@ _Avoid_: Task, ticket, issue, item
 The read-only modal for an open card (`TaskDetail.svelte`), live-derived from the board so external writes appear without a reopen; distinct from the **editor** (`TaskEditor.svelte`, `board.editMode`), which snapshots fields on open and pauses board refreshes.
 _Avoid_: Card dialog, inspector, modal
 
+**Note preview**:
+The rendered markdown view of the local, unsaved note draft inside the card editor (`TaskEditor.svelte`), toggled in place without persisting or mutating the card; distinct from the live-rendered note on the **Card detail**.
+_Avoid_: Preview mode, draft preview, markdown tab
+
 **Lane**:
 A named workflow stage on the board (`Waiting on you`, `Backlog`, `Plan`, `Test + Implement`, `Review`, `Done`, `Archive`) that holds an ordered list of cards.
 _Avoid_: Column, state, status, stage
