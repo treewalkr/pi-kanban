@@ -2561,7 +2561,7 @@ body.drag-live {
 }
 
 .editor {
-  width: 500px;
+  width: min(720px, 90vw);
   max-width: 100%;
   max-height: calc(100vh - 40px); /* overlay has 20px padding all around */
   overflow-y: auto; /* fallback if pinned sections alone fill the viewport */
@@ -3525,11 +3525,7 @@ a.dep-chip.gh-link .gh-state {
 }
 
 /* ---------- card detail dialog ---------- */
-
-/* wider than the 500px edit form: use the space on wide screens, clamp to the overlay on small ones */
-.editor.detail {
-  width: min(720px, 90vw);
-}
+/* the detail modal shares the editor's width: the base .editor rule, no override */
 
 /* ---------- file preview dialog ---------- */
 

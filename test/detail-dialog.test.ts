@@ -6,39 +6,49 @@ import { JSDOM } from "jsdom";
 const appCssPath = join(import.meta.dir, "..", "web", "src", "app.css");
 const appCss = readFileSync(appCssPath, "utf-8");
 
-describe("card detail dialog width (app.css)", () => {
-  test("detail dialog is 720px on a wide viewport", () => {
+describe("card editor and detail dialog widths (app.css)", () => {
+  test("editor dialog is min(720px, 90vw) and cannot overflow", () => {
     const dom = new JSDOM(
-      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor detail"></div><div class="editor"></div></body></html>`,
+      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor"></div></body></html>`,
+    );
+    const editorEl = dom.window.document.querySelector("div.editor")!;
+    const computed = dom.window.getComputedStyle(editorEl);
+    expect(computed.width).toBe("720px");
+    expect(computed.maxWidth).toBe("100%");
+
+    const rules = Array.from(dom.window.document.styleSheets[0].cssRules);
+    const editorRule = rules.find(
+      (r) => "selectorText" in r && (r as CSSStyleRule).selectorText === ".editor",
+    ) as CSSStyleRule | undefined;
+    expect(editorRule).toBeDefined();
+    expect(editorRule!.style.width).toBe("min(720px, 90vw)");
+  });
+
+  test("the detail dialog inherits the editor width (no .editor.detail override)", () => {
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor detail"></div></body></html>`,
     );
     const detailEl = dom.window.document.querySelector("div.editor.detail")!;
     const computed = dom.window.getComputedStyle(detailEl);
     expect(computed.width).toBe("720px");
-  });
 
-  test("edit form keeps its 500px width", () => {
-    const dom = new JSDOM(
-      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor detail"></div><div class="editor"></div></body></html>`,
-    );
-    const editorEl = dom.window.document.querySelector("div.editor:not(.detail)")!;
-    const computed = dom.window.getComputedStyle(editorEl);
-    expect(computed.width).toBe("500px");
-  });
-
-  test("detail width scales with viewport and cannot overflow", () => {
-    const dom = new JSDOM(
-      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor detail"></div></body></html>`,
-    );
     const rules = Array.from(dom.window.document.styleSheets[0].cssRules);
     const detailRule = rules.find(
-      (r) => "selectorText" in r && (r as CSSStyleRule).selectorText === ".editor.detail",
-    ) as CSSStyleRule | undefined;
-    expect(detailRule).toBeDefined();
-    expect(detailRule!.style.width).toBe("min(720px, 90vw)");
+      (r) =>
+        "selectorText" in r &&
+        (r as CSSStyleRule).selectorText === ".editor.detail" &&
+        (r as CSSStyleRule).style.width !== "",
+    );
+    expect(detailRule).toBeUndefined();
+  });
 
-    const detailEl = dom.window.document.querySelector("div.editor.detail")!;
-    const computed = dom.window.getComputedStyle(detailEl);
-    expect(computed.maxWidth).toBe("100%");
+  test("the file preview dialog keeps its wider override", () => {
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><head><style>${appCss}</style></head><body><div class="editor preview"></div></body></html>`,
+    );
+    const previewEl = dom.window.document.querySelector("div.editor.preview")!;
+    const computed = dom.window.getComputedStyle(previewEl);
+    expect(computed.width).toBe("960px");
   });
 });
 
