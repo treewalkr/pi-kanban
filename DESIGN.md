@@ -172,7 +172,7 @@ Dark grays stepped one from another; the accent is a pastel blue that reads as "
 
 A fixed left sidebar (resizable, default 260px, collapsible) and a horizontal lane scroller filling the rest. Lanes are equal-width columns (~260–300px) with a header row (name, WIP count chip) and a card stack; fixed lanes "Waiting on you" and "Backlog" lead, Done trails. Cards are 2-line-max dense blocks (id + title + chips).
 
-Modals overlay centered (min(720px, 90vw) for the card editor and the card detail; min(960px, 94vw) for the file preview); drawers slide from the right (chat) or bottom. The chrome z-ladder is fixed: content < sticky headers < modals (40) < palettes/confirm (45) < expanded chat (55); any persistent chrome above 40 hides while a modal is open.
+Modals overlay centered (min(720px, 90vw) for the card editor and the card detail; min(960px, 94vw) for the file preview; 520px × min(620px, 100dvh − 16px) for the directory picker, a direct pi-web `DirectoryPicker` port). Drawers slide from the right (chat) or bottom. The chrome z-ladder is fixed: content < sticky headers < modals (40) < palettes/confirm (45) < expanded chat (55); any persistent chrome above 40 hides while a modal is open.
 
 Breakpoints: 640px (sidebar becomes a slide-in overlay, touch targets grow to 44px), 450px (header folds to two rows, search first), 420px (three rows). Spacing rhythm is 6/8/10/12px; card interiors pad 8px 10px; row gaps 6–8px. Density beats air: the board is meant to be scanned, not admired.
 
@@ -182,8 +182,9 @@ Flat by default. Depth is tonal — `bg` → `bg-panel` → `bg-hover` → `bg-s
 
 ### Shadow Vocabulary
 - **Popover** (`0 6px 20px rgba(0, 0, 0, 0.1)`): menus, palettes, search dropdowns — border + shadow together.
+- **Modal** (`0 8px 32px rgba(0, 0, 0, 0.18)`): centered dialogs — the card editor, the directory picker and its sub-dialogs. Lifted from pi-web's dialog panels.
 - **Drawer** (`8px 0 24px rgba(0, 0, 0, 0.25)`): the mobile/right-side chat drawer, directional.
-- **Overlay scrim** (`rgba(0, 0, 0, 0.35)`): modal backdrops. Never opaque, never tinted.
+- **Overlay scrim** (`rgba(0, 0, 0, 0.35)`): modal backdrops and in-modal sub-dialog scrims. Never opaque, never tinted.
 
 ### Named Rules
 **The Flat-By-Default Rule.** Nothing at rest casts a shadow. A shadow means "I float above the board" — popover, drawer, modal — and nothing else.
@@ -210,7 +211,7 @@ Pills (`999px`, `0 8px` padding, 10–12px) on `bg-subtle` with text-muted — t
 - **Internal Padding:** 8px 10px.
 
 ### Inputs / Fields
-Border 1px `border`, `bg` fill, control radius, 4px 8px padding, mono for path/id/URL fields. Focus: border shifts to accent + 2px focus-visible ring. Textareas (editor, chat composer) use panel radius and grow downward; the composer borrows pi-web's 14px soft-corner card.
+Border 1px `border`, `bg` fill, control radius, 4px 8px padding, mono for path/id/URL fields. Inputs sit one tone **above** their container: `bg` on `bg-panel` surfaces, and `bg-panel` inside `bg` modals (the directory picker's pattern, from pi-web). Focus: border shifts to accent + `0 0 0 3px` accent-at-18% ring (`color-mix`). Textareas (editor, chat composer) use panel radius and grow downward; the composer borrows pi-web's 14px soft-corner card. Under 640px, inputs go 16px font to stop iOS focus zoom.
 
 ### Navigation
 Sidebar: panel background, hairline right border, mono 11px section labels, ghost rows with hover fill; active row = `bg-selected` + accent text cue. Column headers: 12px title + count chip on `bg-panel`, hairline below.
