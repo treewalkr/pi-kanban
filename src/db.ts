@@ -305,6 +305,7 @@ export type LaneEventCause =
   | "done"
   | "archive"
   | "auto-archive"
+  | "auto" // the epic container finishing itself (ceqfq)
   | "backfill"
   | "gh";
 
@@ -618,6 +619,7 @@ CREATE TABLE IF NOT EXISTS project_agent_configs (
 export const DEFAULT_LANES: Array<Omit<Lane, "position" | "wipLimit">> = [
   { id: "waiting", name: "Waiting on you", description: "Parked for a human answer — replying returns the card", fixed: 1 },
   { id: "backlog", name: "Backlog", description: "Waiting work, nothing started", fixed: 1 },
+  { id: "epics", name: "Epics", description: "Approved epics supervising their children — never worked directly", fixed: 1 },
   { id: "plan", name: "Plan", description: "Scoping and design before code", fixed: 0 },
   { id: "implement", name: "Test + Implement", description: "Build it, test as you go", fixed: 0 },
   { id: "review", name: "Review", description: "Verify, polish, get sign-off", fixed: 0 },
@@ -683,6 +685,81 @@ Then record exactly one verdict (never move the card with mv/handoff, never run 
 Block only for checklist hits, never taste; up to 2 rounds happen automatically, then a human steps in. If you cannot evaluate the plan at all (files missing, repo unreadable), post kanban comment {id} "cannot evaluate the plan — <why>" --author pi-plan-reviewer and stop.
 Never move the card (no mv/handoff — the --pass verdict parks it in Waiting on you automatically) and never run kanban approve/reject — the human owns the gate.
 Your last line: a one-sentence verdict.`;
+
+/** The epic decomposition charter (ceqfq): what a planner writes for a card
+ *  WITH children. Same pipeline (attach, plan-review, human gate) as a build
+ *  plan, but the artifact decomposes instead of implements. */
+export const EPIC_PLAN_TEMPLATE = `
+## Goal
+
+What this epic delivers and why it is one unit of work.
+
+## Children & chain
+
+One line per child card — id, title, lane — plus the dependency chain as a
+--blocked-by graph (parallel bands explicit). Every child already exists as a
+card (create them: kanban add … --parent {id}).
+
+## Scope verdict
+
+For each child: earned now (build) or deferred (stays in Backlog, named here
+with its ripen-or-rot condition). Speculative work is deferred, never planned.
+
+## Boundary contracts
+
+Which files each child owns — disjoint sets, so parallel children cannot
+collide. One block per child: child id → files + the interface it exposes to
+siblings. No steps, no test plans: those belong to each child's own plan.
+
+## Out of scope
+
+What this epic deliberately does not touch.
+`;
+
+export const EPIC_PLANNER_INSTRUCTIONS = `You are pi-planner. Kanban card {id} "{title}" is an EPIC (it has child cards) in the Plan lane — write its decomposition charter, not an implementation plan. The epic plans work; it never builds.
+
+1. Run: kanban brief {id} and kanban show {id} — the note, thread, and current children. If the last comment is a rejection or plan-review block, address every point.
+2. Ground it in the repo: read AGENTS.md and the area the epic touches. Cite real paths. Check for existing children that already cover scope; search (rg, kanban search) before creating anything.
+3. Ensure the children exist and are chained: create missing child cards with --parent {id}, set the --blocked-by chain, park deferred children in Backlog. Children are small enough that each one's OWN plan (written when it reaches Plan) can be executable.
+4. Write the charter to {tmpFile} using the template below — every section filled or "N/A — reason". NO implementation steps, NO per-child test plans: if you are writing "Step 1", you are writing the wrong artifact — that content belongs to the child's plan.
+5. Attach: kanban attach {id} <plan-file>
+6. Hand off exactly: kanban comment {id} "plan v<N> attached — over to pi-plan-reviewer" --kind handoff --author pi-planner
+
+Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate. Children are never moved out of Backlog by you — releasing waves is the human's call.
+Questions only if an answer would change the decomposition; post them as one comment with recommended defaults, then stop.
+Your last line: one sentence on the epic's shape (children, chain, defers).`;
+
+export const EPIC_PLAN_REVIEWER_INSTRUCTIONS = `You are pi-plan-reviewer. Kanban card {id} "{title}" is an EPIC (it has child cards) with a fresh charter in the Plan lane — review the decomposition before the human gate.
+
+1. Run: kanban brief {id} and kanban show {id} — the charter, thread, and the actual children.
+2. Rubric — block on any hit:
+   - Every child named in the charter exists (--parent set) and every existing child is accounted for (built or explicitly deferred).
+   - The --blocked-by chain is complete, acyclic, and parallel bands are real (no false serializing).
+   - Every child is independently buildable: its scope fits one child plan; boundaries are disjoint (no file owned by two children).
+   - Scope verdict is honest: deferred items carry a ripen-or-rot condition.
+   - The charter contains NO implementation steps or per-child test plans — that detail belongs to child plans. Likewise, a child plan that re-draws the decomposition is out of scope for its own card.
+3. Verify cited paths exist; read AGENTS.md. GLOSSARY.md vocabulary applies.
+
+Verdict exactly as usual (never move the card, never approve/reject — the human owns the gate): pass parks it for the human; block carries --finding per rubric hit.
+Your last line: a one-sentence verdict on the decomposition.`;
+
+/** The plan-lane context, chartered for epics: same actors, gates, and exits —
+ *  the planner and plan-reviewer swap to decomposition instructions and the
+ *  charter template replaces the build template (ceqfq). */
+export function epicPlanContext(): LaneContext {
+  const base = defaultLaneContext("plan")!;
+  return {
+    ...base,
+    template: EPIC_PLAN_TEMPLATE.trim(),
+    actors: base.actors.map((a) =>
+      a.id === "planner"
+        ? { ...a, instructions: EPIC_PLANNER_INSTRUCTIONS }
+        : a.id === "plan-reviewer"
+          ? { ...a, instructions: EPIC_PLAN_REVIEWER_INSTRUCTIONS }
+          : a,
+    ),
+  };
+}
 
 export const BUILDER_PLAN_INSTRUCTIONS = `You are pi-builder. Kanban card {id} "{title}" had its plan approved; build it in this repo.
 
@@ -817,6 +894,15 @@ export function defaultLaneContext(laneId: string): LaneContext | null {
 /** Fixed first lane: HITL tickets parked for a human answer (never proposed by next). */
 export const WAITING_LANE_ID = "waiting" as const;
 
+/** Fixed container lane: approved epics supervising their children (card ceqfq).
+ *  Never scanned by the loop (context-free, like waiting) and never proposed by next. */
+export const EPICS_LANE_ID = "epics" as const;
+
+/** A parent epic auto-dones when no child sits in these lanes — Backlog children
+ *  are decided-not-pending ("ripen-or-rot" defers) and never block it. A child
+ *  epic supervising in Epics counts as in flight for its own parent (ceqfq). */
+const EPIC_BLOCKING_LANES = ["plan", "implement", "review", "waiting", "epics"] as const;
+
 /** Lane priority for "what's next": Review → Test + Implement → Plan → Backlog (skill contract). */
 export const NEXT_LANE_PRIORITY = ["review", "implement", "plan", "backlog"] as const;
 
@@ -846,6 +932,7 @@ export const UNBLOCKED_LANES = ["done", "archive"] as const;
 export type BoardViolation =
   | { kind: "done-parent-active-children"; cardId: string; childIds: string[] }
   | { kind: "child-behind-parent"; cardId: string; parentId: string; cardLaneId: string; parentLaneId: string }
+  | { kind: "epic-in-workflow-lane"; cardId: string; laneId: string }
   | { kind: "missing-plan"; cardId: string; laneId: string }
   | { kind: "wip-over-limit"; laneId: string; limit: number; count: number };
 
@@ -1194,6 +1281,7 @@ export class KanbanDb {
     if (!this.schemaIsCurrent()) this.db.exec(SCHEMA); // fresh/old boards only — see below
     this.seedLanes();
     this.ensureWaitingLane();
+    this.ensureEpicsLane();
     this.ensureArchiveLane();
     this.migratePlansTable();
     this.migrateProjectsSeed();
@@ -1432,6 +1520,29 @@ export class KanbanDb {
       "Waiting on you",
       "Parked for a human answer — replying returns the card",
       (first.p ?? 0) / 2,
+    );
+  }
+
+  /** Same seed-adopt for the Epics container lane (ceqfq): adopt a custom lane
+   *  with our id, else insert between Backlog and the next lane so the board
+   *  order matches a fresh seed. */
+  private ensureEpicsLane(): void {
+    const row = this.q("SELECT COUNT(*) AS n FROM lanes WHERE id = 'epics'").get() as { n: number };
+    if (row.n > 0) {
+      const lane = this.q("SELECT fixed FROM lanes WHERE id = 'epics'").get() as { fixed: number };
+      if (lane.fixed !== 1) this.q("UPDATE lanes SET fixed = 1 WHERE id = 'epics'").run();
+      return;
+    }
+    const lanes = this.lanes();
+    const backlog = lanes.find((l) => l.id === "backlog");
+    if (!backlog) return; // defensive: backlog is fixed and always present
+    const after = lanes.find((l) => l.position > backlog.position);
+    const position = after ? (backlog.position + after.position) / 2 : backlog.position + GAP;
+    this.q("INSERT INTO lanes (id, name, description, position, fixed) VALUES (?, ?, ?, ?, 1)").run(
+      "epics",
+      "Epics",
+      "Approved epics supervising their children — never worked directly",
+      position,
     );
   }
 
@@ -2204,12 +2315,42 @@ export class KanbanDb {
     );
     if (laneId !== task.laneId) {
       this.recordLaneEvent(task.id, task.laneId, laneId, meta?.cause ?? "edit", meta?.actor ?? "user", now);
+      // a child's lane move can complete an ancestor epic (ceqfq) — checked
+      // after the move lands; walking parents is bounded by the depth-3 cap
+      this.autoDoneEpics(task.id);
     }
     this.renormalizeIfTight(laneId);
     if (patch.blockedBy !== undefined) {
       this.setBlockedBy(task.id, patch.blockedBy);
     }
     return this.resolveTask(task.id);
+  }
+
+  /** After a child's lane move: every ancestor epic parked in the Epics lane
+   *  with nothing left in flight (plan/implement/review/waiting — Backlog
+   *  defers never block, ceqfq decision 2) moves itself to done, one comment
+   *  recording why. Runs at every depth: a finished story can complete its
+   *  parent story, then the epic. Moving to done re-enters updateTask, so the
+   *  walk continues upward naturally; depth is capped by the parent limit. */
+  private autoDoneEpics(childTaskId: string): void {
+    let cur = this.resolveTask(childTaskId);
+    while (cur.parentId !== null) {
+      const parent = this.resolveTask(cur.parentId);
+      if (parent.laneId === EPICS_LANE_ID) {
+        const inFlight = this.childrenOf(parent.id).filter((c) =>
+          (EPIC_BLOCKING_LANES as readonly string[]).includes(c.laneId),
+        );
+        if (inFlight.length === 0) {
+          this.updateTask(parent.id, { lane: "done" }, { cause: "auto", actor: "kanban" });
+          this.createComment(parent.id, {
+            kind: "comment",
+            body: "epic complete — no children in flight (Backlog defers stay parked)",
+          });
+        }
+        return; // an epic's completion (or non-completion) settles this chain
+      }
+      cur = parent;
+    }
   }
 
   moveTask(prefix: string, laneRef: string, index?: number, meta?: { cause?: LaneEventCause; actor?: string }): Task {
@@ -2414,10 +2555,13 @@ export class KanbanDb {
     const laneIndex = new Map(lanes.map((l, i) => [l.id, i]));
     const violations: BoardViolation[] = [];
 
-    // (a) done parent with active children
+    // (a) done parent with children still in flight — same set the epic
+    // auto-done uses (ceqfq): Backlog children are defers and never count
     for (const task of tasks) {
       if (task.laneId === "done") {
-        const active = this.activeChildren(task.id);
+        const active = this.childrenOf(task.id).filter((c) =>
+          (EPIC_BLOCKING_LANES as readonly string[]).includes(c.laneId),
+        );
         if (active.length > 0) {
           violations.push({
             kind: "done-parent-active-children",
@@ -2428,11 +2572,12 @@ export class KanbanDb {
       }
     }
 
-    // (b) child in a lane behind its parent (active parent only)
+    // (b) child in a lane behind its parent (active parent only) — an epic in
+    // the Epics lane is exempt: its children sit in any lane by design (ceqfq)
     for (const task of tasks) {
       if (task.parentId !== null) {
         const parent = taskMap.get(task.parentId);
-        if (parent && !UNBLOCKED_LANES.includes(parent.laneId as any)) {
+        if (parent && !UNBLOCKED_LANES.includes(parent.laneId as any) && parent.laneId !== EPICS_LANE_ID) {
           const childIdx = laneIndex.get(task.laneId);
           const parentIdx = laneIndex.get(parent.laneId);
           if (childIdx !== undefined && parentIdx !== undefined && childIdx < parentIdx) {
@@ -2457,6 +2602,16 @@ export class KanbanDb {
             cardId: task.id,
             laneId: task.laneId,
           });
+        }
+      }
+    }
+
+    // (c2) an epic (has children) drifting in a build lane — it belongs in
+    // Epics once approved (ceqfq); Plan is legit, that is where it decomposes
+    for (const task of tasks) {
+      if (task.laneId === "implement" || task.laneId === "review") {
+        if (this.childrenOf(task.id).length > 0) {
+          violations.push({ kind: "epic-in-workflow-lane", cardId: task.id, laneId: task.laneId });
         }
       }
     }
@@ -3223,16 +3378,24 @@ export class KanbanDb {
       throw new KanbanError(`card '${task.id}' has no attached ${ctx.gate.requireArtifact} to approve`, "conflict");
     }
     const body =
-      input.message?.trim() || (artifact ? `${artifactName} v${artifact.version} approved — build it` : "approved — build it");
+      input.message?.trim() ||
+      (artifact
+        ? this.childrenOf(task.id).length > 0
+          ? `${artifactName} v${artifact.version} approved — decomposition locked, epic now supervising in Epics`
+          : `${artifactName} v${artifact.version} approved — build it`
+        : "approved — build it");
     return this.tx((): { task: Task; comment: Comment } => {
+      // An epic's approval parks it in the container lane, unarmed — the epic
+      // plans work, it never builds (ceqfq); a childless card arms as before.
+      const isEpic = this.childrenOf(task.id).length > 0;
       const moved = this.updateTask(
         task.id,
-        { lane: ctx.gate!.approveTarget },
+        { lane: isEpic ? EPICS_LANE_ID : ctx.gate!.approveTarget },
         { cause: "approve", actor: input.author?.trim() || "user" },
       );
       // after the lane change (whose exit rule clears stale owners), the gate
-      // arms its actor: approveOwner or none
-      const task2 = this.updateTask(task.id, { owner: ctx.gate!.approveOwner ?? null });
+      // arms its actor: approveOwner or none (an epic stays unarmed)
+      const task2 = this.updateTask(task.id, { owner: isEpic ? null : (ctx.gate!.approveOwner ?? null) });
       const comment = this.createComment(task.id, {
         author: input.author,
         kind: "approval",

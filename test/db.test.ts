@@ -483,8 +483,9 @@ test("createTask defaults to the first lane and appends in order", () => {
 test("resolves lanes by slug prefix, name prefix, and ordinal", () => {
   expect(db.resolveLane("imp").name).toBe("Test + Implement");
   expect(db.resolveLane("rev").name).toBe("Review");
-  expect(db.resolveLane("3").name).toBe("Plan");
-  expect(db.resolveLane("4").name).toBe("Test + Implement");
+  expect(db.resolveLane("3").name).toBe("Epics"); // waiting, backlog, epics — plan is 4th now
+  expect(db.resolveLane("4").name).toBe("Plan");
+  expect(db.resolveLane("5").name).toBe("Test + Implement");
   expect(() => db.resolveLane("zzz")).toThrow(KanbanError);
 });
 
@@ -541,23 +542,23 @@ test("createLane slugifies and dedupes ids", () => {
 
 test("moveLane: before-anchor and last round-trip; order persists via lanes()", () => {
   db.createLane({ name: "Staging" });
-  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "done", "archive", "staging"]);
+  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "epics", "plan", "implement", "review", "done", "archive", "staging"]);
 
   const moved = db.moveLane("staging", "review");
   expect(moved.id).toBe("staging");
-  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "staging", "review", "done", "archive"]);
+  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "epics", "plan", "implement", "staging", "review", "done", "archive"]);
 
   db.moveLane("staging", null); // null anchor = literal last
   expect(db.lanes().map((l) => l.id).at(-1)).toBe("staging");
 
   // anchors resolve like every other lane ref (name and ordinal forms)
   expect(db.moveLane("staging", "Done").id).toBe("staging");
-  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "staging", "done", "archive"]);
+  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "epics", "plan", "implement", "review", "staging", "done", "archive"]);
 
   const path = join(dir, "t.db");
   db.close();
   const reopened = new KanbanDb(path);
-  expect(reopened.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "staging", "done", "archive"]);
+  expect(reopened.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "epics", "plan", "implement", "review", "staging", "done", "archive"]);
   reopened.close();
   db = new KanbanDb(path);
 });
@@ -571,7 +572,7 @@ test("fixed lanes refuse reorder and delete; self-anchor and index+before refuse
   expect(() => db.updateLane("review", { index: 1, before: "plan" })).toThrow(/pass either index or before, not both/);
   // anchors may be fixed lanes — only the moved lane's fixedness is refused
   expect(db.moveLane("review", "done").id).toBe("review");
-  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "done", "archive"]);
+  expect(db.lanes().map((l) => l.id)).toEqual(["waiting", "backlog", "epics", "plan", "implement", "review", "done", "archive"]);
 });
 
 test("lane positions renormalize to GAP spacing when squeezed", () => {
@@ -656,9 +657,9 @@ test("boardViolations reports all three kinds", () => {
   expect(db.boardViolations()).toEqual([]);
 
   // Now seed the three violations:
-  // (a) done epic with backlog child
+  // (a) done epic with an in-flight child (a Backlog child is a defer and never counts — ceqfq)
   const epicA = db.createTask({ title: "epic-a", lane: "done" });
-  const childA = db.createTask({ title: "child-a", parent: epicA.id, lane: "backlog" });
+  const childA = db.createTask({ title: "child-a", parent: epicA.id, lane: "plan" });
 
   // (b) implement parent (with plan) with backlog child
   const parentB = db.createTask({ title: "parent-b", lane: "implement" });
@@ -685,6 +686,11 @@ test("boardViolations reports all three kinds", () => {
     {
       kind: "missing-plan",
       cardId: cardC.id,
+      laneId: "implement",
+    },
+    {
+      kind: "epic-in-workflow-lane", // parentB has a child while sitting in implement
+      cardId: parentB.id,
       laneId: "implement",
     },
   ]);
@@ -731,13 +737,24 @@ test("boardViolations on a clean board is empty; activeChildren excludes done/ar
   // Clean board check: parent in backlog, children in backlog/done/archive
   expect(db.boardViolations()).toEqual([]);
 
-  // Move parent to done while childBacklog is still active
+  // Move parent to done with only a Backlog child left — a defer, not a
+  // violation (ceqfq: Backlog children never count as in flight)
   db.moveTask(parent.id, "done");
+  expect(db.boardViolations()).toEqual([]);
+
+  // …but an in-flight child under a done parent still fires (plus its own
+  // missing-plan, from landing in implement without a plan attached)
+  db.moveTask(childBacklog.id, "implement");
   expect(db.boardViolations()).toEqual([
     {
       kind: "done-parent-active-children",
       cardId: parent.id,
       childIds: [childBacklog.id],
+    },
+    {
+      kind: "missing-plan",
+      cardId: childBacklog.id,
+      laneId: "implement",
     },
   ]);
 
@@ -2046,7 +2063,7 @@ test("laneSnapshot caps cards at 40 and reports total/truncated; ageDays from th
 test("boardOverview: lane counts, oldest age, waiting ages, next proposal, blocked count", () => {
   // fresh board: every lane present except archive, all empty
   const empty = db.boardOverview();
-  expect(empty.lanes.map((l) => l.id)).toEqual(["waiting", "backlog", "plan", "implement", "review", "done"]);
+  expect(empty.lanes.map((l) => l.id)).toEqual(["waiting", "backlog", "epics", "plan", "implement", "review", "done"]);
   expect(empty.lanes.every((l) => l.count === 0 && l.oldestDays === 0)).toBe(true);
   expect(empty.waiting).toEqual([]);
   expect(empty.next).toBeNull();

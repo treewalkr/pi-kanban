@@ -979,7 +979,7 @@ test("kanban check reports seeded violations and exits 0", async () => {
 
   // 1. (a) done parent with active child
   const p1 = JSON.parse((await run("add", "parent-1", "--lane", "done", "--json")).stdout) as Task;
-  const c1 = JSON.parse((await run("add", "child-1", "--parent", p1.id, "--lane", "backlog", "--json")).stdout) as Task;
+  const c1 = JSON.parse((await run("add", "child-1", "--parent", p1.id, "--lane", "plan", "--json")).stdout) as Task;
 
   // 2. (b) child behind parent (parent in implement with plan, child in backlog)
   const p2 = JSON.parse((await run("add", "parent-2", "--lane", "implement", "--json")).stdout) as Task;
@@ -998,6 +998,7 @@ test("kanban check reports seeded violations and exits 0", async () => {
     expect(res.code).toBe(0);
     expect(res.stdout).toContain(`⚠ ${p1.id} done with active children: ${c1.id}`);
     expect(res.stdout).toContain(`⚠ ${c2.id} in backlog behind parent ${p2.id} (implement)`);
+    expect(res.stdout).toContain(`⚠ ${p2.id} is an epic in implement — epics belong in Epics once approved`);
     expect(res.stdout).toContain(`⚠ ${card3.id} in implement with no attached plan`);
 
     const jsonRes = await run("check", "--json", "--port", String(fake.port));
@@ -1018,6 +1019,11 @@ test("kanban check reports seeded violations and exits 0", async () => {
       {
         kind: "missing-plan",
         cardId: card3.id,
+        laneId: "implement",
+      },
+      {
+        kind: "epic-in-workflow-lane",
+        cardId: p2.id,
         laneId: "implement",
       },
     ]);
@@ -1587,7 +1593,7 @@ test("lane mv reorders before a ref or last; usage error; fixed lane refused", a
   const before = await run("lane", "mv", "review", "before:implement");
   expect(before.code).toBe(0);
   expect(before.stdout).toContain("review  moved before implement");
-  expect(await order()).toEqual(["waiting", "backlog", "plan", "review", "implement", "done", "archive"]);
+  expect(await order()).toEqual(["waiting", "backlog", "epics", "plan", "review", "implement", "done", "archive"]);
 
   const last = await run("lane", "mv", "review", "last");
   expect(last.code).toBe(0);
@@ -1956,7 +1962,7 @@ test("overview: lane counts, wip limits, owned cards, and a 2 KB pin on a 300-ca
   const human = await run("overview");
   expect(human.code).toBe(0);
   expect(Buffer.byteLength(human.stdout)).toBeLessThanOrEqual(2048);
-  expect(human.stdout).toContain("waiting 0 · backlog 300 · plan 0 · implement 1/3 · review 0 · done 0 · archive 0");
+  expect(human.stdout).toContain("waiting 0 · backlog 300 · epics 0 · plan 0 · implement 1/3 · review 0 · done 0 · archive 0");
   expect(human.stdout).toContain("owned ");
   expect(human.stdout).toContain("the owned one → implement · pi-builder");
   expect(human.stdout).not.toContain("secret note text"); // no note text ever
@@ -1968,6 +1974,7 @@ test("overview: lane counts, wip limits, owned cards, and a 2 KB pin on a 300-ca
   expect(parsed.lanes.map((l) => l.id)).toEqual([
     "waiting",
     "backlog",
+    "epics",
     "plan",
     "implement",
     "review",
