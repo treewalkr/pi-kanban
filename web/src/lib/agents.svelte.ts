@@ -30,10 +30,14 @@ class AgentsStore {
   /** Section the dialog should open on — the sidebar's bottom bar sets it, the ⚙ keeps the last one. */
   section = $state<SettingsSection>("general");
   loaded = $state(false);
+  /** True when the last GET /agents failed — the panel distinguishes this from loading. */
+  loadFailed = $state(false);
   /** One config per role ("plan-reviewer" needs a key, not a class field — $state rejects computed names). */
   configs = $state<Record<SettingsRole, AgentConfig>>(emptyConfigs());
   /** Lane worker runs for the settings panel's "lane workers" section; null = not loaded. */
   workerRuns = $state<LaneWorkerRun[] | null>(null);
+  /** True when GET /workers failed — the panel shows a retry instead of "loading…" forever. */
+  workerRunsFailed = $state(false);
   /** pi's catalog for the provider/model selects; empty → the panel falls back to text inputs. */
   models = $state<CatalogModel[]>([]);
   /** pi's skill catalog for the Skills picker; empty → picker falls back to custom-path entry. */
@@ -67,6 +71,7 @@ class AgentsStore {
 
   async load(): Promise<void> {
     this.saveState = "idle";
+    this.loadFailed = false;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -82,8 +87,10 @@ class AgentsStore {
       api.agents.pause.get(),
       api["pi-skills"].get(),
     ]);
-    if (agents.error) this.fail(agents.error);
-    else {
+    if (agents.error) {
+      this.fail(agents.error);
+      this.loadFailed = true;
+    } else {
       this.configs = {
         planner: agents.data.planner ?? {},
         reviewer: agents.data.reviewer ?? {},
@@ -269,10 +276,12 @@ class AgentsStore {
     return ok;
   }
 
-  /** GET /workers for the settings panel; empty string rows are the load-failed marker. */
+  /** GET /workers for the settings panel; a failed load flips workerRunsFailed for the retry line. */
   async loadWorkers(): Promise<void> {
+    this.workerRunsFailed = false;
     const res = await api.workers.get();
     if (!res.error) this.workerRuns = res.data.workers;
+    else this.workerRunsFailed = true;
   }
 
   /** Modal close path: flush → on success open=false and saveState="idle"; on failure modal stays open. */
