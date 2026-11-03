@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 // Seed the production shape that breaks numeric-index drops: top-level cards
 // t1 t2 epic lone t3 t4, with c1 c2 c3 hidden under epic. The server's flat
@@ -108,6 +108,173 @@ test.afterAll(async ({ request }) => {
 
 test.beforeEach(async ({ page }) => {
   page.on("console", (m) => console.log(m.text()));
+});
+
+// Same-column jerk repro (r52wu): g1..g6 land at the lane bottom; each test
+// seeds its own set and cleans it up so the original tests see an unchanged lane.
+async function seedSameColumnCards(request: APIRequestContext): Promise<void> {
+  for (const t of ["drag g1", "drag g2", "drag g3", "drag g4", "drag g5", "drag g6"]) {
+    const res = await request.post("/tasks", { data: { title: t, lane: "backlog" } });
+    ids[t] = (await res.json()).id;
+  }
+}
+
+async function cleanupSameColumnCards(request: APIRequestContext): Promise<void> {
+  for (const t of ["drag g1", "drag g2", "drag g3", "drag g4", "drag g5", "drag g6"]) {
+    const id = ids[t];
+    if (!id) continue;
+    await request.delete(`/tasks/${id}`, { params: { force: "true" } });
+    delete ids[t];
+  }
+}
+
+async function attachOrderRecorder(page: Page, laneLabel: string) {
+  await page.evaluate((label) => {
+    const cards = document.querySelector(`section.lane[aria-label='${label}'] .cards`);
+    if (!cards) throw new Error("no .cards container");
+    const readSig = () =>
+      [...cards.querySelectorAll(":scope > div > [data-card]")]
+        .filter((c) => !c.closest(".card-children"))
+        .map((c) => c.getAttribute("data-card"))
+        .join(",");
+    const seq: string[] = [readSig()];
+    new MutationObserver(() => {
+      const sig = readSig();
+      if (seq[seq.length - 1] !== sig) seq.push(sig);
+    }).observe(cards, { childList: true });
+    (window as any).__orderSeq = seq;
+  }, laneLabel);
+}
+
+async function readOrderSeq(page: Page): Promise<string[]> {
+  return page.evaluate(() => [...((window as any).__orderSeq as string[])]);
+}
+
+// Map an order signature's last n ids to titles for readable assertions
+function sigTail(sig: string, n: number): string[] {
+  return sig
+    .split(",")
+    .slice(-n)
+    .map((id) => {
+      for (const [title, tid] of Object.entries(ids)) if (tid === id) return title;
+      return id;
+    });
+}
+
+async function markWrapperAnim(page: Page, cardId: string): Promise<number | null> {
+  return page.evaluate((id) => {
+    const w = document.querySelector(`[data-card="${id}"]`)?.parentElement;
+    const a = w?.getAnimations().find((an) => an.playState === "running") ?? null;
+    (window as any).__markedAnim = a;
+    return a ? (a.currentTime as number) : null;
+  }, cardId);
+}
+
+async function checkWrapperAnim(page: Page, cardId: string): Promise<{ same: boolean; nowTime: number | null }> {
+  return page.evaluate((id) => {
+    const w = document.querySelector(`[data-card="${id}"]`)?.parentElement;
+    const a = w?.getAnimations().find((an) => an.playState === "running") ?? null;
+    const marked = (window as any).__markedAnim as Animation | null;
+    return { same: !!a && !!marked && a === marked, nowTime: a ? (a.currentTime as number) : null };
+  }, cardId);
+}
+
+test("same-column drag commits exactly one reorder per settled midpoint crossing", async ({ page, request }) => {
+  await seedSameColumnCards(request);
+  await page.goto("/");
+  await page.waitForSelector("section.lane[aria-label='Backlog'] [data-card]");
+  await attachOrderRecorder(page, "Backlog");
+
+  const g6 = page.locator(`[data-card="${ids["drag g6"]}"]`);
+  const g4 = page.locator(`[data-card="${ids["drag g4"]}"]`);
+  await g4.scrollIntoViewIfNeeded();
+
+  const g6Box = await g6.boundingBox();
+  const g4Box = await g4.boundingBox();
+  expect(g6Box).not.toBeNull();
+  expect(g4Box).not.toBeNull();
+
+  const x = g4Box!.x + g4Box!.width / 2;
+  // Drag g6 up across g5's and g4's settled midpoints, ending just above g4's
+  // midpoint; 40ms pauses sit inside the 180ms flip window.
+  await page.mouse.move(x, g6Box!.y + g6Box!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x, g4Box!.y + g4Box!.height + 10, { steps: 6 }); // past g5's midpoint
+  await page.waitForTimeout(40);
+  await page.mouse.move(x, g4Box!.y + 12, { steps: 6 }); // past g4's midpoint
+  await page.waitForTimeout(40);
+  await page.mouse.move(x + 2, g4Box!.y + 14); // ±2px nudge, same settled slot
+  await page.mouse.move(x - 2, g4Box!.y + 12);
+
+  const seq = await readOrderSeq(page);
+  // exactly 3 entries: initial order + one commit per crossed midpoint
+  expect(seq.length, `extra order changes: ${seq.slice(3).map((s) => sigTail(s, 4).join("|"))}`).toBe(3);
+  expect(sigTail(seq[0], 4)).toEqual(["drag g3", "drag g4", "drag g5", "drag g6"]);
+  expect(sigTail(seq[1], 4)).toEqual(["drag g3", "drag g4", "drag g6", "drag g5"]);
+  expect(sigTail(seq[2], 4)).toEqual(["drag g3", "drag g6", "drag g4", "drag g5"]);
+
+  await page.mouse.up();
+  const titles = await backlogTitles(page);
+  expect(titles.indexOf("drag g6")).toBe(titles.indexOf("drag g3") + 1);
+  expect(titles.indexOf("drag g4")).toBe(titles.indexOf("drag g6") + 1);
+
+  // final order persisted across reload
+  await page.reload();
+  await page.waitForSelector("section.lane[aria-label='Backlog'] [data-card]");
+  const reloaded = await backlogTitles(page);
+  expect(reloaded.indexOf("drag g6")).toBe(reloaded.indexOf("drag g3") + 1);
+  expect(reloaded.indexOf("drag g4")).toBe(reloaded.indexOf("drag g6") + 1);
+
+  await cleanupSameColumnCards(request);
+});
+
+test("jitter near a midpoint while flips are in flight never re-commits the hint", async ({ page, request }) => {
+  await seedSameColumnCards(request);
+  await page.goto("/");
+  await page.waitForSelector("section.lane[aria-label='Backlog'] [data-card]");
+  await attachOrderRecorder(page, "Backlog");
+
+  const g6 = page.locator(`[data-card="${ids["drag g6"]}"]`);
+  const g4 = page.locator(`[data-card="${ids["drag g4"]}"]`);
+  await g4.scrollIntoViewIfNeeded();
+
+  const g6Box = await g6.boundingBox();
+  const g4Box = await g4.boundingBox();
+  expect(g6Box).not.toBeNull();
+  expect(g4Box).not.toBeNull();
+
+  const x = g4Box!.x + g4Box!.width / 2;
+  // Cross both midpoints fast and mark the fresh flip at once — the polluted
+  // window is the first ~30ms of the displaced card's slide, so the park into
+  // g4's trail and the jitter must land inside it.
+  await page.mouse.move(x, g6Box!.y + g6Box!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x, g4Box!.y + 14, { steps: 8 });
+  await page.waitForTimeout(35); // let the coalesced hint frame fire (rAF)
+  const markedTime = await markWrapperAnim(page, ids["drag g4"]);
+  expect(markedTime).not.toBeNull();
+
+  await page.mouse.move(x, g4Box!.y + 30); // into the trail, below g4's settled midpoint
+  const seqAtMark = (await readOrderSeq(page)).length;
+  // ±2px jitter at ~10ms intervals, entirely inside the 180ms flip window
+  for (let i = 0; i < 6; i++) {
+    await page.mouse.move(x + (i % 2 ? 2 : -2), g4Box!.y + 30 + (i % 2 ? 2 : -2));
+    await page.waitForTimeout(10);
+  }
+
+  const seq = await readOrderSeq(page);
+  // the park and the jitter re-committed nothing — flips ran undisturbed
+  expect(seq.length, `extra order changes: ${seq.slice(seqAtMark).map((s) => sigTail(s, 4).join("|"))}`).toBe(seqAtMark);
+  expect(seqAtMark).toBe(3);
+  expect(sigTail(seq[2], 4)).toEqual(["drag g3", "drag g6", "drag g4", "drag g5"]);
+
+  // the in-flight flip was never replaced: same Animation object, time advanced
+  const anim = await checkWrapperAnim(page, ids["drag g4"]);
+  expect(anim.same).toBe(true);
+  expect(anim.nowTime!).toBeGreaterThan(markedTime!);
+
+  await page.mouse.up();
+  await cleanupSameColumnCards(request);
 });
 
 test("cards visibly slide apart while dragging and the slot opens at the target", async ({ page }) => {
@@ -291,15 +458,18 @@ test("cross-lane drag lands between the hovered cards", async ({ page }) => {
     "drag t4",
   ]);
 
-  // Drag it back to Backlog bottom
+  // Drag it back to Backlog. Settled hints land lone before t4: the path
+  // crosses t4's top half, the slot opens there, and the pointer comes to
+  // rest inside t4's new (pushed-down) upper half — pre-fix this read appended
+  // only via mid-flip geometry (r52wu)
   await pointerDrag(page, ids["drag lone"], "section.lane[aria-label='Backlog'] .cards", "none");
   await expect.poll(() => backlogTitles(page)).toEqual([
     "drag t1",
     "drag t2",
     "drag epic",
     "drag t3",
-    "drag t4",
     "drag lone",
+    "drag t4",
   ]);
 });
 

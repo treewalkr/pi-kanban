@@ -86,6 +86,12 @@ card's own element shown at the target position while a lifted clone follows
 the cursor. Replaces the old 2px drop-gap line.
 _Avoid_: Drop gap, placeholder, spacer
 
+**Settled layout**:
+The transform-immune position of a card (its offsetTop/offsetHeight place in
+the lane) while `animate:flip` runs; drag hints are decided against settled
+layout so measurement never chases moving cards.
+_Avoid_: resting position, final position
+
 **Pool slot**:
 One concurrency opening of a worker pool (`worker_pools`): a `{provider, model, thinking}` override the loop merges over the role's agent config when it spawns there. Distinct from the drag-and-drop **Slot**.
 _Avoid_: worker, lane slot, agent seat.
