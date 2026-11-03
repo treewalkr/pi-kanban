@@ -68,6 +68,12 @@ set when a card enters Test + Implement and cleared when it leaves, making
 "who's on this" a fact rather than a thread-read.
 _Avoid_: Assignee, claimant, holder, session binding
 
+**Lead actor**:
+The first actor of a lane's context (`actors[0]`) — the one a review `--block`
+return hands ownership to on re-entering Test + Implement, and the fallback
+owner when no context exists is none (`null`).
+_Avoid_: Primary actor, default builder, first agent
+
 **Anchor**:
 The card a move is positioned relative to (`mv <id> <lane> --before <anchorId>`),
 so placement survives concurrent edits instead of drifting like an index.
