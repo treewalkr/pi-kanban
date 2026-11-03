@@ -57,14 +57,27 @@ async function cliIn(cwd: string, ...args: string[]): Promise<CliResult> {
  * With `activity`, /activity is served too (what `ps` reads for live sessions). */
 function fakeServe(
   health: Record<string, unknown>,
-  activity?: { sessions: unknown[]; queued: unknown[] },
+  activity?: {
+    sessions?: unknown[];
+    queued?: unknown[];
+    incidents?: unknown[];
+    pools?: unknown[];
+  },
 ): { port: number; stop: () => void } {
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     fetch: (req) =>
       req.url.endsWith("/activity") && activity
-        ? new Response(JSON.stringify(activity))
+        ? new Response(
+            JSON.stringify({
+              sessions: [],
+              queued: [],
+              incidents: [],
+              pools: [],
+              ...activity,
+            }),
+          )
         : new Response(JSON.stringify({ ok: true, booted: Date.now(), ...health })),
   });
   if (server.port === undefined) throw new Error("ephemeral port not assigned");
@@ -1125,6 +1138,127 @@ test("ps lists serves with their live agent sessions; --json round-trips", async
     expect(data.abandonedLeases).toEqual([]);
   } finally {
     serve.stop();
+  }
+});
+
+test("ps renders an incidents block per pool slot; --json round-trips", async () => {
+  const now = Date.now();
+  const serve = fakeServe(
+    { pid: 4243, version: VERSION, git: null },
+    {
+      incidents: [
+        {
+          poolId: "p1",
+          poolName: "Builder",
+          slotIndex: 0,
+          cause: "provider-quota",
+          count: 3,
+          firstSeenAt: now - 12 * 60_000,
+          lastSeenAt: now - 2 * 60_000,
+          cooldownUntil: now + 5 * 60_000, // cooling
+        },
+        {
+          poolId: "p1",
+          poolName: "Builder",
+          slotIndex: 1,
+          cause: "auth",
+          count: 1,
+          firstSeenAt: now - 30 * 60_000,
+          lastSeenAt: now - 30 * 60_000,
+          cooldownUntil: now - 1000, // cooldown expired
+        },
+      ],
+      pools: [
+        {
+          poolId: "p1",
+          poolName: "Builder",
+          totalSlots: 2,
+          coolingSlots: 2,
+          lastCause: "provider-quota",
+        },
+      ],
+    },
+  );
+  try {
+    const res = await cli("ps");
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("incident  Builder slot 0  provider-quota ×3  first 12m ago  cooldown");
+    expect(res.stdout).toContain("left");
+    expect(res.stdout).toContain("incident  Builder slot 1  auth ×1  first 30m ago  cooldown expired");
+
+    const jsonRes = await cli("ps", "--json");
+    expect(jsonRes.code).toBe(0);
+    const data = JSON.parse(jsonRes.stdout) as {
+      serves: Array<{
+        port: number;
+        incidents: Array<{ cause: string }>;
+        pools: Array<{ coolingSlots: number }>;
+      }>;
+    };
+    const entry = data.serves.find((s) => s.port === serve.port)!;
+    expect(entry.incidents[0].cause).toBe("provider-quota");
+    expect(entry.pools[0].coolingSlots).toBe(2);
+  } finally {
+    serve.stop();
+  }
+});
+
+test("check flags a pool with zero healthy slots", async () => {
+  const head = headState()?.head ?? "";
+  // 1. All-cooling pool
+  const allCoolingServe = fakeServe(
+    { version: VERSION, git: { commit: head, head, dirty: false } },
+    {
+      pools: [
+        {
+          poolId: "p1",
+          poolName: "BuilderPool",
+          totalSlots: 2,
+          coolingSlots: 2,
+          lastCause: "provider-quota",
+        },
+      ],
+    },
+  );
+  try {
+    const warnings = await serveWarnings(allCoolingServe.port);
+    expect(warnings.map((w) => w.kind)).toContain("pool-no-healthy-slots");
+    const w = warnings.find((w) => w.kind === "pool-no-healthy-slots")!;
+    expect(w.message).toContain(
+      "pool 'BuilderPool' has no healthy slots (2/2 cooling, last provider-quota) — edit the pool to reset cooldowns",
+    );
+
+    const checkRes = await cli("check", "--port", String(allCoolingServe.port));
+    expect(checkRes.code).toBe(0);
+    expect(checkRes.stdout).toContain("no healthy slots");
+  } finally {
+    allCoolingServe.stop();
+  }
+
+  // 2. Healthy pool (or healthy serve with partial cooling / no pools) -> no such warning
+  const healthyServeInstance = fakeServe(
+    { version: VERSION, git: { commit: head, head, dirty: false } },
+    {
+      pools: [
+        {
+          poolId: "p1",
+          poolName: "BuilderPool",
+          totalSlots: 2,
+          coolingSlots: 1, // 1 healthy, 1 cooling
+          lastCause: "provider-quota",
+        },
+      ],
+    },
+  );
+  try {
+    const warnings = await serveWarnings(healthyServeInstance.port);
+    expect(warnings.some((w) => w.kind === "pool-no-healthy-slots")).toBe(false);
+
+    const checkRes = await cli("check", "--port", String(healthyServeInstance.port));
+    expect(checkRes.code).toBe(0);
+    expect(checkRes.stdout).not.toContain("no healthy slots");
+  } finally {
+    healthyServeInstance.stop();
   }
 });
 
