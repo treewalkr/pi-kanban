@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, FolderGit2, Layers, Settings2 } from "@lucide/svelte";
+  import { Bot, Columns3, FolderGit2, Layers, Settings2 } from "@lucide/svelte";
   import { agents, type SettingsSection } from "./agents.svelte";
   import { pools } from "./pools.svelte";
   import { projects } from "./projects.svelte";
@@ -7,6 +7,7 @@
   import AgentsSettings from "./AgentsSettings.svelte";
   import PoolsSettings from "./PoolsSettings.svelte";
   import ProjectsSettings from "./ProjectsSettings.svelte";
+  import LanesSettings from "./LanesSettings.svelte";
 
   type Section = SettingsSection;
 
@@ -87,6 +88,15 @@
           <FolderGit2 size={16} strokeWidth={1.8} />
           <span>Projects</span>
         </button>
+        <button
+          type="button"
+          class="settings-tab"
+          aria-current={section === "lanes" ? "page" : undefined}
+          onclick={() => activate("lanes")}
+        >
+          <Columns3 size={16} strokeWidth={1.8} />
+          <span>Lanes</span>
+        </button>
       </nav>
       <button type="button" class="settings-close" onclick={close} aria-label="close settings" title="close settings">×</button>
     </div>
@@ -130,6 +140,12 @@
               <button type="button" onclick={() => void projects.load()}>retry</button>
             </p>
           {/if}
+        </div>
+      {/if}
+      {#if visited.has("lanes")}
+        <!-- no load gate: lanes live in the board store, already SSE-refreshed -->
+        <div class="settings-section-host" hidden={section !== "lanes"}>
+          <LanesSettings />
         </div>
       {/if}
     </main>

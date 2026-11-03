@@ -64,21 +64,15 @@ describe("palette model", () => {
       { type: "project", name: "beta" },
       { type: "project", name: "kanban" },
     ]);
-    // then lane actions in board order: waiting (go only, index 0), backlog (go, left, right), …
+    // then lane actions in board order — fixed lanes offer "go" only, movable lanes offer moves
     expect(items.slice(3).map((i) => i.label)).toEqual([
       "go to Waiting on you",
-      "move Waiting on you right",
       "go to Backlog",
-      "move Backlog left",
-      "move Backlog right",
       "go to Test + Implement",
       "move Test + Implement left",
       "move Test + Implement right",
       "go to Done",
-      "move Done left",
-      "move Done right",
       "go to Archive",
-      "move Archive left",
       "expand archive",
     ]);
     // detail column: current vs switch, card counts
@@ -86,8 +80,7 @@ describe("palette model", () => {
     expect(items[2]!.detail).toBe("current"); // ~/kanban is the active filter
     expect(items[1]!.detail).toBe("switch");
     expect(items[3]!.detail).toBe("2 cards");
-    expect(items[8]!.detail).toBe("1 cards");
-    expect(items[4]!.detail).toBe("lane");
+    expect(items[5]!.detail).toBe("1 cards");
   });
 
   test("project items: ~/{name} labels, current marker, all-projects item", () => {
@@ -187,10 +180,12 @@ describe("palette model", () => {
         .filter((i): i is PaletteItem & { action: { type: "lane-move"; laneId: string; dir: -1 | 1 } } =>
           i.action.type === "lane-move" && i.action.laneId === laneId)
         .map((i) => i.action.dir);
-    // first lane: move-right only; last lane: move-left only; middle lane: both
-    expect(dirOf("waiting")).toEqual([1]);
-    expect(dirOf("archive")).toEqual([-1]);
-    expect(dirOf("backlog")).toEqual([-1, 1]);
+    // fixed lanes never move, whatever their position; movable lanes move within the band
+    expect(dirOf("waiting")).toEqual([]);
+    expect(dirOf("backlog")).toEqual([]);
+    expect(dirOf("done")).toEqual([]);
+    expect(dirOf("archive")).toEqual([]);
+    expect(dirOf("implement")).toEqual([-1, 1]);
   });
 
   test("archive toggle only on the archive lane, label flips with archiveCollapsed", () => {

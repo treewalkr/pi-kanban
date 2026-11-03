@@ -91,13 +91,13 @@ export function paletteItems(input: PaletteInput): PaletteItem[] {
       const candidates: Array<{ label: string; action: PaletteAction; detail: string }> = [
         { label: `go to ${lane.name}`, action: { type: "lane-go", laneId: lane.id }, detail: `${laneCount(lane.id)} cards` },
       ];
-      if (index > 0)
+      if (index > 0 && !lane.fixed)
         candidates.push({
           label: `move ${lane.name} left`,
           action: { type: "lane-move", laneId: lane.id, dir: -1 },
           detail: "lane",
         });
-      if (index < lanes.length - 1)
+      if (index < lanes.length - 1 && !lane.fixed)
         candidates.push({
           label: `move ${lane.name} right`,
           action: { type: "lane-move", laneId: lane.id, dir: 1 },
