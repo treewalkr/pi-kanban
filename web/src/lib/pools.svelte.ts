@@ -25,12 +25,60 @@ export function newPoolDraft(): WorkerPool {
   };
 }
 
+const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+/** Editable shape of a pool — updatedAt/idle fields must not flip the dirty flag. */
+const poolKey = (p: WorkerPool): string =>
+  JSON.stringify({
+    id: p.id,
+    name: p.name,
+    enabled: p.enabled,
+    roles: p.roles,
+    slots: p.slots,
+    maxWorkers: p.maxWorkers ?? null,
+  });
+
 class PoolsStore {
   loaded = $state(false);
+  /** True when the last GET /pools failed — the panel distinguishes this from loading. */
+  loadFailed = $state(false);
   pools = $state<WorkerPool[]>([]);
   models = $state<CatalogModel[]>([]);
   settings = $state<{ maxWorkers: number }>({ maxWorkers: 12 });
+  /** Last server-confirmed state: the close guard's baseline. */
+  private savedPools = $state<WorkerPool[]>([]);
+  private savedMaxWorkers = $state(12);
   private drafts = new Set<string>();
+
+  /** True when any pool card or the global cap differs from the saved state. */
+  get dirty(): boolean {
+    if (this.settings.maxWorkers !== this.savedMaxWorkers) return true;
+    if (this.pools.length !== this.savedPools.length) return true;
+    return this.pools.some((p, i) => poolKey(p) !== poolKey(this.savedPools[i]));
+  }
+
+  /** Per-pool dirty check for the ghost-until-dirty save button. */
+  isPoolDirty(pool: WorkerPool): boolean {
+    const saved = this.savedPools.find((p) => p.id === pool.id);
+    if (!saved) return true;
+    return poolKey(saved) !== poolKey(pool);
+  }
+
+  get settingsDirty(): boolean {
+    return this.settings.maxWorkers !== this.savedMaxWorkers;
+  }
+
+  /** Drop unsaved edits and new drafts (close guard → discard). */
+  revert(): void {
+    this.pools = clone(this.savedPools);
+    this.settings = { maxWorkers: this.savedMaxWorkers };
+    this.drafts.clear();
+  }
+
+  private snapshot(): void {
+    this.savedPools = clone(this.pools);
+    this.savedMaxWorkers = this.settings.maxWorkers;
+  }
 
   private fail(error: EdenError): void {
     const value = error.value as { error?: string } | undefined;
@@ -48,16 +96,20 @@ class PoolsStore {
   }
 
   async load(): Promise<void> {
+    this.loadFailed = false;
     const [poolsRes, modelsRes] = await Promise.all([
       api.pools.get(),
       api["pi-models"].get(),
     ]);
-    if (poolsRes.error) this.fail(poolsRes.error);
-    else {
+    if (poolsRes.error) {
+      this.fail(poolsRes.error);
+      this.loadFailed = true;
+    } else {
       this.pools = (poolsRes.data.pools ?? []).map((p) => ({ ...p, slots: normalizeSlots(p.slots) }));
       this.settings = poolsRes.data.settings ?? { maxWorkers: 12 };
       this.drafts.clear();
       this.loaded = true;
+      this.snapshot();
     }
     if (!modelsRes.error) this.models = modelsRes.data.models;
   }
@@ -82,6 +134,7 @@ class PoolsStore {
       this.pools.push({ ...saved, slots: normalizeSlots(saved.slots) });
     }
     this.drafts.delete(pool.id);
+    this.snapshot();
     return true;
   }
 
@@ -95,6 +148,7 @@ class PoolsStore {
     }
     const res = data as { maxWorkers: number };
     this.settings = { maxWorkers: res.maxWorkers };
+    this.snapshot();
     return true;
   }
 
@@ -110,6 +164,7 @@ class PoolsStore {
       return false;
     }
     this.pools = this.pools.filter((p) => p.id !== id);
+    this.snapshot();
     return true;
   }
 }

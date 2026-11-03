@@ -1,6 +1,8 @@
 <script lang="ts">
   import { board } from "./board.svelte";
   import { laneDrag } from "./laneDrag.svelte";
+  import { laneColor } from "./util";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
 
   let rowsEl = $state<HTMLElement | null>(null);
   let newName = $state("");
@@ -8,6 +10,7 @@
   let renameValue = $state("");
   let editingLimit = $state<string | null>(null);
   let limitValue = $state("");
+  let laneToDelete = $state<{ id: string; name: string } | null>(null);
 
   const dragOpts = {
     get lanes() {
@@ -27,13 +30,29 @@
     newName = "";
   }
 
+  function startRename(lane: { id: string; name: string }) {
+    renameValue = lane.name;
+    renaming = lane.id;
+  }
+
   function commitRename(laneId: string, original: string) {
+    if (renaming !== laneId) return; // Escape already cancelled
     renaming = null;
     const name = renameValue.trim();
     if (name && name !== original) board.renameLane(laneId, name);
   }
 
+  function cancelRename() {
+    renaming = null;
+  }
+
+  function startLimit(lane: { id: string; wipLimit: number | null }) {
+    limitValue = lane.wipLimit === null ? "" : String(lane.wipLimit);
+    editingLimit = lane.id;
+  }
+
   function commitLimit(laneId: string, current: number | null) {
+    if (editingLimit !== laneId) return; // Escape already cancelled
     editingLimit = null;
     const v = limitValue.trim();
     if (v === "") {
@@ -42,6 +61,24 @@
       if (Number(v) !== current) board.setLaneLimit(laneId, Number(v));
     }
     // anything else cancels
+  }
+
+  function cancelLimit() {
+    editingLimit = null;
+  }
+
+  function confirmDelete() {
+    if (!laneToDelete) return;
+    const id = laneToDelete.id;
+    laneToDelete = null;
+    void board.removeLane(id);
+  }
+
+  // the rename/WIP editors replace a span: without this the keystrokes that
+  // opened them have nowhere to go and the input is not focused
+  function autofocus(node: HTMLInputElement) {
+    node.focus();
+    node.select();
   }
 </script>
 
@@ -53,7 +90,7 @@
     </p>
 
     <div class="lane-rows" bind:this={rowsEl}>
-      {#each board.lanes as lane (lane.id)}
+      {#each board.lanes as lane, i (lane.id)}
         <div
           class="lane-row"
           class:fixed={!!lane.fixed}
@@ -63,6 +100,7 @@
           {#if laneDrag.dropBefore === lane.id}
             <div class="lane-drop-line"></div>
           {/if}
+          <span class="lane-row-dot" style="--accent: {laneColor(i)}" aria-hidden="true"></span>
           {#if !lane.fixed}
             <button
               type="button"
@@ -82,21 +120,28 @@
               <input
                 aria-label="rename {lane.name}"
                 bind:value={renameValue}
+                use:autofocus
                 onblur={() => commitRename(lane.id, lane.name)}
                 onkeydown={(e) => {
                   if (e.key === "Enter") commitRename(lane.id, lane.name);
-                  if (e.key === "Escape") renaming = null;
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    cancelRename();
+                  }
                 }}
               />
             {:else}
               <span
                 role="button"
-                tabindex="-1"
+                tabindex="0"
                 class="lane-row-name-text"
-                title="double-click to rename"
-                ondblclick={() => {
-                  renameValue = lane.name;
-                  renaming = lane.id;
+                title="rename (double-click or Enter)"
+                ondblclick={() => startRename(lane)}
+                onkeydown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    startRename(lane);
+                  }
                 }}
               >
                 {lane.name}
@@ -111,22 +156,29 @@
               class="lane-row-wip-input"
               aria-label="wip limit {lane.name}"
               bind:value={limitValue}
+              use:autofocus
               title="WIP limit — Enter sets, empty clears, Escape cancels"
               onblur={() => commitLimit(lane.id, lane.wipLimit)}
               onkeydown={(e) => {
                 if (e.key === "Enter") commitLimit(lane.id, lane.wipLimit);
-                if (e.key === "Escape") editingLimit = null;
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  cancelLimit();
+                }
               }}
             />
           {:else}
             <span
               role="button"
-              tabindex="-1"
+              tabindex="0"
               class="lane-row-wip"
-              title="WIP limit — double-click to set or clear"
-              ondblclick={() => {
-                limitValue = lane.wipLimit === null ? "" : String(lane.wipLimit);
-                editingLimit = lane.id;
+              title="WIP limit — double-click or Enter to set or clear"
+              ondblclick={() => startLimit(lane)}
+              onkeydown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  startLimit(lane);
+                }
               }}
             >
               {lane.wipLimit === null ? "no limit" : `wip ${lane.wipLimit}`}
@@ -134,9 +186,17 @@
           {/if}
 
           {#if !lane.fixed}
-            <button type="button" class="danger lane-row-delete" aria-label="delete {lane.name}" title="delete lane" onclick={() => board.removeLane(lane.id)}>
+            <button
+              type="button"
+              class="danger lane-row-delete"
+              aria-label="delete {lane.name}"
+              title="delete lane"
+              onclick={() => (laneToDelete = { id: lane.id, name: lane.name })}
+            >
               ✕
             </button>
+          {:else}
+            <span class="lane-row-delete pad" aria-hidden="true"></span>
           {/if}
         </div>
       {/each}
@@ -151,7 +211,16 @@
           if (e.key === "Enter") void submit();
         }}
       />
-      <button type="button" aria-label="add lane" onclick={() => void submit()}>add lane</button>
+      <button type="button" class="ghost" aria-label="add lane" onclick={() => void submit()}>add lane</button>
     </div>
   </section>
 </div>
+
+{#if laneToDelete}
+  <ConfirmDialog
+    title="Delete lane"
+    message={`Delete lane “${laneToDelete.name}”? This cannot be undone.`}
+    onconfirm={confirmDelete}
+    oncancel={() => (laneToDelete = null)}
+  />
+{/if}

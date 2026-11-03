@@ -83,8 +83,16 @@
   let laneActor = $derived(laneActors.find((a) => a.id === role) ?? null);
   let laneName = $derived(board.lanes.find((l) => l.id === selectedLane)?.name ?? selectedLane);
 
+  const BOARD_ROLES: SettingsRole[] = ["elaborator", "manager", "worker"];
+
   function loadLaneForms(): void {
-    if (boardScope) return;
+    if (boardScope) {
+      // entering Board must select a board role: leaving a lane actor in `role`
+      // made the next model/thinking edit save to that lane's agent (q8x8g)
+      if (!BOARD_ROLES.includes(role)) role = "elaborator";
+      form = toForm(agents.configs[role]);
+      return;
+    }
     const ctx = laneContext;
     if (!ctx) {
       laneForm = emptyLaneForm();
@@ -251,10 +259,10 @@
     <h3 class="settings-general-heading">Agent loop</h3>
     <p class="settings-general-description">Paused stops every loop process from spawning agent sessions and kills in-flight ones; unpausing resumes on the next board write. Survives restarts — no new session is created for a card while paused.</p>
     <div class="seg">
-      <button type="button" class="seg-option" class:on={!agents.paused} aria-pressed={!agents.paused} disabled={!agents.paused} onclick={() => agents.setPaused(false)}>
+      <button type="button" class="seg-option" class:on={!agents.paused} aria-pressed={!agents.paused} onclick={() => agents.setPaused(false)}>
         <span class="seg-label">running</span>
       </button>
-      <button type="button" class="seg-option" class:on={agents.paused} aria-pressed={agents.paused} disabled={agents.paused} onclick={() => agents.setPaused(true)}>
+      <button type="button" class="seg-option" class:on={agents.paused} aria-pressed={agents.paused} onclick={() => agents.setPaused(true)}>
         <span class="seg-label">paused</span>
       </button>
     </div>
@@ -262,7 +270,7 @@
 
   <section class="settings-general-section">
     <h3 class="settings-general-heading">Lane</h3>
-    <p class="settings-general-description">Agent settings are organized by workflow lane: each lane hosts an actor chain with its own prompts, artifact template, and trigger/exit/gate/cap rules. Board holds the board-level agents. Switching stashes unsaved edits.</p>
+    <p class="settings-general-description">Agent settings are organized by workflow lane: each lane hosts an actor chain with its own prompts, artifact template, and trigger/exit/gate/cap rules. Board holds the board-level agents. Switching saves pending edits.</p>
     <div class="seg">
       {#each workflowLanes as l (l.id)}
         <button type="button" class="seg-option" class:on={selectedLane === l.id} aria-pressed={selectedLane === l.id} onclick={() => void selectLane(l.id)}>
@@ -275,10 +283,16 @@
     </div>
   </section>
 
+  <div class="settings-scope" aria-live="polite">
+    <span class="settings-scope-lane">{boardScope ? "board" : laneName}</span>
+    <span class="settings-scope-role">{role}</span>
+    <span class="settings-scope-hint">{boardScope ? "board role" : "lane actor"}</span>
+  </div>
+
   {#if boardScope}
     <section class="settings-general-section">
       <h3 class="settings-general-heading">Board agents</h3>
-      <p class="settings-general-description">The elaborator expands newly captured cards on request, the manager chats from the board view and dispatches lane workers, and workers run per-lane charters. Lane agents are configured on their lanes above. Switching stashes unsaved edits.</p>
+      <p class="settings-general-description">The elaborator expands newly captured cards on request, the manager chats from the board view and dispatches lane workers, and workers run per-lane charters. Lane agents are configured on their lanes above. Switching saves pending edits.</p>
       <div class="seg">
         <button
           type="button"
@@ -526,10 +540,15 @@
   </section>
 
   <section class="settings-general-section">
-    <h3 class="settings-general-heading">lane workers</h3>
+    <h3 class="settings-general-heading">Lane workers</h3>
     <p class="settings-general-description">Short-lived per-lane agents dispatched from board chat or `kanban worker run` — backlog grooms (writable), the rest report. Summaries are what the manager relays.</p>
     {#if workerRuns === null}
-      <p class="workers-empty">loading…</p>
+      <p class="workers-empty">
+        {agents.workerRunsFailed ? "could not load worker runs" : "loading…"}
+        {#if agents.workerRunsFailed}
+          <button class="ghost" onclick={() => void agents.loadWorkers()}>retry</button>
+        {/if}
+      </p>
     {:else if workerRuns.length === 0}
       <p class="workers-empty">no runs — dispatch from board chat or `kanban worker run`</p>
     {:else}
@@ -545,15 +564,4 @@
       </div>
     {/if}
   </section>
-
-  <div class="editor-actions">
-    <span class="spacer"></span>
-    <span class="save-status" data-state={agents.saveState}>
-      {agents.saveState === "saving" ? "saving…" : agents.saveState === "saved" ? "saved" : agents.saveState === "failed" ? "save failed" : ""}
-    </span>
-    {#if agents.saveState === "failed"}
-      <button class="ghost" onclick={() => void agents.flush()}>retry</button>
-    {/if}
-    <button class="ghost" onclick={() => void agents.close()}>close</button>
-  </div>
 </div>

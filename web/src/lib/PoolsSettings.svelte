@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { AgentThinking, BuiltinAgentRole, WorkerPool } from "../../../src/db";
+  import { X } from "@lucide/svelte";
   import { pools } from "./pools.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
 
@@ -89,11 +90,12 @@
       </label>
       <button
         type="button"
-        class="primary"
-        disabled={savingSettings}
+        class:primary={pools.settingsDirty}
+        class:ghost={!pools.settingsDirty}
+        disabled={savingSettings || !pools.settingsDirty}
         onclick={saveSettings}
       >
-        {savingSettings ? "saving…" : "save"}
+        {savingSettings ? "saving…" : pools.settingsDirty ? "save" : "saved"}
       </button>
     </div>
 
@@ -216,12 +218,18 @@
             </div>
           </div>
 
-          {#each pool.slots as slot, sIndex (sIndex)}
-            {#if pools.models.length > 0}
-              <div class="row slot-row">
-                <label>
-                  provider
-                  <select bind:value={slot.provider}>
+          <!-- one header row instead of provider/model/thinking repeated on all 8 slots -->
+          <div class="slot-grid">
+            <div class="slot-head" aria-hidden="true">
+              <span>provider</span>
+              <span>model</span>
+              <span>thinking</span>
+              <span></span>
+            </div>
+            {#each pool.slots as slot, sIndex (sIndex)}
+              <div class="slot-row">
+                {#if pools.models.length > 0}
+                  <select aria-label={`slot ${sIndex + 1} provider`} bind:value={slot.provider}>
                     <option value="">inherit role</option>
                     {#each providers as p (p)}
                       <option value={p}>{p}</option>
@@ -230,10 +238,8 @@
                       <option value={slot.provider}>{slot.provider} · custom</option>
                     {/if}
                   </select>
-                </label>
-                <label>
-                  model
                   <select
+                    aria-label={`slot ${sIndex + 1} model`}
                     bind:value={slot.model}
                     onchange={(e) => {
                       const id = (e.currentTarget as HTMLSelectElement).value;
@@ -255,67 +261,36 @@
                       <option value={slot.model}>{slot.model} · custom</option>
                     {/if}
                   </select>
-                </label>
-                <label>
-                  thinking
-                  <select bind:value={slot.thinking}>
-                    <option value="">inherit role</option>
-                    <option value="off">off</option>
-                    <option value="minimal">minimal</option>
-                    <option value="low">low</option>
-                    <option value="medium">medium</option>
-                    <option value="high">high</option>
-                    <option value="xhigh">xhigh</option>
-                    <option value="max">max</option>
-                  </select>
-                </label>
+                {:else}
+                  <input aria-label={`slot ${sIndex + 1} provider`} bind:value={slot.provider} placeholder="inherit role (e.g. anthropic)" />
+                  <input aria-label={`slot ${sIndex + 1} model`} bind:value={slot.model} placeholder="inherit role" />
+                {/if}
+                <select aria-label={`slot ${sIndex + 1} thinking`} bind:value={slot.thinking}>
+                  <option value="">inherit role</option>
+                  <option value="off">off</option>
+                  <option value="minimal">minimal</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh</option>
+                  <option value="max">max</option>
+                </select>
                 {#if pool.slots.length > 1}
                   <button
                     type="button"
                     class="ghost remove-slot-btn"
+                    aria-label={`remove slot ${sIndex + 1}`}
                     title="remove slot"
                     onclick={() => removeSlot(pool, sIndex)}
                   >
-                    ×
+                    <X size={14} strokeWidth={1.75} />
                   </button>
+                {:else}
+                  <span></span>
                 {/if}
               </div>
-            {:else}
-              <div class="row slot-row">
-                <label>
-                  provider
-                  <input bind:value={slot.provider} placeholder="inherit role (e.g. anthropic)" />
-                </label>
-                <label>
-                  model
-                  <input bind:value={slot.model} placeholder="inherit role" />
-                </label>
-                <label>
-                  thinking
-                  <select bind:value={slot.thinking}>
-                    <option value="">inherit role</option>
-                    <option value="off">off</option>
-                    <option value="minimal">minimal</option>
-                    <option value="low">low</option>
-                    <option value="medium">medium</option>
-                    <option value="high">high</option>
-                    <option value="xhigh">xhigh</option>
-                    <option value="max">max</option>
-                  </select>
-                </label>
-                {#if pool.slots.length > 1}
-                  <button
-                    type="button"
-                    class="ghost remove-slot-btn"
-                    title="remove slot"
-                    onclick={() => removeSlot(pool, sIndex)}
-                  >
-                    ×
-                  </button>
-                {/if}
-              </div>
-            {/if}
-          {/each}
+            {/each}
+          </div>
         </div>
 
         <div class="pool-actions">
@@ -325,11 +300,12 @@
           <span class="spacer"></span>
           <button
             type="button"
-            class="primary"
+            class:primary={pools.isPoolDirty(pool)}
+            class:ghost={!pools.isPoolDirty(pool)}
             onclick={() => savePool(pool)}
-            disabled={saving[pool.id] || !pool.name.trim()}
+            disabled={saving[pool.id] || !pool.name.trim() || !pools.isPoolDirty(pool)}
           >
-            {saving[pool.id] ? "saving…" : "save pool"}
+            {saving[pool.id] ? "saving…" : pools.isPoolDirty(pool) ? "save pool" : "saved"}
           </button>
         </div>
       </div>
@@ -352,21 +328,23 @@
 
 <style>
   .pool-card {
-    padding: 16px;
+    padding: 12px;
     border: 1px solid var(--border);
-    border-radius: var(--radius, 8px);
-    margin-bottom: 20px;
-    background: var(--bg-surface, var(--bg));
+    border-radius: var(--radius-control);
+    margin-bottom: 16px;
+    background: var(--bg-panel);
   }
   .pool-card-header {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 14px;
+    gap: 12px;
+    margin-bottom: 12px;
   }
   .pool-card-header label {
     flex: 1;
+    min-width: 200px;
   }
   .field-label {
     display: block;
@@ -376,52 +354,70 @@
     font-size: 11px;
     font-weight: 600;
   }
+  .slot-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .slot-head,
   .slot-row {
-    align-items: flex-end;
-    margin-bottom: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 0.9fr) 32px;
+    gap: 8px;
+    align-items: center;
+  }
+  .slot-head span {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
   }
   .remove-slot-btn {
-    height: 31px;
-    padding: 0 10px;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
     color: var(--text-dim);
-    font-size: 16px;
-    line-height: 1;
   }
   .remove-slot-btn:hover {
-    color: var(--error, #f85149);
+    color: var(--error);
   }
   .pool-actions {
     display: flex;
     align-items: center;
     margin-top: 16px;
     padding-top: 12px;
-    border-top: 1px solid var(--border-subtle, var(--border));
+    border-top: 1px solid var(--border);
   }
   .spacer {
     flex: 1;
   }
   .new-pool-bar {
-    margin-top: 20px;
-    margin-bottom: 30px;
+    margin-top: 16px;
+    margin-bottom: 24px;
     display: flex;
     justify-content: center;
   }
   .roles-group {
-    margin: 14px 0;
+    margin: 12px 0;
   }
   .slots-group {
-    margin: 14px 0;
+    margin: 12px 0;
   }
   .slots-header {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
     margin-bottom: 8px;
   }
   .slots-header-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
   }
   .pool-max-workers-label {
     display: flex;
@@ -435,7 +431,6 @@
   }
   .pool-max-workers-label input {
     width: 60px;
-    padding: 3px 6px;
   }
   .global-cap-row {
     display: flex;
@@ -446,5 +441,22 @@
   }
   .global-cap-row label {
     width: 150px;
+  }
+
+  @media (max-width: 640px) {
+    .slot-head {
+      display: none; /* labels move to each control's aria-label */
+    }
+    .slot-row {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 6px;
+    }
+    .slot-row > :nth-child(3) {
+      grid-column: 1 / 2;
+    }
+    .remove-slot-btn {
+      grid-column: 2 / 3;
+      justify-self: end;
+    }
   }
 </style>

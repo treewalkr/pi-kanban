@@ -7,6 +7,7 @@
   let restarting = $state(false);
   let note = $state("");
   let failed = $state(false);
+  let confirmRestart = $state(false);
 
   // auto-archive: null days while loading; off mirrors days === 0
   let days = $state<number | null>(null);
@@ -87,15 +88,25 @@
       <input
         class="archive-days"
         type="number"
-        min="1"
+        min="0"
         max="365"
         aria-label="auto-archive days"
         placeholder={archiveOff ? "off" : ""}
         value={days ?? ""}
         onchange={(e) => {
-          const n = Number((e.currentTarget as HTMLInputElement).value);
-          if ((e.currentTarget as HTMLInputElement).value !== "" && Number.isInteger(n) && n >= 1 && n <= 365) {
+          const input = e.currentTarget as HTMLInputElement;
+          const raw = input.value;
+          if (raw === "") {
+            input.value = days === null ? "" : String(days);
+            return;
+          }
+          const n = Number(raw);
+          if (Number.isInteger(n) && n >= 0 && n <= 365) {
             void setAutoArchiveDays(n);
+          } else {
+            input.value = days === null ? "" : String(days);
+            archiveFailed = true;
+            archiveNote = "days must be 0–365; 0 turns the sweep off";
           }
         }}
       />
@@ -116,7 +127,7 @@
       {#if notify.permission() === "unsupported"}
         <span class="settings-dev-note">not supported in this browser</span>
       {:else if notify.permission() === "denied"}
-        <span class="settings-dev-note">blocked — allow notifications for this site in your browser settings</span>
+        <span class="settings-dev-note err">blocked — allow notifications for this site in your browser settings</span>
       {:else if notify.enabled}
         <span class="settings-dev-note">on — you'll be notified while this tab is in the background</span>
         <button type="button" class="ghost" onclick={() => notify.disable()}>disable</button>
@@ -134,9 +145,17 @@
       server is back. Local pages only; remote sites cannot trigger it.
     </p>
     <div class="settings-dev-restart">
-      <button type="button" class="ghost" onclick={restart} disabled={restarting || service.restarting}>
-        {restarting || service.restarting ? "restarting…" : "restart service"}
-      </button>
+      {#if confirmRestart}
+        <span class="settings-dev-note">restart the service now?</span>
+        <button type="button" class="ghost" onclick={() => (confirmRestart = false)} disabled={restarting || service.restarting}>cancel</button>
+        <button type="button" class="danger" onclick={() => { confirmRestart = false; void restart(); }} disabled={restarting || service.restarting}>
+          {restarting || service.restarting ? "restarting…" : "restart"}
+        </button>
+      {:else}
+        <button type="button" class="ghost" onclick={() => (confirmRestart = true)} disabled={restarting || service.restarting}>
+          {restarting || service.restarting ? "restarting…" : "restart service"}
+        </button>
+      {/if}
       {#if note}
         <span class="settings-dev-note" class:err={failed}>{note}</span>
       {/if}
