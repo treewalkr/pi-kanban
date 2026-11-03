@@ -109,9 +109,40 @@ function settledRect(
 class DragStore {
   taskId = $state<string | null>(null); // the lifted card, null when idle
   hint = $state<DropHint | null>(null);
+  private pendingFrame: number | null = null; // scheduled computeHint frame
+  private lastHintX = 0; // last pointer position seen by the hint pipeline
+  private lastHintY = 0;
 
   get lifted(): boolean {
     return this.taskId !== null || isReleasing;
+  }
+
+  // Coalesce hint computation to one per animation frame: pointermove fires at
+  // device frequency and each run walks the lane's layout (settledRect), which
+  // is wasted work when several events land inside the same frame. Ghost
+  // tracking stays per-move (composited style write, keeps tracking crisp).
+  private scheduleHint(x: number, y: number): void {
+    if (typeof window === "undefined") return;
+    this.lastHintX = x;
+    this.lastHintY = y;
+    if (this.pendingFrame !== null) return;
+    this.pendingFrame = window.requestAnimationFrame(() => {
+      this.pendingFrame = null;
+      if (!this.taskId) return;
+      this.computeHint(this.lastHintX, this.lastHintY);
+    });
+  }
+
+  // Drop any pending frame; commit() flushes synchronously first so the drop
+  // lands where the pointer last was even if no frame fired.
+  private flushHint(): void {
+    if (this.pendingFrame !== null) {
+      window.cancelAnimationFrame(this.pendingFrame);
+      this.pendingFrame = null;
+    }
+    if (this.taskId) {
+      this.computeHint(this.lastHintX, this.lastHintY);
+    }
   }
 
   // Write the hint only when its meaning changed. Svelte re-runs the animated
@@ -177,6 +208,8 @@ class DragStore {
       isLifted = true;
       this.lift(task, clientX, clientY, cardEl);
       window.addEventListener("touchmove", onTouchMovePrevent, { passive: false });
+      this.lastHintX = clientX;
+      this.lastHintY = clientY;
       this.computeHint(clientX, clientY);
     };
 
@@ -208,7 +241,7 @@ class DragStore {
       if (currentGhost) {
         currentGhost.style.transform = `translate(${ev.clientX - grabOffsetX}px, ${ev.clientY - grabOffsetY}px) rotate(2deg) scale(1.02)`;
       }
-      this.computeHint(ev.clientX, ev.clientY);
+      this.scheduleHint(ev.clientX, ev.clientY);
     };
 
     const onPointerUp = async () => {
@@ -386,6 +419,7 @@ class DragStore {
   }
 
   async commit(): Promise<void> {
+    this.flushHint();
     const id = this.taskId;
     const hint = this.hint;
 
@@ -433,6 +467,10 @@ class DragStore {
   }
 
   cancel(): void {
+    if (this.pendingFrame !== null) {
+      window.cancelAnimationFrame(this.pendingFrame);
+      this.pendingFrame = null;
+    }
     if (currentGhost) {
       currentGhost.remove();
       currentGhost = null;

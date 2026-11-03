@@ -250,6 +250,7 @@ test("jitter near a midpoint while flips are in flight never re-commits the hint
   await page.mouse.move(x, g6Box!.y + g6Box!.height / 2);
   await page.mouse.down();
   await page.mouse.move(x, g4Box!.y + 14, { steps: 8 });
+  await page.waitForTimeout(35); // let the coalesced hint frame fire (rAF)
   const markedTime = await markWrapperAnim(page, ids["drag g4"]);
   expect(markedTime).not.toBeNull();
 
