@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { closeSync, openSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { KanbanDb, KanbanError, RESERVED_FILE_NAMES, UNBLOCKED_LANES, defaultDbPath, type AgentConfig, type AgentThinking, type LaneActor, type LaneContext, type LaneTriggerRule, type Priority, type Task, type TaskPatch, type ProjectRoute } from "./db";
 import { charterError, charterFor } from "./lane-workers";
 import { c, colorizePatch, commentLine, commentThread, fileSize, laneList, listLanes, ownedLines, overviewLine, projectList, projectRow, searchResults, statsBoard, statsCard, taskDetail, taskLine } from "./render";
@@ -57,7 +57,7 @@ usage:
                           [--test-gate | --no-test-gate]   (create or patch the context; --from <file> loads JSON; --clear removes it)
   kanban worker run <lane> [--focus <text>] [--author <name>]   (queue a lane worker run; drained by serve --agents)
   kanban worker ls [--lane <ref>] [--json]     (lane worker runs: id · lane · status · age · summary)
-  kanban project ls | show <name> | set <name> [--repo <path> | --clear-repo] [--test-gate | --no-test-gate]
+  kanban project ls | show <name> | add <path> [--name <n>] | set <name> [--repo <path> | --clear-repo] [--test-gate | --no-test-gate]
   kanban serve [--port <n>] [--open] [--agents] [--fg]  (backgrounds itself by default: kanban ps to check, kanban stop to stop; --fg stays foreground)
   kanban stop [--port <n>]                     (SIGTERM the kanban server; graceful — traces in-flight agents)
   kanban ps [--json]                           (running serves on any port + their live agent sessions + abandoned leases)
@@ -84,7 +84,7 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus", "actor", "instructions", "template", "artifact", "approve-to", "cap", "provider", "model", "thinking", "repo"])
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus", "actor", "instructions", "template", "artifact", "approve-to", "cap", "provider", "model", "thinking", "repo", "name"])
 const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear", "test-gate", "no-test-gate", "clear-repo"])
 const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag", "trigger"]) // repeatable: each occurrence appends one value
 export function parse(argv: string[]): Parsed {
@@ -1458,6 +1458,22 @@ async function main(): Promise<number> {
             else out(projectRow(route));
             return 0;
           }
+          case "add": {
+            const rawPath = subRest.join(" ");
+            if (!rawPath) throw new KanbanError("usage: kanban project add <path> [--name <n>]", "invalid");
+            const repoPath = rawPath === "." ? process.cwd() : rawPath;
+            const derivedName = isAbsolute(repoPath) ? basename(resolve(repoPath)) : basename(repoPath);
+            const name = str(flags, "name") ?? derivedName;
+            const route = db.addProject(name, repoPath);
+            if (json) jsonOut(route);
+            else {
+              out(`added  ${projectRow(route)}`);
+              if (!existsSync(join(route.repoPath!, ".git"))) {
+                out(c.hex("#d29922", `⚠ ${route.repoPath} is not a git repo root (no .git)`));
+              }
+            }
+            return 0;
+          }
           case "set": {
             const name = subRest.join(" ");
             const usage = "usage: kanban project set <name> (--repo <path> | --clear-repo) [--test-gate | --no-test-gate]";
@@ -1479,7 +1495,7 @@ async function main(): Promise<number> {
             return 0;
           }
           default:
-            throw new KanbanError(`unknown project subcommand '${sub}' (ls | show | set)`, "invalid");
+            throw new KanbanError(`unknown project subcommand '${sub}' (ls | show | add | set)`, "invalid");
         }
       }
 

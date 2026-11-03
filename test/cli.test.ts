@@ -2150,6 +2150,39 @@ test("project set validation: relative/missing paths and conflicting flags", asy
   expect(bare.stderr).toContain("usage: kanban project set <name> (--repo <path> | --clear-repo) [--test-gate | --no-test-gate]");
 });
 
+test("project add: explicit path, dot pwd, --name override, duplicate refusal, and non-git warning", async () => {
+  const gitDir = join(dir, "my-repo");
+  mkdirSync(gitDir, { recursive: true });
+  mkdirSync(join(gitDir, ".git"), { recursive: true });
+
+  const added = await cli("project", "add", gitDir);
+  expect(added.code).toBe(0);
+  expect(added.stdout.trim()).toBe(`added  my-repo  ${gitDir}  test gate on`);
+  expect(added.stdout).not.toContain("⚠");
+
+  const dotRepoDir = join(dir, "dot-repo");
+  mkdirSync(dotRepoDir, { recursive: true });
+  mkdirSync(join(dotRepoDir, ".git"), { recursive: true });
+  const dotAdded = await cliIn(dotRepoDir, "project", "add", ".");
+  expect(dotAdded.code).toBe(0);
+  expect(dotAdded.stdout.trim()).toBe(`added  dot-repo  ${dotRepoDir}  test gate on`);
+
+  const plainDir = join(dir, "plain-dir");
+  mkdirSync(plainDir, { recursive: true });
+  const custom = await cli("project", "add", plainDir, "--name", "custom");
+  expect(custom.code).toBe(0);
+  expect(custom.stdout).toContain(`added  custom  ${plainDir}  test gate on`);
+  expect(custom.stdout).toContain(`⚠ ${plainDir} is not a git repo root (no .git)`);
+
+  const dup = await cli("project", "add", plainDir, "--name", "custom");
+  expect(dup.code).toBe(1);
+  expect(dup.stderr).toContain("project 'custom' already exists — use: kanban project set custom --repo <path>");
+
+  const bare = await cli("project", "add");
+  expect(bare.code).toBe(1);
+  expect(bare.stderr).toContain("usage: kanban project add <path> [--name <n>]");
+});
+
 
 test("lane context subcommand views, updates via flags and --from, and clears", async () => {
   // the seeded plan context is viewable

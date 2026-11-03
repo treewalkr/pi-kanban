@@ -2068,6 +2068,40 @@ test("projects: setProjectRepo rejects relative, missing, and non-directory path
   expect(db.setProjectRepo("  a  ", dir).name).toBe("a");
 });
 
+test("projects: addProject registers route and refuses duplicate names or invalid paths", () => {
+  const added = db.addProject("alpha", dir);
+  expect(added).toEqual({ name: "alpha", repoPath: dir, testGate: true });
+  expect(db.getProject("alpha")).toEqual(added);
+  expect(db.projectCwd("alpha")).toBe(dir);
+
+  expect(() => db.addProject("alpha", dir)).toThrow(
+    "project 'alpha' already exists — use: kanban project set alpha --repo <path>",
+  );
+
+  db.createTask({ title: "tagged task", project: "tagged" });
+  expect(() => db.addProject("tagged", dir)).toThrow(
+    "project 'tagged' already exists — use: kanban project set tagged --repo <path>",
+  );
+
+  const relative = join("rel", "x");
+  for (const bad of [relative, join(dir, "nope")]) {
+    expect(() => db.addProject("beta", bad)).toThrow(
+      `repo path must be an absolute path to an existing directory: ${bad}`,
+    );
+  }
+  const filePath = join(dir, "plain.txt");
+  writeFileSync(filePath, "not a dir");
+  expect(() => db.addProject("beta", filePath)).toThrow(
+    `repo path must be an absolute path to an existing directory: ${filePath}`,
+  );
+  expect(db.getProject("beta")).toBeNull();
+
+  for (const name of ["x".repeat(49), ""]) {
+    expect(() => db.addProject(name, dir)).toThrow("project name must be 1 to 48 characters");
+  }
+  expect(db.addProject("  gamma  ", dir).name).toBe("gamma");
+});
+
 // ---------- lane contexts (card 3n96c) ----------
 
 test("laneContext: seeded defaults reproduce the pipeline shape; plain lanes read null", () => {

@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
-import { isAbsolute } from "node:path";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { newId, slugify } from "./ids";
 
 /** Identity of one server/loop instance for agent session leases. */
@@ -1471,6 +1470,31 @@ export class KanbanDb {
       throw new KanbanError("project name must be 1 to 48 characters", "invalid");
     }
     return { name: trimmed };
+  }
+
+  /** Register a new project with its repo route; refuses if the name already exists in listProjects(). */
+  addProject(name: string, repoPath: string): ProjectRoute {
+    const bad = `repo path must be an absolute path to an existing directory: ${repoPath}`;
+    if (!isAbsolute(repoPath)) throw new KanbanError(bad, "invalid");
+    let isDir = false;
+    try {
+      isDir = statSync(repoPath).isDirectory();
+    } catch {
+      /* missing/unreadable path */
+    }
+    if (!isDir) throw new KanbanError(bad, "invalid");
+    const resolvedRepo = resolve(repoPath);
+
+    const { name: clean } = this.projectRow(name);
+    return this.tx(() => {
+      if (this.listProjects().some((p) => p.name === clean)) {
+        throw new KanbanError(
+          `project '${clean}' already exists — use: kanban project set ${clean} --repo <path>`,
+          "conflict",
+        );
+      }
+      return this.upsertProject(clean, { repoPath: resolvedRepo, testGate: true });
+    });
   }
 
   /** Upsert the repo route; null clears it (the card falls back to the serve cwd). */
