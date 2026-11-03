@@ -3176,4 +3176,205 @@ describe("lane contexts", () => {
     expect(db!.nextTask().task?.id).toBe(card.id);
     calls[0].finish({ code: 0 });
   });
+
+  test("a spawn queued before the block does not run when the slot frees", async () => {
+    const { dbFile, writer: w } = setup();
+    const blocker = w.createTask({ title: "blocker", lane: "implement" });
+    const elab = w.createTask({ title: "elab", lane: "backlog" });
+    w.queueElaboration(elab.id);
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+
+    // elaboration occupies the default slot
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("elaborator");
+
+    // while elaborator runs, an armed implement card is queued
+    const card = w.createTask({ title: "card", lane: "implement" });
+    w.comment(card.id, { author: "user", body: "build it" });
+    await sleep(150);
+    expect(activitySnapshot().queued.some((q) => q.taskId === card.id)).toBe(true);
+
+    // block the card, then finish the elaborator
+    w.setBlockedBy(card.id, [blocker.id]);
+    calls[0].finish({ code: 0 });
+    await sleep(150);
+
+    // does not run: dropped from queue
+    expect(calls.length).toBe(1);
+    expect(activitySnapshot().queued.some((q) => q.taskId === card.id)).toBe(false);
+
+    // after unblocking, card spawns
+    w.updateTask(blocker.id, { lane: "done" });
+    await sleep(200);
+    expect(calls.length).toBe(2);
+    expect(calls[1].job.task.id).toBe(card.id);
+    expect(calls[1].job.role).toBe("builder");
+    calls[1].finish({ code: 0 });
+  });
+
+  test("a queued resume waits for the blocker and keeps its session id", async () => {
+    const { dbFile, writer: w } = setup();
+    const blocker = w.createTask({ title: "blocker", lane: "implement" });
+    const card = w.createTask({ title: "dead builder", lane: "implement" });
+    w.createComment(card.id, { author: BUILDER_AUTHOR, kind: "comment", body: "session died: timeout after 20m" });
+    w.setCardSession(card.id, "builder", "kanban-x-builder-blocked");
+    w.queueResume(card.id);
+    w.setBlockedBy(card.id, [blocker.id]);
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile);
+    await sleep(150);
+
+    expect(calls.length).toBe(0);
+    expect(w.resumeRequests().some((r) => r.taskId === card.id)).toBe(true);
+
+    w.updateTask(blocker.id, { lane: "done" });
+    await sleep(200);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.mode).toBe("resume");
+    expect(calls[0].job.sessionId).toBe("kanban-x-builder-blocked");
+    expect(w.resumeRequests().some((r) => r.taskId === card.id)).toBe(false);
+    calls[0].finish({ code: 0 });
+  });
+
+  test("a resume already queued is persisted when blocked and survives a restart", async () => {
+    const { dbFile, writer: w } = setup();
+    const blocker = w.createTask({ title: "blocker", lane: "implement" });
+    const elab = w.createTask({ title: "elab", lane: "backlog" });
+    w.queueElaboration(elab.id);
+
+    const logs: string[] = [];
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile, { log: (msg) => logs.push(msg) });
+    await sleep(150);
+
+    // elaborator occupies the slot
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("elaborator");
+
+    // dead card with resume queued behind the running elaborator
+    const d = w.createTask({ title: "dead card", lane: "implement" });
+    w.createComment(d.id, { author: BUILDER_AUTHOR, kind: "comment", body: "session died: crash" });
+    w.setCardSession(d.id, "builder", "kanban-x-builder-restart");
+    w.queueResume(d.id);
+    await sleep(150);
+
+    // block the dead card, then finish the elaborator
+    w.setBlockedBy(d.id, [blocker.id]);
+    calls[0].finish({ code: 0 });
+    await sleep(150);
+
+    expect(calls.length).toBe(1);
+    expect(w.resumeRequests().some((r) => r.taskId === d.id)).toBe(true);
+    expect(logs).toContain(`builder ${d.id}: blocked — resume held, request kept until its blockers land`);
+
+    // restart the loop while still blocked
+    stop!();
+    db!.close();
+    db = null;
+
+    const fakeSpawn2 = fakeSpawn();
+    start(fakeSpawn2.spawnFn, dbFile);
+    await sleep(150);
+
+    expect(fakeSpawn2.calls.length).toBe(0);
+    expect(w.resumeRequests().some((r) => r.taskId === d.id)).toBe(true);
+
+    // unblock: resumes with stored session id
+    w.updateTask(blocker.id, { lane: "done" });
+    await sleep(200);
+
+    expect(fakeSpawn2.calls.length).toBe(1);
+    expect(fakeSpawn2.calls[0].job.mode).toBe("resume");
+    expect(fakeSpawn2.calls[0].job.sessionId).toBe("kanban-x-builder-restart");
+    expect(w.resumeRequests().some((r) => r.taskId === d.id)).toBe(false);
+    fakeSpawn2.calls[0].finish({ code: 0 });
+  });
+
+  test("a resume blocked during its pre-spawn gate hands its request back", async () => {
+    const { dbFile, writer: w } = setup();
+    const blocker = w.createTask({ title: "blocker", lane: "implement" });
+    const card = w.createTask({ title: "review card", lane: "review" });
+    w.createComment(card.id, { author: REVIEWER_AUTHOR, kind: "comment", body: "session died: stall" });
+    w.setCardSession(card.id, "reviewer", "kanban-x-reviewer-gate");
+    w.queueResume(card.id);
+
+    let releaseGate: ((res: { ok: boolean; output: string }) => void) | undefined;
+    let notifyGateStarted: (() => void) | undefined;
+    const gateStarted = new Promise<void>((r) => { notifyGateStarted = r; });
+    const gatePromise = new Promise<{ ok: boolean; output: string }>((r) => { releaseGate = r; });
+
+    let gateMode: "hold" | "fast" = "hold";
+    const testGate: GateFn = async () => {
+      if (gateMode === "hold") {
+        notifyGateStarted?.();
+        return gatePromise;
+      }
+      return { ok: true, output: "" };
+    };
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile, { gate: testGate });
+
+    await gateStarted;
+    w.setBlockedBy(card.id, [blocker.id]);
+    releaseGate!({ ok: true, output: "" });
+    await sleep(150);
+
+    expect(calls.length).toBe(0);
+    expect(w.resumeRequests().some((r) => r.taskId === card.id)).toBe(true);
+
+    gateMode = "fast";
+    w.updateTask(blocker.id, { lane: "done" });
+    await sleep(200);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.mode).toBe("resume");
+    expect(calls[0].job.sessionId).toBe("kanban-x-reviewer-gate");
+    expect(w.resumeRequests().some((r) => r.taskId === card.id)).toBe(false);
+    calls[0].finish({ code: 0 });
+  });
+
+  test("a card blocked during the pre-spawn gate does not spawn when the gate clears", async () => {
+    const { dbFile, writer: w } = setup();
+    const blocker = w.createTask({ title: "blocker", lane: "implement" });
+    const card = cardInReview(w);
+
+    let releaseGate: ((res: { ok: boolean; output: string }) => void) | undefined;
+    let notifyGateStarted: (() => void) | undefined;
+    const gateStarted = new Promise<void>((r) => { notifyGateStarted = r; });
+    const gatePromise = new Promise<{ ok: boolean; output: string }>((r) => { releaseGate = r; });
+
+    let gateMode: "hold" | "fast" = "hold";
+    const testGate: GateFn = async () => {
+      if (gateMode === "hold") {
+        notifyGateStarted?.();
+        return gatePromise;
+      }
+      return { ok: true, output: "" };
+    };
+
+    const { calls, spawnFn } = fakeSpawn();
+    start(spawnFn, dbFile, { gate: testGate });
+
+    await gateStarted;
+    w.setBlockedBy(card.id, [blocker.id]);
+    releaseGate!({ ok: true, output: "" });
+    await sleep(150);
+
+    expect(calls.length).toBe(0);
+
+    gateMode = "fast";
+    w.updateTask(blocker.id, { lane: "done" });
+    await sleep(200);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].job.role).toBe("reviewer");
+    expect(calls[0].job.task.id).toBe(card.id);
+    calls[0].finish({ code: 0 });
+  });
 });
