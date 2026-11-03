@@ -841,6 +841,180 @@ describe("auto-review", () => {
     expect(capturedConfig.model).toBe("b");
   });
 
+  test("a provider-quota death cools the slot and the next spawn fails over to the healthy slot", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("rev-pool", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "zcode" }, { model: "okay" }],
+    });
+    const card1 = cardInReview(w, "card 1");
+    const spawnedModels: string[] = [];
+    const spawnFn: SpawnFn = async (job, ctx) => {
+      const model = ctx.config?.model ?? "";
+      spawnedModels.push(model);
+      if (model === "zcode") {
+        return {
+          code: 1,
+          stderrTail:
+            "Start Plan has no active model quota (expired, pending or exhausted)\nNo fallback to another plan was made",
+        };
+      }
+      ctx.emit("text: working");
+      return { code: 0 };
+    };
+
+    start(spawnFn, dbFile);
+    await sleep(60);
+
+    // Card 1 spawned on zcode and died with quota error
+    expect(spawnedModels).toEqual(["zcode"]);
+
+    // Create card 2: slot 0 (zcode) is cooling, so card 2 must fail over to slot 1 (okay)
+    const card2 = cardInReview(w, "card 2");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["zcode", "okay"]);
+
+    // Create card 3: slot 0 (zcode) is still cooling, card 3 must also get okay, never zcode
+    const card3 = cardInReview(w, "card 3");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["zcode", "okay", "okay"]);
+  });
+
+  test("a cooling slot requalifies after cooldown expiry; re-saving a pool resets cooldowns instantly", async () => {
+    const { dbFile, writer: w } = setup();
+    const pool = w.setPool("rev-pool", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "s0" }, { model: "s1" }],
+    });
+    const spawnedModels: string[] = [];
+    let s0ShouldFail = true;
+    const spawnFn: SpawnFn = async (job, ctx) => {
+      const model = ctx.config?.model ?? "";
+      spawnedModels.push(model);
+      if (model === "s0" && s0ShouldFail) {
+        return {
+          code: 1,
+          stderrTail: "Start Plan has no active model quota (expired, pending or exhausted)",
+        };
+      }
+      ctx.emit("text: working");
+      return { code: 0 };
+    };
+
+    // Card 1 and Card 2 in review before start
+    cardInReview(w, "card 1");
+    await sleep(2);
+    cardInReview(w, "card 2");
+
+    start(spawnFn, dbFile, { cooldownMs: 50 });
+
+    // Card 1 on s0 dies and cools slot 0. Card 2 immediately gets slot 1 (s1) because s0 is cooling
+    await sleep(60);
+    expect(spawnedModels).toEqual(["s0", "s1"]);
+
+    // Wait for 50ms cooldown to expire, and let s0 succeed
+    await sleep(60);
+    s0ShouldFail = false;
+
+    // Card 3 created after expiry -> slot 0 (s0) is re-allocated!
+    cardInReview(w, "card 3");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["s0", "s1", "s0"]);
+
+    // Separately: fail slot 0 again
+    s0ShouldFail = true;
+    cardInReview(w, "card 4");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["s0", "s1", "s0", "s0"]);
+
+    // Slot 0 is cooling. Re-saving the pool bumps updatedAt and resets cooldowns instantly!
+    w.setPool("rev-pool", {
+      name: pool.name,
+      enabled: pool.enabled,
+      roles: pool.roles,
+      slots: pool.slots,
+    });
+    s0ShouldFail = false;
+
+    // Card 5 created -> slot 0 is allocatable immediately!
+    cardInReview(w, "card 5");
+    await sleep(60);
+    expect(spawnedModels).toEqual(["s0", "s1", "s0", "s0", "s0"]);
+  });
+
+  test("a quota-reached-with-wait-hint death applies the capped cooldown to the slot", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("p1", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "m1" }],
+    });
+    cardInReview(w, "card 1");
+    const spawnFn: SpawnFn = async () => ({
+      code: 1,
+      stderrTail:
+        "Quota reached. Please wait 4h55m33s. Next: switch models or try again after reset.",
+    });
+
+    start(spawnFn, dbFile);
+    await sleep(60);
+
+    const snapshot = activitySnapshot();
+    expect(snapshot.incidents).toHaveLength(1);
+    const inc = snapshot.incidents[0];
+    expect(inc.cause).toBe("provider-quota");
+    // Capped from 4h55m33s to 60 min (3_600_000 ms)
+    expect(inc.cooldownUntil - inc.lastSeenAt).toBe(60 * 60_000);
+  });
+
+  test("activitySnapshot exposes incidents and pool summaries after a provider-quota death", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setPool("rev-pool", {
+      name: "Reviewers",
+      enabled: true,
+      roles: ["reviewer"],
+      slots: [{ model: "zcode" }, { model: "okay" }],
+    });
+    cardInReview(w, "card 1");
+    const spawnFn: SpawnFn = async () => ({
+      code: 1,
+      stderrTail: "Start Plan has no active model quota (expired, pending or exhausted)",
+    });
+
+    const now = Date.now();
+    start(spawnFn, dbFile);
+    await sleep(60);
+
+    const snapshot = activitySnapshot();
+    expect(snapshot.incidents).toHaveLength(1);
+    expect(snapshot.incidents[0]).toEqual({
+      poolId: "rev-pool",
+      poolName: "Reviewers",
+      slotIndex: 0,
+      cause: "provider-quota",
+      count: 1,
+      firstSeenAt: expect.any(Number),
+      lastSeenAt: expect.any(Number),
+      cooldownUntil: expect.any(Number),
+    });
+    expect(snapshot.incidents[0].cooldownUntil).toBeGreaterThan(now);
+
+    expect(snapshot.pools).toEqual([
+      {
+        poolId: "rev-pool",
+        poolName: "Reviewers",
+        totalSlots: 2,
+        coolingSlots: 1,
+        lastCause: "provider-quota",
+      },
+    ]);
+  });
+
   test("pool edits apply to the next spawn", async () => {
     const { dbFile, writer: w } = setup();
     w.setPool("p-edit", {

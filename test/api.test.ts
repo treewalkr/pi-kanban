@@ -522,7 +522,7 @@ test("GET /activity lists in-flight and queued agent jobs (none when idle)", asy
   const app = createApp(db);
   const res = await app.handle(new Request("http://localhost/activity"));
   expect(res.status).toBe(200);
-  expect(await res.json()).toEqual({ sessions: [], queued: [] });
+  expect(await res.json()).toEqual({ sessions: [], queued: [], incidents: [], pools: [] });
 });
 
 test("GET /health reports a boot stamp so clients can detect restarts", async () => {
