@@ -9,7 +9,7 @@ import { listChatModels, listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
-import { contentTypeFor, listDirs, listFiles, rawFilePath, readFile, searchFiles, type DirListing, type FileEntry } from "./files";
+import { contentTypeFor, createDir, listDirs, listFiles, rawFilePath, readFile, searchFiles, type DirListing, type FileEntry } from "./files";
 import { BOARD_CHAT_ID, ChatManager, PROMPT_MAX_CHARS, THINKING_LEVELS, type ChatState, type ChatSessionFactory } from "./chat";
 import { createChatEventStream, type ChatStreamSession } from "./chat-events";
 import { VERSION, serveGit } from "./version";
@@ -386,6 +386,23 @@ export const createApp = (
       {
         query: t.Object({
           path: t.Optional(t.String({ default: "" })),
+        }),
+      },
+    )
+    .post(
+      "/fs/mkdir",
+      async ({ body, status }): Promise<{ path: string } | unknown> => {
+        try {
+          const home = opts.homeDir ?? homedir();
+          return status(200, await createDir(home, body.path ?? "", body.name));
+        } catch (e) {
+          return fail<{ path: string }>(e, status);
+        }
+      },
+      {
+        body: t.Object({
+          path: t.Optional(t.String({ default: "" })),
+          name: t.String({ minLength: 1, maxLength: 64 }),
         }),
       },
     )

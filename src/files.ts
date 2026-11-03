@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent, type Stats } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent, type Stats } from "node:fs";
 import * as path from "node:path";
 import { KanbanError } from "./db";
 
@@ -239,6 +239,48 @@ export async function listDirs(homeRoot: string, dirPath = ""): Promise<DirListi
     isGitRepo: existsSync(path.join(target, ".git")),
     dirs,
   };
+}
+
+/** Create one child directory of parentPath under homeRoot; refuses escapes, non-single-segment or dot names, and existing targets. */
+export async function createDir(
+  homeRoot: string,
+  parentPath: string,
+  name: string,
+): Promise<{ path: string }> {
+  const clean = name.trim();
+  if (
+    clean === "" ||
+    clean === "." ||
+    clean === ".." ||
+    clean.startsWith(".") ||
+    clean.includes("/") ||
+    clean.includes("\\")
+  ) {
+    throw new KanbanError(
+      `invalid directory name '${name}': use a single name without slashes or a leading dot`,
+      "invalid",
+    );
+  }
+
+  const parent = await listDirs(homeRoot, parentPath);
+  const target = path.join(parent.path, clean);
+
+  if (existsSync(target)) {
+    throw new KanbanError(`directory '${clean}' already exists in ${parent.path}`, "conflict");
+  }
+
+  try {
+    mkdirSync(target, { mode: 0o755 });
+  } catch (err: any) {
+    if (err.code === "EEXIST") {
+      throw new KanbanError(`directory '${clean}' already exists in ${parent.path}`, "conflict");
+    }
+    throw err;
+  }
+
+  chmodSync(target, 0o755);
+
+  return { path: target };
 }
 
 function pathDepth(p: string): number {

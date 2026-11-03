@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/app";
@@ -1570,4 +1570,114 @@ test("GET /fs/dirs lists subdirectories under homeDir, hides files and dotfiles,
   expect(tildeEscape.status).toBe(400);
   const tildeEscapeBody = (await tildeEscape.json()) as any;
   expect(tildeEscapeBody.error).toContain("path escapes home directory: '~/../outside'");
+});
+
+test("POST /fs/mkdir creates 0755 directories under homeDir and refuses escapes, misses, duplicates, and bad names", async () => {
+  const homeDir = join(dir, "home");
+  mkdirSync(homeDir, { recursive: true });
+
+  const app = createApp(db, { homeDir });
+
+  // 1. Valid creation
+  const res = await app.handle(
+    new Request("http://localhost/fs/mkdir", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "new-dir" }),
+    }),
+  );
+  expect(res.status).toBe(200);
+  const data = (await res.json()) as any;
+  expect(data.path).toBe(join(homeDir, "new-dir"));
+  expect(statSync(data.path).mode & 0o777).toBe(0o755);
+
+  // 2. Repeat -> 409
+  const repeat = await app.handle(
+    new Request("http://localhost/fs/mkdir", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "new-dir" }),
+    }),
+  );
+  expect(repeat.status).toBe(409);
+  const repeatBody = (await repeat.json()) as any;
+  expect(repeatBody.error).toBe(`directory 'new-dir' already exists in ${homeDir}`);
+
+  // 3. Escape -> 400
+  const escape = await app.handle(
+    new Request("http://localhost/fs/mkdir", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "../outside", name: "x" }),
+    }),
+  );
+  expect(escape.status).toBe(400);
+  const escapeBody = (await escape.json()) as any;
+  expect(escapeBody.error).toContain("path escapes home directory");
+
+  // 4. Bad names (slashes, dot) -> 400
+  const slashes = await app.handle(
+    new Request("http://localhost/fs/mkdir", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "a/b" }),
+    }),
+  );
+  expect(slashes.status).toBe(400);
+  const slashesBody = (await slashes.json()) as any;
+  expect(slashesBody.error).toContain("invalid directory name");
+
+  const dot = await app.handle(
+    new Request("http://localhost/fs/mkdir", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: ".hidden" }),
+    }),
+  );
+  expect(dot.status).toBe(400);
+  const dotBody = (await dot.json()) as any;
+  expect(dotBody.error).toContain("invalid directory name");
+
+  // 5. Parent missing -> 404
+  const miss = await app.handle(
+    new Request("http://localhost/fs/mkdir", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "nope", name: "x" }),
+    }),
+  );
+  expect(miss.status).toBe(404);
+  const missBody = (await miss.json()) as any;
+  expect(missBody.error).toContain("no such directory");
+
+  // 6. Missing name -> 422
+  const missingName = await app.handle(
+    new Request("http://localhost/fs/mkdir", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }),
+  );
+  expect(missingName.status).toBe(422);
+
+  // 7. GET /fs/dirs?path=~ cases
+  const tilde = await app.handle(new Request("http://localhost/fs/dirs?path=~"));
+  expect(tilde.status).toBe(200);
+  expect(((await tilde.json()) as any).path).toBe(homeDir);
+
+  const tildeProjects = await app.handle(
+    new Request("http://localhost/fs/mkdir", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "projects" }),
+    }),
+  );
+  expect(tildeProjects.status).toBe(200);
+
+  const tildeSub = await app.handle(new Request("http://localhost/fs/dirs?path=~/projects"));
+  expect(tildeSub.status).toBe(200);
+  expect(((await tildeSub.json()) as any).path).toBe(join(homeDir, "projects"));
+
+  const tildeEscape = await app.handle(new Request("http://localhost/fs/dirs?path=~/../outside"));
+  expect(tildeEscape.status).toBe(400);
 });

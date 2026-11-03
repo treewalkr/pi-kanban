@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KanbanError } from "../src/db";
 import {
   EXT_TO_HLJS,
   PREVIEW_MAX_BYTES,
+  createDir,
   expandHome,
   languageForPath,
   listDirs,
@@ -108,13 +109,23 @@ describe("src/files.ts", () => {
     expect(listDirs(home, "nope")).rejects.toThrow("no such directory");
   });
 
-  test("expandHome maps ~ paths and leaves others trimmed", () => {
-    const home = "/Users/testuser";
+  test("expandHome maps ~ paths and createDir guards names, parents, and duplicates", async () => {
+    const home = join(dir, "mkdir-test");
+    mkdirSync(home);
+
     expect(expandHome(home, "~")).toBe(home);
     expect(expandHome(home, "~/repo")).toBe(join(home, "repo"));
     expect(expandHome(home, " /abs ")).toBe("/abs");
     expect(expandHome(home, "~user")).toBe("~user");
-    expect(expandHome(home, "")).toBe("");
+
+    const created = await createDir(home, "", "new");
+    expect(created).toEqual({ path: join(home, "new") });
+    expect(statSync(created.path).mode & 0o777).toBe(0o755);
+
+    await expect(createDir(home, "", ".hidden")).rejects.toThrow("invalid directory name");
+    await expect(createDir(home, "", "a/b")).rejects.toThrow("invalid directory name");
+    await expect(createDir(home, "nope", "x")).rejects.toThrow("no such directory");
+    await expect(createDir(home, "", "new")).rejects.toThrow("already exists in");
   });
 
   test("readFile maps extensions to hljs languages; unknown → plaintext", () => {
