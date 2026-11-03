@@ -703,3 +703,45 @@ describe("boardview per-lane collapsed state", () => {
   });
 });
 
+
+describe("boardview show empty lanes", () => {
+  test("default off; showEmptyLanes reveals zero-card lanes under a project filter; persists", () => {
+    const storage = mockStorage();
+    board.lanes = [
+      makeLane("backlog", "Backlog"),
+      makeLane("plan", "Plan"),
+      makeLane("staging", "Staging"),
+      makeLane("done", "Done"),
+    ];
+    board.tasks = [
+      makeTask({ id: "t1", title: "card 1", laneId: "backlog", project: "web" }),
+      makeTask({ id: "t2", title: "card 2", laneId: "plan", project: "api" }),
+      makeTask({ id: "t3", title: "card 3", laneId: "done", project: "web" }),
+    ];
+    try {
+      board.projectFilter = "web";
+      // default off = today's behavior: the empty lane stays hidden
+      expect(board.showEmptyLanes).toBe(false);
+      expect(board.visibleLanes.map((v) => v.lane.id)).toEqual(["backlog", "done"]);
+
+      board.showEmptyLanes = true;
+      expect(board.visibleLanes.map((v) => v.lane.id)).toEqual(["backlog", "plan", "staging", "done"]);
+      expect(storage.get("kanban-show-empty-lanes")).toBe("true");
+
+      // with no filter the flag changes nothing
+      board.projectFilter = "";
+      expect(board.visibleLanes.map((v) => v.lane.id)).toEqual(["backlog", "plan", "staging", "done"]);
+      board.projectFilter = "web";
+
+      board.showEmptyLanes = false;
+      expect(board.visibleLanes.map((v) => v.lane.id)).toEqual(["backlog", "done"]);
+      expect(storage.has("kanban-show-empty-lanes")).toBe(false);
+    } finally {
+      board.showEmptyLanes = false;
+      board.projectFilter = "";
+      board.lanes = [];
+      board.tasks = [];
+      delete (globalThis as any).localStorage;
+    }
+  });
+});

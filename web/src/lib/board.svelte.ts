@@ -70,6 +70,14 @@ function loadWaitingOnly(): boolean {
   }
 }
 
+function loadShowEmptyLanes(): boolean {
+  try {
+    return localStorage.getItem("kanban-show-empty-lanes") === "true";
+  } catch {
+    return false;
+  }
+}
+
 function loadView(): "board" | "list" | "velocity" {
   try {
     const v = localStorage.getItem("kanban-view");
@@ -207,6 +215,23 @@ class BoardStore {
     }
   }
 
+  #showEmptyLanes = $state<boolean>(loadShowEmptyLanes());
+
+  /** Reveal zero-card lanes even under a project/tag filter (header eye chip); persists as kanban-show-empty-lanes. */
+  get showEmptyLanes(): boolean {
+    return this.#showEmptyLanes;
+  }
+
+  set showEmptyLanes(v: boolean) {
+    this.#showEmptyLanes = v;
+    try {
+      if (!v) localStorage.removeItem("kanban-show-empty-lanes");
+      else localStorage.setItem("kanban-show-empty-lanes", "true");
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
   #view = $state<"board" | "list" | "velocity">(loadView());
 
   /** Active lens over the same data: lanes (board), hierarchy (list), or velocity metrics. Persists as kanban-view. */
@@ -284,6 +309,7 @@ class BoardStore {
       .filter(
         ({ lane }) =>
           (this.#projectFilter === "" && this.#tagFilter.length === 0) ||
+          this.showEmptyLanes ||
           this.visibleTasks(lane.id).length > 0,
       ),
   );
@@ -613,6 +639,13 @@ class BoardStore {
 
   async moveLane(id: string, index: number): Promise<void> {
     await this.updateLane(id, { index });
+  }
+
+  /** Anchor-based reorder (the drag surfaces and `kanban lane mv` parity); null appends literal last. */
+  async moveLaneBefore(id: string, before: string | null): Promise<void> {
+    const { error } = await api.lanes({ id }).patch({ before });
+    if (error) return this.fail(error);
+    await this.refresh();
   }
 
   async removeLane(id: string): Promise<void> {
