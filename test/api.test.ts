@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/app";
@@ -1451,4 +1451,69 @@ test("GET/PUT/DELETE /lanes/:id/context roundtrip and validation", async () => {
   expect(((await del.json()) as { laneId: string; context: null }).context).toBeNull();
   const reread = await app.handle(new Request("http://localhost/lanes/design/context"));
   expect(((await reread.json()) as { context: null }).context).toBeNull();
+});
+
+test("GET /fs/dirs lists subdirectories under homeDir, hides files and dotfiles, and refuses escapes", async () => {
+  const homeDir = join(dir, "home");
+  mkdirSync(homeDir, { recursive: true });
+
+  // Subdirectories
+  const plainSub = join(homeDir, "projects");
+  const gitSub = join(homeDir, "git-project");
+  const dotSub = join(homeDir, ".hidden-dir");
+  mkdirSync(plainSub, { recursive: true });
+  mkdirSync(gitSub, { recursive: true });
+  mkdirSync(join(gitSub, ".git"), { recursive: true });
+  mkdirSync(dotSub, { recursive: true });
+
+  // Nested directory inside projects
+  const nested = join(plainSub, "child-project");
+  mkdirSync(nested, { recursive: true });
+
+  // Files to be ignored
+  writeFileSync(join(homeDir, "file.txt"), "hello");
+  writeFileSync(join(homeDir, ".hidden-file"), "secret");
+
+  const app = createApp(db, { homeDir });
+
+  // 1. Default listing (omitted path)
+  const rootRes = await app.handle(new Request("http://localhost/fs/dirs"));
+  expect(rootRes.status).toBe(200);
+  const rootData = (await rootRes.json()) as any;
+  expect(rootData.path).toBe(homeDir);
+  expect(rootData.parent).toBeNull();
+  expect(rootData.isGitRepo).toBe(false);
+  expect(rootData.dirs).toEqual([
+    { name: "git-project", path: gitSub, isGitRepo: true },
+    { name: "projects", path: plainSub, isGitRepo: false },
+  ]);
+
+  // 2. Subdirectory listing (path=projects)
+  const subRes = await app.handle(new Request("http://localhost/fs/dirs?path=projects"));
+  expect(subRes.status).toBe(200);
+  const subData = (await subRes.json()) as any;
+  expect(subData.path).toBe(plainSub);
+  expect(subData.parent).toBe(homeDir);
+  expect(subData.isGitRepo).toBe(false);
+  expect(subData.dirs).toEqual([
+    { name: "child-project", path: nested, isGitRepo: false },
+  ]);
+
+  // 3. Absolute path outside homeDir -> 400
+  const outsideAbs = await app.handle(new Request("http://localhost/fs/dirs?path=/etc"));
+  expect(outsideAbs.status).toBe(400);
+  const outsideAbsBody = (await outsideAbs.json()) as any;
+  expect(outsideAbsBody.error).toContain("path escapes home directory");
+
+  // 4. Relative path outside homeDir -> 400
+  const outsideRel = await app.handle(new Request("http://localhost/fs/dirs?path=../outside"));
+  expect(outsideRel.status).toBe(400);
+  const outsideRelBody = (await outsideRel.json()) as any;
+  expect(outsideRelBody.error).toContain("path escapes home directory");
+
+  // 5. Missing directory -> 404
+  const missing = await app.handle(new Request("http://localhost/fs/dirs?path=does-not-exist"));
+  expect(missing.status).toBe(404);
+  const missingBody = (await missing.json()) as any;
+  expect(missingBody.error).toContain("no such directory");
 });

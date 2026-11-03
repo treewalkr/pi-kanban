@@ -1,10 +1,23 @@
-import { readdirSync, readFileSync, statSync, type Dirent, type Stats } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent, type Stats } from "node:fs";
 import * as path from "node:path";
 import { KanbanError } from "./db";
 
 export interface FileEntry {
   name: string;
   isDir: boolean;
+}
+
+export interface DirEntry {
+  name: string;
+  path: string;
+  isGitRepo: boolean;
+}
+
+export interface DirListing {
+  path: string;
+  parent: string | null;
+  isGitRepo: boolean;
+  dirs: DirEntry[];
 }
 
 export const PREVIEW_MAX_BYTES = 512 * 1024;
@@ -135,6 +148,86 @@ export async function listFiles(root: string, dirPath: string): Promise<FileEntr
   );
 
   return entries;
+}
+
+export async function listDirs(homeRoot: string, dirPath = ""): Promise<DirListing> {
+  const rootResolved = path.resolve(homeRoot);
+  const raw = dirPath.trim();
+  const target = raw === "" ? rootResolved : path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(rootResolved, raw);
+
+  const rootWithSep = rootResolved.endsWith(path.sep) ? rootResolved : rootResolved + path.sep;
+  if (target !== rootResolved && !target.startsWith(rootWithSep)) {
+    throw new KanbanError(`path escapes home directory: '${dirPath}'`, "invalid");
+  }
+
+  let realRoot = rootResolved;
+  try {
+    realRoot = realpathSync(rootResolved);
+  } catch {
+    /* fallback to resolved */
+  }
+  const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
+
+  if (existsSync(target)) {
+    try {
+      const realTarget = realpathSync(target);
+      if (realTarget !== realRoot && !realTarget.startsWith(realRootWithSep)) {
+        throw new KanbanError(`path escapes home directory: '${dirPath}'`, "invalid");
+      }
+    } catch (e) {
+      if (e instanceof KanbanError) throw e;
+    }
+  }
+
+  let dirents: Dirent[];
+  try {
+    dirents = readdirSync(target, { withFileTypes: true });
+  } catch (err: any) {
+    if (err.code === "ENOENT" || err.code === "ENOTDIR") {
+      throw new KanbanError(`no such directory: '${dirPath}'`, "not-found");
+    }
+    throw err;
+  }
+
+  const dirs: DirEntry[] = [];
+  for (const dirent of dirents) {
+    if (dirent.name.startsWith(".")) {
+      continue;
+    }
+    const fullPath = path.join(target, dirent.name);
+    let isDir = false;
+    if (dirent.isDirectory()) {
+      isDir = true;
+    } else {
+      try {
+        const s = statSync(fullPath);
+        if (s.isDirectory()) {
+          const realChild = realpathSync(fullPath);
+          if (realChild === realRoot || realChild.startsWith(realRootWithSep)) {
+            isDir = true;
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+    if (!isDir) continue;
+
+    dirs.push({
+      name: dirent.name,
+      path: fullPath,
+      isGitRepo: existsSync(path.join(fullPath, ".git")),
+    });
+  }
+
+  dirs.sort((a, b) => a.name.localeCompare(b.name));
+
+  return {
+    path: target,
+    parent: target === rootResolved ? null : path.dirname(target),
+    isGitRepo: existsSync(path.join(target, ".git")),
+    dirs,
+  };
 }
 
 function pathDepth(p: string): number {
