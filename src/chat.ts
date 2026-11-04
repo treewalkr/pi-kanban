@@ -12,8 +12,8 @@
  */
 import { resolveLineup } from "./engines";
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, type AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
 import { skillActivationPrompt } from "./autoreview";
+import { chatSkillPath } from "./skill-activation";
 import { KanbanError, type BoardOverview, type KanbanDb, type Task } from "./db";
 import { registerShutdown } from "./shutdown";
 
@@ -91,8 +91,7 @@ export type ChatSessionFactory = (opts: {
   appendSystemPrompt: string;
 }) => Promise<AgentSession>;
 
-/** The repo-local pi-kanban skill, wrapped in pi's own <skill> block. */
-export const chatSkillPath = join(import.meta.dir, "..", "skills", "pi-kanban");
+export { chatSkillPath };
 
 export function chatSystemAppend(task: Task): string {
   const title = task.title.length > 200 ? task.title.slice(0, 200) : task.title;

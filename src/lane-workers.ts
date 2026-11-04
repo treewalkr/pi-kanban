@@ -12,7 +12,7 @@
  * workers off the loop-owned lanes' threads entirely.
  */
 import { DEFAULT_STALL_MS, deathReason, skillActivationPrompt, spawnPi, type SpawnPiInput, type SpawnResult } from "./autoreview";
-import { chatSkillPath } from "./chat";
+import { chatSkillPath } from "./skill-activation";
 import type { AgentConfig, Engine, KanbanDb, LaneWorkerRun, LaneSnapshot } from "./db";
 import { builtinDefaultEngine, resolveLineup } from "./engines";
 import { registerShutdown } from "./shutdown";

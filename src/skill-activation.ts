@@ -12,6 +12,9 @@ import { basename, dirname, join } from "node:path";
 /** Max characters of a SKILL.md body injected into the system prompt (argv safety). */
 export const MAX_SKILL_CHARS = 64 * 1024;
 
+/** The repo-local pi-kanban skill. Lives here, not in chat.ts, so the CLI (via lane-workers) never loads the pi SDK. */
+export const chatSkillPath = join(import.meta.dir, "..", "skills", "pi-kanban");
+
 function stripFrontmatter(content: string): string {
   return content.replace(/^---\n[\s\S]*?\n---\n?/, "");
 }
