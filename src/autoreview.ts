@@ -1,3 +1,4 @@
+import { durationFor, runAgentChild } from "./agent-child";
 import { homedir } from "node:os";
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -693,10 +694,8 @@ export function sessionIdFor(job: AgentJob, now: number = Date.now()): string {
   return `kanban-${job.task.id}-${job.role}-${now.toString(36)}`;
 }
 
-/** "8s" / "59s" / "1 min" / "20 min" */
-export function durationFor(secs: number): string {
-  return secs < 60 ? `${secs}s` : `${Math.round(secs / 60)} min`;
-}
+// moved to agent-child.ts with the shared runner; re-exported for existing importers
+export { durationFor };
 
 /** The "why" for a death comment, from the spawn result plus what the session actually emitted. */
 export function deathReason(result: SpawnResult, secs: number, sessionLog: string[]): string {
@@ -729,89 +728,19 @@ export interface SpawnPiInput {
   track: (kill: () => void) => () => void;
 }
 
-/** The one spawn implementation: kill/timeout/stall timers, JSONL streaming, stderr tail. */
+/** The one pi spawn: the shared agent-child runner over pi's `--mode json` JSONL. */
 export function spawnPi(input: SpawnPiInput): Promise<SpawnResult> {
   const { cwd, sessionId, prompt, args, timeoutMs, stallMs, log, emit, track } = input;
-  const proc = Bun.spawn({
-    // json mode streams JSONL events while the session runs (--print waits for the end)
+  // json mode streams JSONL events while the session runs (--print waits for the end)
+  return runAgentChild({
     cmd: ["pi", "--mode", "json", "--session-id", sessionId, ...args, prompt],
     cwd,
-    env: process.env,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const untrack = track(() => proc.kill());
-  const stderr = new Response(proc.stderr).text();
-  let timedOut = false;
-  let stalled = false;
-  let stallTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const clearTimers = () => {
-    clearTimeout(timer);
-    if (stallTimer) clearTimeout(stallTimer);
-  };
-
-  const timer = setTimeout(() => {
-    timedOut = true;
-    if (stallTimer) clearTimeout(stallTimer);
-    proc.kill();
-  }, timeoutMs);
-  timer.unref?.();
-
-  const resetStallTimer = () => {
-    if (timedOut || stalled) return;
-    if (stallTimer) clearTimeout(stallTimer);
-    stallTimer = setTimeout(() => {
-      stalled = true;
-      clearTimeout(timer);
-      proc.kill();
-    }, stallMs);
-    stallTimer.unref?.();
-  };
-
-  resetStallTimer();
-
-  // stream events as they arrive: manual LF split (readline mis-splits unicode)
-  void (async () => {
-    const reader = proc.stdout.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value && value.byteLength > 0) {
-          resetStallTimer();
-        }
-        buf += decoder.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          const line = formatPiEvent(buf.slice(0, nl));
-          if (line) emit(line);
-          buf = buf.slice(nl + 1);
-        }
-      }
-    } catch {
-      // stream torn down (timeout kill / early exit) — exit handling below covers it
-    }
-  })();
-
-  return proc.exited.finally(untrack).then(async (code) => {
-    clearTimers();
-    const tail = (await stderr).trim();
-    if (stalled) log(`stalled — no output for ${durationFor(stallMs / 1000)}, killed`);
-    else if (timedOut) log(`timed out after ${Math.round(timeoutMs / 60_000)} min, killed`);
-    else if (code !== 0) {
-      if (tail) log(`exited ${code}, stderr tail:\n${tail.slice(-1500)}`);
-    }
-    return {
-      code: (timedOut || stalled) ? 1 : (code ?? 1),
-      stalled: stalled || undefined,
-      stalledAfterMs: stalled ? stallMs : undefined,
-      timedOut: timedOut || undefined,
-      stderrTail: tail ? tail.slice(-1500) : undefined,
-    };
+    timeoutMs,
+    stallMs,
+    log,
+    emit,
+    track,
+    formatEvent: formatPiEvent,
   });
 }
 
