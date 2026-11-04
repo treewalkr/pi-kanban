@@ -161,7 +161,6 @@
                 {/each}
               </select>
             </label>
-            <p class="engine-note">Claude Code resolves its own login — no provider here. Effort is passed as <code>--effort</code>.</p>
           {:else}
             {#if engines.models.length > 0}
               <label>
@@ -323,12 +322,6 @@
     flex-direction: row !important;
     align-items: center;
     gap: 6px;
-  }
-  .engine-note {
-    flex-basis: 100%;
-    margin: 0;
-    color: var(--text-dim);
-    font-size: 12px;
   }
   .engine-meta {
     display: flex;
