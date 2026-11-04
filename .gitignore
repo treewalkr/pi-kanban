@@ -15,3 +15,7 @@ docs/*
 .prototypes/
 # local Claude Code instructions (AGENTS.md is the checked-in law)
 CLAUDE.md
+
+# impeccable run artifacts (design.json stays tracked)
+.impeccable/critique/
+.impeccable/live/
