@@ -82,10 +82,14 @@ export type AgentThinking = "" | "off" | "minimal" | "low" | "medium" | "high" |
 /** Which headless harness an engine spawns: pi (`pi --mode json`) or Claude Code (`claude -p`). */
 export type HarnessId = "pi" | "claude";
 
+/** The `--effort` levels Claude Code accepts; a claude engine's `thinking` is one of these. */
+export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
 /**
  * A named, coherent run target — the only home of model config (card: engines).
- * pi engines carry provider/model/thinking; claude engines carry only a model
- * alias (claude resolves its own auth and thinking). `seats` caps concurrent
+ * pi engines carry provider/model/thinking; claude engines carry a model alias
+ * and an optional effort level in `thinking` (CLAUDE_EFFORT_LEVELS, passed as
+ * `--effort`); claude resolves its own auth. `seats` caps concurrent
  * sessions on this engine; `flags` are raw harness flags.
  */
 export interface Engine {
@@ -3979,7 +3983,8 @@ export class KanbanDb {
 
   /**
    * Create or fully replace an engine. Coherence is enforced here: a claude
-   * engine has no provider or thinking (claude resolves both itself); seats are
+   * engine has no provider (claude resolves its own auth) and its thinking is
+   * a Claude Code effort level (CLAUDE_EFFORT_LEVELS); seats are
    * 1–MAX_ENGINE_SEATS; names are unique (case-insensitive) so the CLI can
    * address engines by name. An update keeps its registry position.
    */
@@ -3995,8 +4000,11 @@ export class KanbanDb {
     const provider = input.provider?.trim() ?? "";
     const model = input.model?.trim() ?? "";
     const thinking = input.thinking ?? "";
-    if (input.harness === "claude" && (provider || thinking)) {
-      throw new KanbanError("a claude engine takes a model alias only — claude resolves its own provider and thinking", "invalid");
+    if (input.harness === "claude" && provider) {
+      throw new KanbanError("a claude engine takes no provider — claude resolves its own login", "invalid");
+    }
+    if (input.harness === "claude" && thinking && !(CLAUDE_EFFORT_LEVELS as readonly string[]).includes(thinking)) {
+      throw new KanbanError(`claude effort must be one of ${CLAUDE_EFFORT_LEVELS.join(", ")}`, "invalid");
     }
     if (thinking && !(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as string[]).includes(thinking)) {
       throw new KanbanError(`unknown thinking level '${thinking}'`, "invalid");

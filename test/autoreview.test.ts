@@ -1298,11 +1298,14 @@ describe("auto-review", () => {
     expect(args).toContain("--add-dir");
     expect(args[args.indexOf("--append-system-prompt") + 1]).toContain('<skill name="demo"');
     expect(args[args.indexOf("--allowedTools") + 1]).toBe(CLAUDE_READ_TOOLS.join(","));
+    expect(args).not.toContain("--effort"); // unset effort = claude's own default
     expect(args).not.toContain("--no-mcp"); // a pi flag never reaches claude
     expect(args).not.toContain("-edit");
     expect(args.slice(-2)).toEqual(["--max-turns", "40"]);
     expect(claudeFlags("builder", eng({ harness: "claude" }), null)[4]).toBe("sonnet");
     expect(claudeFlags("builder", eng({ harness: "claude" }), null)).toContain(CLAUDE_BUILD_TOOLS.join(","));
+    const effort = claudeFlags("builder", eng({ harness: "claude", model: "opus", thinking: "xhigh" }), null);
+    expect(effort[effort.indexOf("--effort") + 1]).toBe("xhigh");
   });
 
   test("resolvedModelConfig: the engine's fields; thinking falls back to the role default on pi only", () => {
@@ -1315,6 +1318,7 @@ describe("auto-review", () => {
       thinking: "high",
     });
     expect(resolvedModelConfig("reviewer", eng({ harness: "claude", model: "sonnet" }))).toEqual({ harness: "claude", model: "sonnet" });
+    expect(resolvedModelConfig("builder", eng({ harness: "claude", model: "opus", thinking: "high" }))).toEqual({ harness: "claude", model: "opus", thinking: "high" });
   });
 
   test("modelConfigLabel: provider · model · thinking, default-model fallback, claude labelled by harness", () => {
@@ -1322,6 +1326,7 @@ describe("auto-review", () => {
     expect(modelConfigLabel({ model: "gemini-4-argon", thinking: "high" })).toBe("gemini-4-argon · high");
     expect(modelConfigLabel({})).toBe("default model");
     expect(modelConfigLabel({ harness: "claude", model: "opus" })).toBe("claude · opus");
+    expect(modelConfigLabel({ harness: "claude", model: "opus", thinking: "max" })).toBe("claude · opus · max");
   });
 
   test("KANBAN_ENGINE pins every spawn to one engine, beating project and actor lineups", async () => {

@@ -601,7 +601,7 @@ export function resolvedModelConfig(role: AgentRole, engine: Engine): ModelConfi
 
 /** "anthropic · claude-x · high" / "claude · sonnet" — unset parts dropped, model falls back to "default model". */
 export function modelConfigLabel(mc: Partial<ModelConfig>): string {
-  if (mc.harness === "claude") return `claude · ${mc.model ?? "default model"}`;
+  if (mc.harness === "claude") return ["claude", mc.model ?? "default model", mc.thinking ?? ""].filter(Boolean).join(" · ");
   return [mc.provider, mc.model ?? "default model", mc.thinking ?? ""].filter(Boolean).join(" · ");
 }
 
