@@ -1,6 +1,9 @@
+import { homedir } from "node:os";
+import { readFileSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { durationFor, runAgentChild } from "./agent-child";
 import { MAX_SKILL_CHARS, skillActivationPrompt } from "./skill-activation";
-import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, defaultLaneContext, epicPlanContext, PLAN_SECTIONS, PLAN_TEMPLATE, type AgentConfig, type AgentRole, type AgentThinking, type BuiltinAgentRole, type LaneActor, type LaneCapRule, type LaneContext, type Engine, type LeaseOwner, type Task } from "./db";
+import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, defaultLaneContext, epicPlanContext, epicPlanContextFor, PLAN_SECTIONS, PLAN_TEMPLATE, type AgentConfig, type AgentRole, type AgentThinking, type BuiltinAgentRole, type LaneActor, type LaneCapRule, type LaneContext, type Engine, type LeaseOwner, type Task } from "./db";
 import { claudeFlags, isClaudeSessionId, spawnClaude } from "./claude";
 import { DEFAULT_ENGINE_ID, effectiveThinking, engineLabel, resolveLineup } from "./engines";
 import {
@@ -915,9 +918,13 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       }
       const actor = ev.actor;
       if (!actor) continue;
-      // an epic in Plan gets the decomposition charter, not the build template (ceqfq)
+      // an epic gets the decomposition charter, not the build template, wherever
+      // it plans (ceqfq) — keyed on the artifact template, not the 'plan' id,
+      // so custom plan-like lanes charter their epics too
       const planCtx =
-        task.laneId === "plan" && db.childrenOf(task.id).length > 0 ? epicPlanContext() : context;
+        db.childrenOf(task.id).length > 0 && context.template !== undefined
+          ? epicPlanContextFor(context)
+          : context;
       enqueue({
         task,
         role: actor.id,

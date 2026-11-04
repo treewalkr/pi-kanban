@@ -2491,7 +2491,10 @@ body.drag-live {
     width: auto;
     flex: none;
     flex-direction: row;
-    min-height: 36px;
+    /* 28px, not 36px: AC2 (swk5g) promises collapsed intermediates let distant
+     * lane heads share one phone screen — at 10 lanes (Epics, ceqfq) each strip
+     * + 10px grid gap must stay under the 375×667 budget (measured +22px over) */
+    min-height: 28px;
     padding: 4px 10px;
   }
 

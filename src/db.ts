@@ -782,15 +782,17 @@ export const EPIC_PLAN_REVIEWER_INSTRUCTIONS = `You are pi-plan-reviewer. Kanban
 Verdict exactly as usual (never move the card, never approve/reject — the human owns the gate): pass parks it for the human; block carries --finding per rubric hit.
 Your last line: a one-sentence verdict on the decomposition.`;
 
-/** The plan-lane context, chartered for epics: same actors, gates, and exits —
- *  the planner and plan-reviewer swap to decomposition instructions and the
- *  charter template replaces the build template (ceqfq). */
-export function epicPlanContext(): LaneContext {
-  const base = defaultLaneContext("plan")!;
+/** The context an epic plans under: any lane that hands out an artifact
+ *  template swaps it for the decomposition charter (ceqfq) — the seeded
+ *  planner/plan-reviewer instructions swap too when the lane uses those actor
+ *  ids, and everything else (custom actors, gates, exits) stays the lane's own.
+ *  Keyed on the template, not the 'plan' id, so custom plan-like lanes charter
+ *  their epics instead of handing them the build template. */
+export function epicPlanContextFor(ctx: LaneContext): LaneContext {
   return {
-    ...base,
+    ...ctx,
     template: EPIC_PLAN_TEMPLATE.trim(),
-    actors: base.actors.map((a) =>
+    actors: ctx.actors.map((a) =>
       a.id === "planner"
         ? { ...a, instructions: EPIC_PLANNER_INSTRUCTIONS }
         : a.id === "plan-reviewer"
@@ -798,6 +800,13 @@ export function epicPlanContext(): LaneContext {
           : a,
     ),
   };
+}
+
+/** The plan-lane context, chartered for epics: same actors, gates, and exits —
+ *  the planner and plan-reviewer swap to decomposition instructions and the
+ *  charter template replaces the build template (ceqfq). */
+export function epicPlanContext(): LaneContext {
+  return epicPlanContextFor(defaultLaneContext("plan")!);
 }
 
 export const BUILDER_PLAN_INSTRUCTIONS = `You are pi-builder. Kanban card {id} "{title}" had its plan approved; build it in this repo.
@@ -941,6 +950,11 @@ export const EPICS_LANE_ID = "epics" as const;
  *  are decided-not-pending ("ripen-or-rot" defers) and never block it. A child
  *  epic supervising in Epics counts as in flight for its own parent (ceqfq). */
 const EPIC_BLOCKING_LANES = ["plan", "implement", "review", "waiting", "epics"] as const;
+
+/** A card here has finished its work. An epic ENTERING the Epics lane completes
+ *  only if at least one child settled — all-Backlog children mean the waves
+ *  were never released, and the epic must supervise, not insta-complete (ceqfq). */
+const SETTLED_LANES = ["done", "archive"] as const;
 
 /** Lane priority for "what's next": Review → Test + Implement → Plan → Backlog (skill contract). */
 export const NEXT_LANE_PRIORITY = ["review", "implement", "plan", "backlog"] as const;
@@ -2516,30 +2530,42 @@ export class KanbanDb {
     return this.resolveTask(task.id);
   }
 
-  /** After a child's lane move: every ancestor epic parked in the Epics lane
-   *  with nothing left in flight (plan/implement/review/waiting — Backlog
-   *  defers never block, ceqfq decision 2) moves itself to done, one comment
-   *  recording why. Runs at every depth: a finished story can complete its
-   *  parent story, then the epic. Moving to done re-enters updateTask, so the
+  /** After a lane move (or child deletion): the starting container itself, then
+   *  every ancestor epic parked in the Epics lane with nothing left in flight
+   *  (EPIC_BLOCKING_LANES — Backlog defers never block, ceqfq decision 2) moves
+   *  itself to done, one comment recording why. Evaluating the start card covers
+   *  an epic that just ENTERED the Epics lane via approve or a hand mv with its
+   *  children already settled; deleteTask evaluates the deleted child's parent
+   *  for the same reason. An entry completes only if some child has settled
+   *  (done/archive): all-Backlog children mean the waves were never released —
+   *  such an epic must park and supervise, not insta-complete (approve/AC and
+   *  the supervising-child case pin this). Child events (any move, any delete)
+   *  keep the plain rule. Runs at every depth: a finished story can complete its
+   *  parent story, then the epic — moving to done re-enters updateTask, so the
    *  walk continues upward naturally; depth is capped by the parent limit. */
-  private autoDoneEpics(childTaskId: string): void {
-    let cur = this.resolveTask(childTaskId);
-    while (cur.parentId !== null) {
-      const parent = this.resolveTask(cur.parentId);
-      if (parent.laneId === EPICS_LANE_ID) {
-        const inFlight = this.childrenOf(parent.id).filter((c) =>
+  private autoDoneEpics(startTaskId: string, viaChildEvent = false): void {
+    let cur = this.resolveTask(startTaskId);
+    let childEvent = viaChildEvent;
+    for (;;) {
+      if (cur.laneId === EPICS_LANE_ID) {
+        const children = this.childrenOf(cur.id);
+        const inFlight = children.filter((c) =>
           (EPIC_BLOCKING_LANES as readonly string[]).includes(c.laneId),
         );
-        if (inFlight.length === 0) {
-          this.updateTask(parent.id, { lane: "done" }, { cause: "auto", actor: "kanban" });
-          this.createComment(parent.id, {
+        const settled = childEvent || children.some((c) => (SETTLED_LANES as readonly string[]).includes(c.laneId));
+        if (inFlight.length === 0 && settled) {
+          this.updateTask(cur.id, { lane: "done" }, { cause: "auto", actor: "kanban" });
+          this.createComment(cur.id, {
+            author: "kanban",
             kind: "comment",
             body: "epic complete — no children in flight (Backlog defers stay parked)",
           });
         }
         return; // an epic's completion (or non-completion) settles this chain
       }
-      cur = parent;
+      if (cur.parentId === null) return;
+      cur = this.resolveTask(cur.parentId);
+      childEvent = true; // every ancestor is evaluated because a child event happened
     }
   }
 
@@ -2673,6 +2699,9 @@ export class KanbanDb {
       delElaborationRequests.run(id);
       delLaneEvents.run(id);
     }
+    // deleting a card is a child event for its container: an epic in Epics whose
+    // last in-flight (or last settled) child just vanished may complete now (ceqfq)
+    if (task.parentId !== null) this.autoDoneEpics(task.parentId, true);
     return task;
   }
 
