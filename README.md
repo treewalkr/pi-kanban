@@ -86,7 +86,7 @@ workflow contract: card per unit of work, advance it through lanes, never leave 
 | `bun run dev` | api (`:4600`, watch) + web (`:5174`) |
 | `bun run build` | production web build → `web/dist` |
 | `bun run start` | serve api + built web on `127.0.0.1:4600` |
-| `bun test` | db + cli tests (temp DBs) |
+| `bun run test` | full suite, files in parallel (`bun test --parallel`; temp DBs) |
 | `bun run check` | svelte-check + tsc |
 
 ```

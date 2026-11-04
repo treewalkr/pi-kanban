@@ -13,7 +13,7 @@
     "dev": "concurrently -n api,web -c blue,green 'bun run dev:api' 'bun run dev:web'",
     "build": "vite build",
     "start": "bun run src/index.ts",
-    "test": "bun test",
+    "test": "bun test --parallel",
     "test:e2e": "playwright test",
     "check": "svelte-check --workspace web && tsc --noEmit -p tsconfig.src.json"
   },
