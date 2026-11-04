@@ -13,3 +13,5 @@ docs/*
 
 # design prototypes (interactive scratch, see .prototypes/*/DESIGN.md)
 .prototypes/
+# local Claude Code instructions (AGENTS.md is the checked-in law)
+CLAUDE.md
