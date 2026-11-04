@@ -2,7 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 // Lane management e2e (card azqat): settings add → toggle shows an empty lane
 // on a filtered board → rename → drag-reorder (board + settings) →
-// delete-empty OK → delete-with-cards refused.
+// delete-empty OK → delete-with-cards refused. Settings tabs are role=tab and
+// lane delete asks first via the ConfirmDialog (card q8x8g).
 
 const laneOrder = async (request: any): Promise<string[]> => {
   const res = await request.get("/board");
@@ -14,8 +15,14 @@ async function openLanesSettings(page: Page) {
   await page.goto("/");
   await page.waitForSelector("main.board");
   await page.getByRole("button", { name: "settings", exact: true }).click();
-  await page.getByRole("button", { name: "Lanes", exact: true }).click();
+  await page.getByRole("tab", { name: "Lanes" }).click();
   await page.waitForSelector(".lane-row[data-lane='backlog']");
+}
+
+// lane delete routes through the ConfirmDialog (role=alertdialog); "delete" confirms
+async function confirmLaneDelete(page: Page) {
+  await page.getByRole("alertdialog").getByRole("button", { name: "delete", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeHidden();
 }
 
 test("settings: add lane, rename, set WIP, delete empty; delete with cards refused", async ({ page, request }) => {
@@ -43,16 +50,18 @@ test("settings: add lane, rename, set WIP, delete empty; delete with cards refus
   await wipInput.press("Enter");
   await expect(page.locator("section.lane[aria-label='canary'] .lane-head .count")).toHaveText("0/2");
 
-  // delete with cards refused: seed a card into canary via the API, then ✕
+  // delete with cards refused: seed a card into canary via the API, then ✕ → confirm
   const cardRes = await request.post("/tasks", { data: { title: "canary card", lane: "staging" } });
   const card = (await cardRes.json()) as { id: string };
   await page.click("[aria-label='delete canary']");
+  await confirmLaneDelete(page);
   await expect(page.locator(".error-bar")).toContainText("still holds 1 task(s)");
   expect(await laneOrder(request)).toContain("staging");
 
   // empty the lane, delete-empty OK, gone after reload
   await request.patch(`/tasks/${card.id}`, { data: { lane: "archive" } });
   await page.click("[aria-label='delete canary']");
+  await confirmLaneDelete(page);
   await expect(page.locator(".lane-row[data-lane='staging']")).toHaveCount(0);
   await page.reload();
   await page.waitForSelector("main.board");
