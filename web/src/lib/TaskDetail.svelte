@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { Attachment, Comment, Task } from "../../../src/db";
   import { isAgentChatter, latestStateIndex } from "../../../src/thread";
-  import { GitBranch, Sparkles } from "@lucide/svelte";
+  import { GitBranch, Sparkles, Square } from "@lucide/svelte";
   import { api } from "../api";
   import { board } from "./board.svelte";
   import { chat } from "./chat.svelte";
   import ChatPanel from "./ChatPanel.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
   import IdChip from "./IdChip.svelte";
   import { copyText } from "./copy";
   import { renderMarkdown, toggleTaskLine } from "./markdown";
@@ -13,6 +14,10 @@
   import { canPromoteToPlan, laneColor, nextPriority, roleAuthor, timeAgo } from "./util";
   import { canResume } from "./waiting";
   import { blockerCandidates } from "./blockerPicker";
+
+  // per-session stop: confirm, then DELETE /sessions/:taskId — the death comment
+  // and ↻ resume offer land through the loop's normal death path
+  let confirmStop = $state(false);
 
   const task = board.editing!;
 
@@ -624,7 +629,13 @@
       {#if live}
         <div class="detail-activity">
           <div class="children-head">
-            {roleAuthor(live.role)} · live · {timeAgo(live.startedAt)}{#if live.modelLabel} · {live.modelLabel}{/if}
+            <span>
+              {roleAuthor(live.role)} · live · started {timeAgo(live.startedAt)} · active {timeAgo(live.lastActivityAt)}{#if live.modelLabel} · {live.modelLabel}{/if}
+            </span>
+            <button
+              class="stop-btn"
+              title="kill this session — the death is recorded and a resume offer takes its place"
+              onclick={() => (confirmStop = true)}><Square size={11} strokeWidth={2} /> stop</button>
           </div>
           <div class="activity-log" bind:this={logEl}>
             {#each live.log as line, i (i)}
@@ -632,6 +643,18 @@
             {/each}
           </div>
         </div>
+      {/if}
+      {#if confirmStop}
+        <ConfirmDialog
+          title="stop agent session"
+          message={`Kill the live ${roleAuthor(live?.role ?? "builder")} session on ${me.id}? Its transcript is kept and a resume offer appears on the card.`}
+          confirmLabel="stop"
+          onconfirm={() => {
+            confirmStop = false;
+            void board.stopSession(me.id);
+          }}
+          oncancel={() => (confirmStop = false)}
+        />
       {/if}
       {#if canResume(board.waiting[me.id], !!board.activity[me.id])}
         <div class="detail-activity resume-offer">

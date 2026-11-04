@@ -9,7 +9,7 @@
   import { CircleSlash, GitBranch } from "@lucide/svelte";
   import { cycleChip, laneAgeChip } from "./statsview";
   import { ghChip } from "./ghview";
-  import { canPromoteToPlan, nextPriority, queuedChip, roleVerb, timeAgo } from "./util";
+  import { canPromoteToPlan, nextPriority, queuedChip, QUIET_AFTER_MS, roleVerb, timeAgo } from "./util";
   import { waitingBadge } from "./waiting";
 
   let { task, child = false }: { task: Task; child?: boolean } = $props();
@@ -131,8 +131,14 @@
         onclick={(e) => e.stopPropagation()}>{chip.label}</a>
     {/each}
     {#if board.activity[task.id]}
-      <span class="chip working" title="pi agent working — open the card for live output">
-        ◌ {roleVerb(board.activity[task.id].role)} · {timeAgo(board.activity[task.id].startedAt)}{#if board.activity[task.id].model} · {board.activity[task.id].model}{/if}
+      {@const live = board.activity[task.id]}
+      {@const quiet = Date.now() - live.lastActivityAt > QUIET_AFTER_MS}
+      <span
+        class="chip working"
+        class:quiet
+        title={`started ${timeAgo(live.startedAt)} · last output ${timeAgo(live.lastActivityAt)}${live.model ? ` · ${live.model}` : ""} — open the card for live output`}
+      >
+        ◌ {roleVerb(live.role)} · active {timeAgo(live.lastActivityAt)}{#if live.model} · {live.model}{/if}
       </span>
     {/if}
     {#if board.queued[task.id]}

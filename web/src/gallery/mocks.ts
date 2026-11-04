@@ -282,6 +282,9 @@ const ACTIVITY: Record<string, AgentSessionInfo> = {
     taskId: working.id,
     role: "reviewer",
     startedAt: now() - 3 * MIN,
+    lastActivityAt: now() - 8_000,
+    modelLabel: "zai · glm-5.3 · max",
+    engine: "glm-5.3 · max",
     log: [
       "reading card k7f2m context…",
       "found 2 findings: stale token names, missing focus ring",

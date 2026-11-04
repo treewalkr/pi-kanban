@@ -18,6 +18,9 @@ export function timeAgo(ts: number): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
+/** A live session with no output for this long reads as wedged (the loop's stall kill trips at 10 min). */
+export const QUIET_AFTER_MS = 5 * 60_000;
+
 const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: "always" });
 
 /** Long-form relative time ("15 minutes ago"), pi-web's sidebar row format. */

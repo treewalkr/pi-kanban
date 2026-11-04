@@ -109,9 +109,9 @@
 
   // live sessions win over queued jobs for the same card — one row per card
   const runningQueue = $derived.by(() => {
-    const rows: { taskId: string; role: AgentRole; startedAt: number; label: string; queued: boolean }[] = [];
+    const rows: { taskId: string; role: AgentRole; startedAt: number; lastActivityAt?: number; label: string; queued: boolean }[] = [];
     for (const s of Object.values(board.activity))
-      rows.push({ taskId: s.taskId, role: s.role, startedAt: s.startedAt, label: s.modelLabel ?? "", queued: false });
+      rows.push({ taskId: s.taskId, role: s.role, startedAt: s.startedAt, lastActivityAt: s.lastActivityAt, label: s.modelLabel ?? "", queued: false });
     const live = new Set(rows.map((r) => r.taskId));
     for (const q of Object.values(board.queued))
       if (!live.has(q.taskId)) rows.push({ taskId: q.taskId, role: q.role, startedAt: q.enqueuedAt, label: "", queued: true });
@@ -368,7 +368,7 @@
               <span>
                 {#if row.queued}queued · {roleVerb(row.role)}{:else}{roleVerb(row.role)}{/if}{row.label ? ` · ${row.label}` : ""}
               </span>
-              <span>{formatRelativeTime(row.startedAt, now)}</span>
+              <span>{#if row.lastActivityAt !== undefined}active {formatRelativeTime(row.lastActivityAt, now)}{:else}{formatRelativeTime(row.startedAt, now)}{/if}</span>
             </span>
           </span>
         </button>
