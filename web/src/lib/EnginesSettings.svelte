@@ -5,6 +5,8 @@
   import ConfirmDialog from "./ConfirmDialog.svelte";
 
   const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+  /** Claude Code's `--effort` levels (CLAUDE_EFFORT_LEVELS in src/db.ts). */
+  const EFFORT = ["low", "medium", "high", "xhigh", "max"] as const;
 
   let saving = $state<Record<string, boolean>>({});
   let savingSettings = $state(false);
@@ -150,7 +152,16 @@
                 {/if}
               </select>
             </label>
-            <p class="engine-note">Claude Code resolves its own login and thinking — no provider or thinking level here.</p>
+            <label>
+              effort
+              <select bind:value={e.thinking} aria-label={`${e.name} effort`}>
+                <option value="">claude default</option>
+                {#each EFFORT as t (t)}
+                  <option value={t}>{t}</option>
+                {/each}
+              </select>
+            </label>
+            <p class="engine-note">Claude Code resolves its own login — no provider here. Effort is passed as <code>--effort</code>.</p>
           {:else}
             {#if engines.models.length > 0}
               <label>

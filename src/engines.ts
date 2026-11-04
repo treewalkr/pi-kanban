@@ -66,15 +66,15 @@ export function resolveLineup(db: KanbanDb, actor: AgentRole, project?: string, 
 /** Roles that think at max when their (pi) engine leaves thinking unset — the pre-engines role default. */
 const DEEP_ROLES: ReadonlySet<string> = new Set(["reviewer", "planner", "plan-reviewer"]);
 
-/** The thinking level a pi spawn passes; claude manages its own (always undefined). */
+/** The thinking level a pi spawn passes, or the claude engine's `--effort` (no role default: unset = claude's own). */
 export function effectiveThinking(role: AgentRole, engine: Engine): AgentThinking | undefined {
-  if (engine.harness !== "pi") return undefined;
+  if (engine.harness !== "pi") return engine.thinking || undefined;
   return engine.thinking || (DEEP_ROLES.has(role) ? "max" : undefined);
 }
 
 /** "zai · glm-5.3 · max" / "pi default" / "claude · sonnet" */
 export function engineLabel(engine: Engine, role?: AgentRole): string {
-  if (engine.harness === "claude") return `claude · ${engine.model || "default"}`;
+  if (engine.harness === "claude") return ["claude", engine.model || "default", engine.thinking].filter(Boolean).join(" · ");
   const thinking = role ? effectiveThinking(role, engine) : engine.thinking;
   return [engine.provider, engine.model || "pi default", thinking].filter(Boolean).join(" · ");
 }

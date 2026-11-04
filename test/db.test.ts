@@ -63,7 +63,10 @@ test("engines: set → list → replace → reorder → delete; coherence and ca
 
   // claude engines are coherent by construction
   expect(() => db.setEngine("bad", { name: "Bad", harness: "claude", provider: "anthropic" })).toThrow(KanbanError);
-  expect(() => db.setEngine("bad", { name: "Bad", harness: "claude", thinking: "max" })).toThrow(KanbanError);
+  expect(() => db.setEngine("bad", { name: "Bad", harness: "claude", thinking: "minimal" })).toThrow(KanbanError);
+  expect(() => db.setEngine("bad", { name: "Bad", harness: "claude", thinking: "off" })).toThrow(KanbanError);
+  expect(db.setEngine("opus-max", { name: "Opus max", harness: "claude", model: "opus", thinking: "max" })).toMatchObject({ thinking: "max" });
+  db.deleteEngine("opus-max");
   expect(() => db.setEngine("bad", { name: "Bad", harness: "pi", seats: 0 })).toThrow(KanbanError);
   expect(() => db.setEngine("bad", { name: "Bad", harness: "pi", seats: 13 })).toThrow(KanbanError);
   expect(() => db.setEngine("Bad Id", { name: "Bad", harness: "pi" })).toThrow(KanbanError);

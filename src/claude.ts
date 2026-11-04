@@ -10,7 +10,7 @@ import type { SpawnResult } from "./autoreview";
  * `kanban` CLI, so arming, gates and verdicts never learn which harness ran.
  *
  * Auth is ambient (the CLI's own login or ANTHROPIC_API_KEY); an engine never
- * carries a provider or thinking level for claude.
+ * carries a provider for claude. Its `thinking` is the `--effort` level.
  */
 
 /** One alias the engine editor offers; claude resolves it to the current concrete model at spawn. */
@@ -50,7 +50,7 @@ export const CLAUDE_BUILD_TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "Mul
 const READING_ROLES: ReadonlySet<string> = new Set(["planner", "plan-reviewer", "reviewer", "elaborator"]);
 
 /**
- * Claude Code flags for one spawn: model from the engine, skills + context
+ * Claude Code flags for one spawn: model + effort from the engine, skills + context
  * injected into the appended system prompt (claude has no --skill flag), the
  * role's tool allowlist, then the engine's raw flags. The actor's pi-only
  * fields (`tools` filter syntax, `extraArgs`) are pi flags and never reach claude.
@@ -60,6 +60,7 @@ export function claudeFlags(role: AgentRole, engine: Engine, cfg: AgentConfig | 
   // the charters write their artifacts to /tmp ({tmpFile}); claude fences writes
   // to the session's working directories, so /tmp joins them explicitly
   args.push("--add-dir", "/tmp");
+  if (engine.thinking) args.push("--effort", engine.thinking);
   const activated = skillActivationPrompt(cfg?.skills ?? [], onWarn);
   const appended = [cfg?.context, activated].filter(Boolean).join("\n\n");
   if (appended) args.push("--append-system-prompt", appended);

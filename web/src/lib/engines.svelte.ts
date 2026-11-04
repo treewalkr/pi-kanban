@@ -44,7 +44,7 @@ const key = (e: EngineDraft): string => JSON.stringify(e);
 
 /** "zai · glm-5.3 · max" / "pi default" / "claude · sonnet" — the web twin of engineLabel. */
 export function engineSummary(e: Pick<EngineDraft, "harness" | "provider" | "model" | "thinking">): string {
-  if (e.harness === "claude") return `claude · ${e.model || "default"}`;
+  if (e.harness === "claude") return ["claude", e.model || "default", e.thinking].filter(Boolean).join(" · ");
   return [e.provider, e.model || "pi default", e.thinking].filter(Boolean).join(" · ");
 }
 
@@ -141,7 +141,7 @@ class EnginesStore {
       harness: e.harness,
       provider: claude ? undefined : e.provider || undefined,
       model: e.model || undefined,
-      thinking: claude ? undefined : ((e.thinking || undefined) as Engine["thinking"]),
+      thinking: (e.thinking || undefined) as Engine["thinking"],
       flags: e.flags.map((f) => f.trim()).filter(Boolean),
       seats: e.seats,
       enabled: e.enabled,
