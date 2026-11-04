@@ -23,13 +23,23 @@
   import { theme, setTheme } from "./lib/theme.svelte";
   import { notify } from "./lib/notify.svelte";
   import { files } from "./lib/files.svelte";
-  import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu, Hash, MessagesSquare, Eye, EyeOff } from "@lucide/svelte";
+  import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu, Hash, MessagesSquare, Eye, EyeOff, Square } from "@lucide/svelte";
   import { wheelPan } from "./lib/wheel";
   import { service, pollServe, restartService } from "./lib/service.svelte";
+  import ConfirmDialog from "./lib/ConfirmDialog.svelte";
+  import { QUIET_AFTER_MS, roleVerb, timeAgo } from "./lib/util";
+  import type { AgentSessionInfo } from "../../src/autoreview";
 
   let boardEl = $state<HTMLElement | null>(null);
   let tagMenu = $state(false);
   let tagWrap = $state<HTMLElement | null>(null);
+  let agentsMenu = $state(false);
+  let agentsWrap = $state<HTMLElement | null>(null);
+  // the session a stop confirm is pending on (header popover only; TaskDetail confirms in place)
+  let stopTarget = $state<AgentSessionInfo | null>(null);
+
+  // live sessions oldest-first, the popover's row order
+  let liveSessions = $derived(Object.values(board.activity).sort((a, b) => a.startedAt - b.startedAt));
 
   function toggleTag(tag: string): void {
     board.tagFilter = board.tagFilter.includes(tag)
@@ -177,14 +187,18 @@
     return () => el.removeEventListener("wheel", onWheel);
   });
 
-  /** close the tag filter menu on Escape or any click outside it (SearchBox pattern) */
+  /** close the tag filter and agents menus on Escape or any click outside them (SearchBox pattern) */
   function onWindowEvent(e: MouseEvent | KeyboardEvent): void {
-    if (!tagMenu) return;
+    if (!tagMenu && !agentsMenu) return;
     if (e instanceof KeyboardEvent) {
-      if (e.key === "Escape") tagMenu = false;
+      if (e.key === "Escape") {
+        tagMenu = false;
+        agentsMenu = false;
+      }
       return;
     }
     if (tagWrap && !tagWrap.contains(e.target as Node)) tagMenu = false;
+    if (agentsWrap && !agentsWrap.contains(e.target as Node)) agentsMenu = false;
   }
 </script>
 
@@ -325,7 +339,62 @@
             {/if}
           </div>
         {/if}
+        {#if liveSessions.length > 0}
+          <div class="agents-filter" bind:this={agentsWrap}>
+            <button
+              class:active={agentsMenu}
+              onclick={() => (agentsMenu = !agentsMenu)}
+              title="live agent sessions — open the list to watch or stop one"
+              aria-haspopup="menu"
+              aria-expanded={agentsMenu}
+            >
+              <span class="agents-dot" aria-hidden="true"></span>
+              {liveSessions.length} agent{liveSessions.length === 1 ? "" : "s"}
+            </button>
+            {#if agentsMenu}
+              <div class="agents-menu" role="menu" aria-label="live agent sessions">
+                {#each liveSessions as s (s.taskId)}
+                  {@const card = board.taskById(s.taskId)}
+                  {@const quiet = Date.now() - s.lastActivityAt > QUIET_AFTER_MS}
+                  <div class="agents-row" role="menuitem" title={card?.title ?? s.taskId}>
+                    <button
+                      class="agents-main"
+                      onclick={() => {
+                        agentsMenu = false;
+                        if (card) board.openCard(card);
+                      }}
+                    >
+                      <span class="agents-verb">{roleVerb(s.role)}</span>
+                      <span class="agents-id">{s.taskId}</span>
+                      <span class="agents-active" class:quiet>active {timeAgo(s.lastActivityAt)}</span>
+                    </button>
+                    <button
+                      class="agents-stop"
+                      title="kill this session — its transcript is kept and a resume offer appears on the card"
+                      onclick={() => (stopTarget = s)}
+                    >
+                      <Square size={10} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
+      {#if stopTarget}
+        <ConfirmDialog
+          title="stop agent session"
+          message={`Kill the live ${roleVerb(stopTarget.role)} session on ${stopTarget.taskId}? Its transcript is kept and a resume offer appears on the card.`}
+          confirmLabel="stop"
+          onconfirm={() => {
+            const id = stopTarget?.taskId;
+            stopTarget = null;
+            if (id) void board.stopSession(id);
+          }}
+          oncancel={() => (stopTarget = null)}
+        />
+      {/if}
       {#if service.stale || service.restarting}
         <button
           class="stale-chip"
