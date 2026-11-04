@@ -423,7 +423,6 @@ function stubMutations(): void {
     return true;
   };
 
-  engines.move = async (): Promise<void> => {};
   engines.saveSettings = async (): Promise<boolean> => true;
 }
 

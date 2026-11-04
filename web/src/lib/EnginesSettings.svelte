@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { ChevronDown, ChevronUp } from "@lucide/svelte";
+  import { tick } from "svelte";
   import { agents } from "./agents.svelte";
-  import { engines, engineSummary, type EngineDraft } from "./engines.svelte";
+  import { draftProblem, engines, engineSummary, MAX_SEATS, type EngineDraft } from "./engines.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
 
   const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -9,6 +9,9 @@
   const EFFORT = ["low", "medium", "high", "xhigh", "max"] as const;
 
   let saving = $state<Record<string, boolean>>({});
+  /** Per-engine "advanced" disclosure; unset = open only when the engine already carries flags. */
+  let advanced = $state<Record<string, boolean>>({});
+  const flagCount = (e: EngineDraft) => e.flags.filter((f) => f.trim()).length;
   let savingSettings = $state(false);
   let toDelete = $state<EngineDraft | null>(null);
 
@@ -39,7 +42,7 @@
   }
 
   async function save(e: EngineDraft): Promise<void> {
-    if (saving[e.id]) return;
+    if (saving[e.id] || draftProblem(e)) return;
     saving[e.id] = true;
     try {
       await engines.save(e);
@@ -56,6 +59,21 @@
     } finally {
       savingSettings = false;
     }
+  }
+
+  /** A never-saved draft has nothing to lose server-side: discard it without a dialog. */
+  function requestDelete(e: EngineDraft): void {
+    if (engines.isDraft(e.id)) void engines.remove(e.id);
+    else toDelete = e;
+  }
+
+  /** "+ new engine" lands the caret in the new draft's name, ready to type. */
+  async function addEngine(): Promise<void> {
+    const draft = engines.addDraft();
+    await tick();
+    const input = document.querySelector<HTMLInputElement>(`[data-engine="${draft.id}"] .engine-name input`);
+    input?.focus();
+    input?.select();
   }
 
   async function confirmDelete(): Promise<void> {
@@ -109,17 +127,21 @@
       <p class="settings-general-description">No engines yet — every actor runs on pi's own default model, one session at a time.</p>
     {/if}
 
-    {#each engines.engines as e, i (e.id)}
+    {#each engines.engines as e (e.id)}
       {@const users = usedBy(e.id)}
-      <div class="engine-card settings-form" data-engine={e.id} class:disabled={!e.enabled}>
-        <div class="engine-head">
+      {@const problem = draftProblem(e)}
+      {@const failure = engines.errorFor(e)}
+      {@const dirty = engines.isDirty(e)}
+      {@const draft = engines.isDraft(e.id)}
+      <section class="engine-card settings-form" data-engine={e.id} class:off={!e.enabled} aria-label={`engine ${e.name.trim() || "(unnamed)"}`}>
+        <div class="engine-identity">
           <label class="engine-name">
             name
-            <input bind:value={e.name} placeholder="e.g. GLM flash" />
+            <input bind:value={e.name} placeholder="e.g. GLM flash" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore aria-invalid={!e.name.trim()} />
           </label>
-          <div>
-            <span class="field-label">harness</span>
-            <div class="seg">
+          <div class="engine-field">
+            <span class="engine-field-label" id={`engine-${e.id}-harness`}>harness</span>
+            <div class="seg" role="group" aria-labelledby={`engine-${e.id}-harness`}>
               <button type="button" class="seg-option" class:on={e.harness === "pi"} aria-pressed={e.harness === "pi"} onclick={() => setHarness(e, "pi")}>
                 <span class="seg-label">pi</span>
               </button>
@@ -128,17 +150,13 @@
               </button>
             </div>
           </div>
-          <div class="engine-order">
-            <button type="button" class="ghost" aria-label={`move ${e.name} up`} disabled={i === 0 || engines.isDraft(e.id)} onclick={() => void engines.move(e.id, -1)}>
-              <ChevronUp size={14} strokeWidth={1.75} />
-            </button>
-            <button type="button" class="ghost" aria-label={`move ${e.name} down`} disabled={i === engines.engines.length - 1 || engines.isDraft(e.id)} onclick={() => void engines.move(e.id, 1)}>
-              <ChevronDown size={14} strokeWidth={1.75} />
-            </button>
-          </div>
+          <label class="engine-enabled">
+            <input type="checkbox" bind:checked={e.enabled} />
+            enabled
+          </label>
         </div>
 
-        <div class="row engine-model">
+        <div class="engine-fields">
           {#if e.harness === "claude"}
             <label>
               model
@@ -208,49 +226,51 @@
               </select>
             </label>
           {/if}
+          <label class="engine-seats">
+            seats
+            <input type="number" min="1" max={MAX_SEATS} step="1" bind:value={e.seats} aria-invalid={problem?.startsWith("seats") ?? false} />
+          </label>
         </div>
 
-        <div class="row engine-capacity">
-          <label>
-            seats
-            <input type="number" min="1" max="12" bind:value={e.seats} />
-          </label>
+        <details class="engine-advanced" bind:open={() => advanced[e.id] ?? flagCount(e) > 0, (v) => (advanced[e.id] = v)}>
+          <summary>advanced{flagCount(e) > 0 ? ` · ${flagCount(e)} harness flag${flagCount(e) === 1 ? "" : "s"}` : ""}</summary>
           <label class="engine-flags">
-            harness flags <span class="field-hint">one per line</span>
+            <span>harness flags <span class="field-hint">one per line, passed to every spawn</span></span>
             <textarea
-              rows="1"
+              rows="2"
               value={e.flags.join("\n")}
               placeholder={e.harness === "claude" ? "e.g. --max-turns 40" : "e.g. --no-mcp"}
               oninput={(ev) => (e.flags = (ev.currentTarget as HTMLTextAreaElement).value.split("\n"))}
             ></textarea>
           </label>
-          <label class="engine-enabled">
-            <input type="checkbox" bind:checked={e.enabled} />
-            enabled
-          </label>
-        </div>
+        </details>
+
+        {#if (dirty && problem) || failure}
+          <p class="engine-error" role="alert">{failure ?? problem}</p>
+        {/if}
 
         <div class="engine-meta">
-          <span class="chip mono" title="what a spawn on this engine passes">{engineSummary(e)}</span>
+          <span class="chip mono" title={engineSummary(e)}>{engineSummary(e)}</span>
           {#if engines.settings.defaultEngine === e.id}<span class="chip">board default</span>{/if}
+          {#if !e.enabled}<span class="chip">disabled</span>{/if}
           <span class="engine-users">{users.length > 0 ? `runs ${users.join(", ")}` : "in no lineup yet"}</span>
           <span class="spacer"></span>
-          <button type="button" class="ghost danger" onclick={() => (toDelete = e)}>delete</button>
+          <button type="button" class="ghost danger" onclick={() => requestDelete(e)}>{draft ? "discard" : "delete"}</button>
           <button
             type="button"
-            class:primary={engines.isDirty(e)}
-            class:ghost={!engines.isDirty(e)}
-            disabled={saving[e.id] || !e.name.trim() || !engines.isDirty(e)}
+            class:primary={dirty && !problem}
+            class:ghost={!dirty || Boolean(problem)}
+            disabled={saving[e.id] || Boolean(problem) || !dirty}
             onclick={() => save(e)}
           >
-            {saving[e.id] ? "saving…" : engines.isDraft(e.id) ? "create" : engines.isDirty(e) ? "save" : "saved"}
+            {saving[e.id] ? "saving…" : draft ? "create" : dirty ? "save" : "saved"}
           </button>
         </div>
-      </div>
+      </section>
     {/each}
 
-    <div class="new-pool-bar">
-      <button type="button" class="ghost" onclick={() => engines.addDraft()}>+ new engine</button>
+    <div class="engine-new">
+      <button type="button" class="ghost" onclick={addEngine}>+ new engine</button>
     </div>
   </section>
 </div>
@@ -285,58 +305,139 @@
     border-radius: var(--radius-control);
     margin-bottom: 12px;
     background: var(--bg-panel);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    gap: 10px;
   }
-  .engine-card.disabled {
-    opacity: 0.7;
-  }
-  .engine-head {
+  /* band 1 — identity: what it is called, which harness, whether it runs */
+  .engine-identity {
     display: flex;
     flex-wrap: wrap;
     align-items: flex-end;
     gap: 12px;
   }
   .engine-name {
-    flex: 1 1 180px;
-  }
-  .engine-order {
-    display: flex;
-    gap: 2px;
-    margin-left: auto;
-  }
-  .engine-model label,
-  .engine-capacity label {
-    flex: 1 1 140px;
+    flex: 1 1 200px;
     min-width: 0;
   }
-  .engine-model select {
-    width: 100%;
+  .engine-name input {
+    font-weight: 600;
   }
-  .engine-flags {
-    flex: 2 1 200px;
+  .engine-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  /* the shared .settings-form label voice, for a label that heads a button group */
+  .engine-field-label {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
   }
   .engine-enabled {
-    flex: 0 0 auto !important;
     flex-direction: row !important;
     align-items: center;
     gap: 6px;
+    min-height: 36px;
+    font-weight: 400 !important;
+  }
+  /* band 2 — what runs: model fields flex, seats stays number-sized */
+  .engine-fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px 12px;
+  }
+  .engine-fields label {
+    flex: 1 1 150px;
+    min-width: 0;
+  }
+  .engine-fields select {
+    width: 100%;
+    min-width: 0;
+  }
+  .engine-fields .engine-seats {
+    flex: 0 0 76px;
+  }
+  .engine-seats input {
+    width: 100%;
+    font-variant-numeric: tabular-nums;
+  }
+  /* band 3 — raw harness flags, disclosed on demand */
+  .engine-advanced > summary {
+    width: fit-content;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    list-style: none;
+  }
+  .engine-advanced > summary::-webkit-details-marker {
+    display: none;
+  }
+  .engine-advanced > summary::before {
+    content: "▸ ";
+  }
+  .engine-advanced[open] > summary::before {
+    content: "▾ ";
+  }
+  .engine-advanced > summary:hover {
+    color: var(--text);
+  }
+  .engine-advanced > summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-small);
+  }
+  .engine-flags {
+    margin-top: 8px;
+  }
+  .engine-flags textarea {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    resize: vertical;
+  }
+  .field-hint {
+    color: var(--text-dim);
+    font-weight: 400;
+  }
+  .engine-card [aria-invalid="true"] {
+    border-color: var(--error-border);
+  }
+  .engine-error {
+    margin: 0;
+    color: var(--error);
+    font-size: 12px;
   }
   .engine-meta {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  }
+  /* the spawn spec is the card's summary: meta size, never truncated */
+  .engine-meta .chip.mono {
+    max-width: none;
+    font-size: 11px;
+  }
+  .engine-card.off .engine-meta .chip.mono {
+    text-decoration: line-through;
+    color: var(--text-dim);
   }
   .engine-users {
     color: var(--text-dim);
     font-size: 12px;
   }
-  .field-hint {
-    color: var(--text-dim);
-  }
   .spacer {
     flex: 1;
+  }
+  @media (max-width: 640px) {
+    .engine-fields label {
+      flex-basis: 100%;
+    }
+    .engine-fields .engine-seats {
+      flex: 0 0 96px;
+    }
   }
 </style>
