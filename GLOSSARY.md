@@ -123,16 +123,28 @@ the server — active view (`kanban-view`), collapsed lanes
 board data itself stays on the server.
 _Avoid_: UI prefs, user settings, local settings, board state
 
-**Pool slot**:
-One concurrency opening of a worker pool (`worker_pools`): a `{provider, model, thinking}` override the loop merges over the role's agent config when it spawns there. Distinct from the drag-and-drop **Slot**.
-_Avoid_: worker, lane slot, agent seat.
+**Engine**:
+A named, coherent run target (`engines`): one **harness** plus its model (and, for pi, provider and thinking level), raw harness flags, and a seat count. The only place model config lives — actors never carry a model.
+_Avoid_: profile, preset, pool, runtime.
+
+**Harness**:
+The headless agent CLI an engine spawns: `pi` (`pi --mode json`) or `claude` (Claude Code, `claude -p`). The board contract never learns which ran — charters drive the `kanban` CLI either way. A transcript can't cross harnesses, so a failover between them starts a fresh session.
+_Avoid_: runtime, backend, executor.
+
+**Seat**:
+One concurrent session an engine may run; an engine with 3 seats runs up to 3 spawns at once, shared by every actor whose lineup names it. Distinct from the drag-and-drop **Slot**.
+_Avoid_: slot, worker, pool slot.
+
+**Lineup**:
+An actor's ordered list of engines (`runsOn`): each spawn takes the first enabled engine with a free seat that isn't cooling down, the rest are fallbacks; empty means the board default engine. Chosen whole, by one rule — `KANBAN_ENGINE` pin → project override → actor → board default — never merged field by field.
+_Avoid_: pool, fallback chain, model list.
 
 **Incident**:
-A terminal spawn failure recorded against a pool slot, classified by cause (`provider-quota`, `auth`, `rate-limit`, `timeout`, `stall`, `no-output`, `other`); aggregated per (pool, slot) in `kanban ps` and `kanban check`.
+A terminal spawn failure recorded against the engine's provider account (harness + provider), classified by cause (`provider-quota`, `auth`, `rate-limit`, `timeout`, `stall`, `no-output`, `other`); aggregated per account in `kanban ps` and per engine in `kanban check`.
 _Avoid_: Error, failure event, crash log.
 
 **Cooldown**:
-The temporary window during which the loop's allocator skips a pool slot after a provider-level incident — 15 min by default, or the provider's parsed wait hint clamped to 1–60 min; expiry requalifies the slot (the next spawn is the probe) and a pool edit resets it instantly. Never permanent.
+The temporary window during which the loop's allocator skips every engine on an account after a provider-level incident (quota, auth) — 15 min by default, or the provider's parsed wait hint clamped to 1–60 min; expiry requalifies the engines and wakes the loop (the next spawn is the probe), and editing an engine on the account resets it instantly. Never permanent.
 _Avoid_: Disable, ban, blocklist.
 
 **Ghost**:
@@ -166,10 +178,11 @@ _Avoid_: Pre-commit hook, husky, lint gate
 
 **Project override**:
 A per-project agent config (`project_agent_configs`) keyed by actor id —
-the same key space lane contexts use — that replaces fields of the merged
-actor config (board actor config + pool slot) for spawns on that project's
-cards; env vars still beat it, and a present key replaces even when empty
-(`skills: []` = no skills) while an absent key inherits.
+the same key space lane contexts use — that, for spawns on that project's
+cards, replaces the actor's whole **lineup** (`runsOn`) and patches its
+behavior fields; the `KANBAN_ENGINE` pin still beats it, and a present
+behavior key replaces even when empty (`skills: []` = no skills) while an
+absent key inherits.
 _Avoid_: project role, scoped config, project agent.
 
 **Per-project test command**:
@@ -201,5 +214,5 @@ The resident chat agent behind the web UI's board chat: one session with a board
 _Avoid_: Orchestrator, supervisor, main agent
 
 **Lane worker** (`pi-worker-<lane>`):
-A short-lived headless agent with a charter over one lane (`kanban worker run <lane>`), drained by the serve process; Backlog's charter is the only writable one, the rest report. Distinct from the loop's spawn pools (`worker_pools`), which it does not use.
+A short-lived headless agent with a charter over one lane (`kanban worker run <lane>`), drained by the serve process; Backlog's charter is the only writable one, the rest report. It runs on the first enabled pi engine in the `worker` lineup and does not take loop seats.
 _Avoid_: Worker, agent pool, column agent
