@@ -1,11 +1,11 @@
 <script lang="ts">
   import { Bot, Columns3, FolderGit2, Layers, Settings2, X } from "@lucide/svelte";
   import { agents, type SettingsSection } from "./agents.svelte";
-  import { pools } from "./pools.svelte";
+  import { engines } from "./engines.svelte";
   import { projects } from "./projects.svelte";
   import GeneralSettings from "./GeneralSettings.svelte";
   import AgentsSettings from "./AgentsSettings.svelte";
-  import PoolsSettings from "./PoolsSettings.svelte";
+  import EnginesSettings from "./EnginesSettings.svelte";
   import ProjectsSettings from "./ProjectsSettings.svelte";
   import LanesSettings from "./LanesSettings.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
@@ -15,7 +15,7 @@
   const TABS: Array<{ id: Section; label: string; icon: typeof Settings2 }> = [
     { id: "general", label: "General", icon: Settings2 },
     { id: "agents", label: "Agents", icon: Bot },
-    { id: "pools", label: "Pools", icon: Layers },
+    { id: "engines", label: "Engines", icon: Layers },
     { id: "projects", label: "Projects", icon: FolderGit2 },
     { id: "lanes", label: "Lanes", icon: Columns3 },
   ];
@@ -42,7 +42,9 @@
   // sections lazy-load their store on first view, including the section it opens on
   $effect(() => {
     if (section === "agents" && !agents.loaded) void agents.load();
-    if (section === "pools" && !pools.loaded) void pools.load();
+    if (section === "engines" && !engines.loaded) void engines.load();
+    // the Engines tab shows each engine's users, so it needs the agent configs too
+    if (section === "engines" && !agents.loaded) void agents.load();
     if (section === "projects" && !projects.loaded) void projects.load();
   });
 
@@ -54,7 +56,7 @@
   });
 
   function dirtyElsewhere(): boolean {
-    return projects.dirty || pools.dirty;
+    return projects.dirty || engines.dirty;
   }
 
   function close(): void {
@@ -68,7 +70,7 @@
   function discardAndClose(): void {
     confirmDiscard = false;
     projects.revert();
-    pools.revert();
+    engines.revert();
     void agents.close();
   }
 
@@ -108,7 +110,7 @@
     if (agents.saveState === "saving") return "saving…";
     if (agents.saveState === "failed") return "save failed";
     if (agents.saveState === "saved") return "saved";
-    if (pools.dirty || projects.dirty) return "unsaved changes";
+    if (engines.dirty || projects.dirty) return "unsaved changes";
     return "";
   }
 </script>
@@ -169,14 +171,14 @@
           {/if}
         </div>
       {/if}
-      {#if visited.has("pools")}
-        <div class="settings-section-host" id="settings-panel-pools" role="tabpanel" aria-labelledby="settings-tab-pools" hidden={section !== "pools"}>
-          {#if pools.loaded}
-            <PoolsSettings />
+      {#if visited.has("engines")}
+        <div class="settings-section-host" id="settings-panel-engines" role="tabpanel" aria-labelledby="settings-tab-engines" hidden={section !== "engines"}>
+          {#if engines.loaded}
+            <EnginesSettings />
           {:else}
-            <p class="settings-loading" class:err={pools.loadFailed}>
-              {pools.loadFailed ? "could not load pool settings" : "loading pool settings…"}
-              <button type="button" onclick={() => void pools.load()}>{pools.loadFailed ? "retry" : "reload"}</button>
+            <p class="settings-loading" class:err={engines.loadFailed}>
+              {engines.loadFailed ? "could not load engines" : "loading engines…"}
+              <button type="button" onclick={() => void engines.load()}>{engines.loadFailed ? "retry" : "reload"}</button>
             </p>
           {/if}
         </div>

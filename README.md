@@ -33,9 +33,16 @@ serve terminal under `[autoreview]`.
 | `pi-reviewer` | reviews; approve → Done, block → a findings checklist the builder works |
 
 Dead sessions post the reason and offer a **↻ resume session** button that continues the
-same pi session — no lost reasoning, no restart from scratch. Configure per-role
-provider/model/thinking/skills/timeout in the web UI ⚙ (applies on the next spawn);
-`KANBAN_AUTOREVIEW_*` env overrides exist for model, thinking, and timeouts.
+same pi session — no lost reasoning, no restart from scratch.
+
+**Engines** decide what runs: each is a harness (pi or Claude Code), its model and
+thinking level, and a number of seats (concurrent sessions). Every actor has a *runs on*
+lineup of engines — the first enabled engine with a free seat wins, the rest are
+fallbacks; a quota or auth failure cools every engine on that provider account. A project
+can replace an actor's lineup, and `KANBAN_ENGINE=<id|name>` pins every spawn to one
+engine (debugging). `kanban explain <actor> [--project p]` prints the chain for the next
+spawn; `kanban engine ls|add|set|rm` manages the registry (also Settings → Engines).
+Skills, context and timeout stay per actor and apply on the next spawn.
 
 ## The board
 
@@ -85,6 +92,7 @@ workflow contract: card per unit of work, advance it through lanes, never leave 
 ```
 src/            db.ts (sqlite + queries) · app.ts (elysia) · index.ts (server)
                 cli.ts + render.ts (CLI) · search.ts · autoreview.ts (auto agents)
+                engines.ts (lineups) · claude.ts + agent-child.ts (harnesses)
                 thread.ts · restart.ts + shutdown.ts · skills.ts + models.ts
 web/            Svelte 5 SPA (board, drag & drop, detail, settings; Lucide icons)
 skills/pi-kanban/  pi skill (source of truth)

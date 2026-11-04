@@ -10,6 +10,7 @@
  * `--author pi-chat` only; verdict verbs are prompt-forbidden. Nothing here
  * mutates the board directly.
  */
+import { resolveLineup } from "./engines";
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, type AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { skillActivationPrompt } from "./autoreview";
@@ -564,6 +565,7 @@ export class ChatManager {
       : SessionManager.create(cwd, this.sessionDir, { id: sessionId });
     this.log(`${cardId} ${existingPath ? "resumed" : "created"}`);
     const session = await this.createSession({ cwd, sessionManager, appendSystemPrompt });
+    if (!existingPath) await this.seedEngine(cardId, session);
     return new ChatHandleImpl({
       cwd,
       cardId,
@@ -579,6 +581,29 @@ export class ChatManager {
         if (this.handles.get(cardId) === handle) this.handles.delete(cardId);
       },
     });
+  }
+
+  /**
+   * A new chat (board manager or card) starts on the first engine in the
+   * manager's lineup the chat runtime can resolve: pi engines only, and only
+   * providers the in-process runtime has auth for (no extension providers).
+   * A resumed session keeps its saved model; the chips still switch live.
+   */
+  private async seedEngine(cardId: string, session: AgentSession): Promise<void> {
+    const lineup = resolveLineup(this.db, "manager").engines;
+    for (const engine of lineup) {
+      if (!engine.enabled || engine.harness !== "pi" || !engine.provider || !engine.model) continue;
+      try {
+        const model = session.modelRuntime?.getModel(engine.provider, engine.model);
+        if (!model) continue;
+        await session.setModel(model);
+        if (engine.thinking) session.setThinkingLevel(engine.thinking as never);
+        this.log(`${cardId} seeded on engine ${engine.name}`);
+        return;
+      } catch {
+        /* no auth for this provider — try the next engine */
+      }
+    }
   }
 
   /** Resolve task → get-or-create one alive handle per card (concurrent gets share one creation). */

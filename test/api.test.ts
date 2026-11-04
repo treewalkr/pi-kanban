@@ -383,14 +383,14 @@ test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async (
   expect(empty.status).toBe(200);
   expect(await empty.json()).toEqual({ planner: null, reviewer: null, builder: null, "plan-reviewer": null, elaborator: null, manager: null, worker: null });
 
+  db.setEngine("opus", { name: "Opus", harness: "pi", provider: "anthropic", model: "claude-opus-4-5", thinking: "high" });
+  db.setEngine("gpt", { name: "GPT", harness: "pi", provider: "openai", model: "gpt-5.2" });
   const put = await app.handle(
     new Request("http://localhost/agents/reviewer", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        provider: "anthropic",
-        model: "claude-opus-4-5",
-        thinking: "high",
+        runsOn: ["opus", "gpt"],
         skills: ["~/.pi/agent/skills/scrutinize"],
         context: "we value perf",
         timeoutMs: 1_200_000,
@@ -398,23 +398,23 @@ test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async (
     }),
   );
   expect(put.status).toBe(200);
-  expect(await put.json()).toMatchObject({ model: "claude-opus-4-5", thinking: "high" });
+  expect(await put.json()).toMatchObject({ runsOn: ["opus", "gpt"], context: "we value perf" });
 
   const got = await app.handle(new Request("http://localhost/agents"));
-  expect(await got.json()).toMatchObject({ reviewer: { provider: "anthropic" }, builder: null });
+  expect(await got.json()).toMatchObject({ reviewer: { runsOn: ["opus", "gpt"] }, builder: null });
 
   const putPlanReviewer = await app.handle(
     new Request("http://localhost/agents/plan-reviewer", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "openai/gpt-5.2", thinking: "medium" }),
+      body: JSON.stringify({ runsOn: ["gpt"] }),
     }),
   );
   expect(putPlanReviewer.status).toBe(200);
   const gotAll = (await app.handle(new Request("http://localhost/agents"))).json() as Promise<{
-    "plan-reviewer": { model?: string; thinking?: string } | null;
+    "plan-reviewer": { runsOn?: string[] } | null;
   }>;
-  expect((await gotAll)["plan-reviewer"]).toMatchObject({ model: "openai/gpt-5.2", thinking: "medium" });
+  expect((await gotAll)["plan-reviewer"]).toEqual({ runsOn: ["gpt"] });
 
   const json = { headers: { "content-type": "application/json" } };
   const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
@@ -425,10 +425,11 @@ test("GET/PUT /agents roundtrip; bad role, unknown key, bad values 422", async (
   );
   expect(unknownKey.status).toBe(200); // Elysia strips unknown fields rather than rejecting them
   expect(await unknownKey.json()).toEqual({});
-  const badThinking = await app.handle(
-    new Request("http://localhost/agents/reviewer", { method: "PUT", ...putBody({ thinking: "ultra" }) }),
+  // a lineup naming no engine is a semantic error, not a schema one
+  const ghost = await app.handle(
+    new Request("http://localhost/agents/reviewer", { method: "PUT", ...putBody({ runsOn: ["ghost"] }) }),
   );
-  expect(badThinking.status).toBe(422);
+  expect(ghost.status).toBe(400);
   const shortTimeout = await app.handle(
     new Request("http://localhost/agents/reviewer", { method: "PUT", ...putBody({ timeoutMs: 5 }) }),
   );
@@ -475,16 +476,16 @@ test("GET /workers lists runs without logs; PUT /agents/manager and /agents/work
       new Request(`http://localhost/agents/${role}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ provider: "zai", model: "glm-5.3", thinking: role === "worker" ? "low" : "high" }),
+        body: JSON.stringify({ context: role === "worker" ? "low" : "high", timeoutMs: 600_000 }),
       }),
     );
     expect(put.status).toBe(200);
-    expect(db.agentConfig(role)).toMatchObject({ provider: "zai", model: "glm-5.3" });
+    expect(db.agentConfig(role)).toMatchObject({ timeoutMs: 600_000 });
   }
   const got = await app.handle(new Request("http://localhost/agents"));
   expect(await got.json()).toMatchObject({
-    manager: { provider: "zai", thinking: "high" },
-    worker: { provider: "zai", thinking: "low" },
+    manager: { context: "high" },
+    worker: { context: "low" },
   });
 
   // empty PUT clears (full replace), same as loop roles
@@ -522,7 +523,7 @@ test("GET /activity lists in-flight and queued agent jobs (none when idle)", asy
   const app = createApp(db);
   const res = await app.handle(new Request("http://localhost/activity"));
   expect(res.status).toBe(200);
-  expect(await res.json()).toEqual({ sessions: [], queued: [], incidents: [], pools: [] });
+  expect(await res.json()).toEqual({ sessions: [], queued: [], incidents: [], engines: [] });
 });
 
 test("GET /health reports a boot stamp so clients can detect restarts", async () => {
@@ -705,208 +706,85 @@ test("POST /tasks/:id/resume: 202 with role+sessionId; 404/409s with exact error
   expect(db.resumeRequests()).toEqual([{ taskId: task.id, requestedAt: expect.any(Number) }]);
 });
 
-test("GET/PUT/DELETE /pools roundtrip; schema 422, semantic 400, missing 404", async () => {
+test("GET/PUT/DELETE /engines roundtrip; order; settings; schema 422, semantic 400, missing 404", async () => {
   const app = createApp(db);
-
-  // empty GET → { pools: [], settings: { maxWorkers: 12 } }
-  const empty = await app.handle(new Request("http://localhost/pools"));
-  expect(empty.status).toBe(200);
-  expect(await empty.json()).toEqual({ pools: [], settings: { maxWorkers: 12 } });
-
   const json = { headers: { "content-type": "application/json" } };
   const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
 
-  // PUT valid body → 200 + saved pool reflected in GET
-  const validPut = await app.handle(
-    new Request("http://localhost/pools/heavy", {
-      method: "PUT",
-      ...putBody({
-        name: "heavy pool",
-        enabled: true,
-        roles: ["builder"],
-        slots: [{ provider: "anthropic", model: "claude-3-5-sonnet", thinking: "high" }],
-      }),
-    }),
+  const empty = await app.handle(new Request("http://localhost/engines"));
+  expect(await empty.json()).toEqual({ engines: [], settings: { maxWorkers: 12, defaultEngine: null } });
+
+  const put = await app.handle(
+    new Request("http://localhost/engines/glm", { method: "PUT", ...putBody({ name: "GLM", harness: "pi", provider: "zai", model: "glm-5.3", thinking: "max", seats: 3 }) }),
   );
-  expect(validPut.status).toBe(200);
-  const saved = await validPut.json();
-  expect(saved).toMatchObject({
-    id: "heavy",
-    name: "heavy pool",
-    enabled: true,
-    roles: ["builder"],
-    slots: [{ provider: "anthropic", model: "claude-3-5-sonnet", thinking: "high" }],
-  });
-
-  const got = await app.handle(new Request("http://localhost/pools"));
-  expect(got.status).toBe(200);
-  expect(await got.json()).toEqual({ pools: [saved], settings: { maxWorkers: 12 } });
-
-  // Schema 422: roles: []
-  const emptyRoles = await app.handle(
-    new Request("http://localhost/pools/p1", {
-      method: "PUT",
-      ...putBody({ name: "p1", roles: [], slots: [{ model: "m" }] }),
-    }),
+  expect(put.status).toBe(200);
+  expect(await put.json()).toMatchObject({ id: "glm", seats: 3, enabled: true, flags: [] });
+  const claude = await app.handle(
+    new Request("http://localhost/engines/sonnet", { method: "PUT", ...putBody({ name: "Sonnet", harness: "claude", model: "sonnet" }) }),
   );
-  expect(emptyRoles.status).toBe(422);
+  expect(claude.status).toBe(200);
 
-  // Schema 422: 9 slots
-  const nineSlots = Array.from({ length: 9 }, (_, i) => ({ model: `m-${i}` }));
-  const tooManySlots = await app.handle(
-    new Request("http://localhost/pools/p1", {
-      method: "PUT",
-      ...putBody({ name: "p1", roles: ["builder"], slots: nineSlots }),
-    }),
+  // schema 422: unknown harness, seats out of range
+  for (const bad of [{ name: "x", harness: "codex" }, { name: "x", harness: "pi", seats: 0 }, { name: "x", harness: "pi", seats: 13 }]) {
+    const res = await app.handle(new Request("http://localhost/engines/x", { method: "PUT", ...putBody(bad) }));
+    expect(res.status).toBe(422);
+  }
+  // semantic 400: a claude engine with a provider is incoherent
+  const incoherent = await app.handle(
+    new Request("http://localhost/engines/x", { method: "PUT", ...putBody({ name: "x", harness: "claude", provider: "anthropic" }) }),
   );
-  expect(tooManySlots.status).toBe(422);
+  expect(incoherent.status).toBe(400);
 
-  // Schema 422: unknown role string
-  const badRole = await app.handle(
-    new Request("http://localhost/pools/p1", {
-      method: "PUT",
-      ...putBody({ name: "p1", roles: ["unknown-role"], slots: [{ model: "m" }] }),
-    }),
+  const order = await app.handle(new Request("http://localhost/engines/order", { method: "PUT", ...putBody({ ids: ["sonnet", "glm"] }) }));
+  expect(((await order.json()) as { engines: Array<{ id: string }> }).engines.map((e) => e.id)).toEqual(["sonnet", "glm"]);
+  const badOrder = await app.handle(new Request("http://localhost/engines/order", { method: "PUT", ...putBody({ ids: ["glm"] }) }));
+  expect(badOrder.status).toBe(400);
+
+  const settings = await app.handle(
+    new Request("http://localhost/engines/settings", { method: "PUT", ...putBody({ maxWorkers: 5, defaultEngine: "glm" }) }),
   );
-  expect(badRole.status).toBe(422);
+  expect(await settings.json()).toEqual({ maxWorkers: 5, defaultEngine: "glm" });
+  for (const bad of [{ maxWorkers: 0 }, { maxWorkers: 21 }]) {
+    const res = await app.handle(new Request("http://localhost/engines/settings", { method: "PUT", ...putBody(bad) }));
+    expect(res.status).toBe(422);
+  }
+  const fraction = await app.handle(new Request("http://localhost/engines/settings", { method: "PUT", ...putBody({ maxWorkers: 2.5 }) }));
+  expect(fraction.status).toBe(400);
+  const ghostDefault = await app.handle(new Request("http://localhost/engines/settings", { method: "PUT", ...putBody({ defaultEngine: "ghost" }) }));
+  expect(ghostDefault.status).toBe(400);
+  const clearDefault = await app.handle(new Request("http://localhost/engines/settings", { method: "PUT", ...putBody({ defaultEngine: null }) }));
+  expect(await clearDefault.json()).toEqual({ maxWorkers: 5, defaultEngine: null });
 
-  // Schema 422: empty name
-  const emptyName = await app.handle(
-    new Request("http://localhost/pools/p1", {
-      method: "PUT",
-      ...putBody({ name: "", roles: ["builder"], slots: [{ model: "m" }] }),
-    }),
-  );
-  expect(emptyName.status).toBe(422);
-
-  // Semantic 400 { code: "invalid" }: PUT making a 13th enabled slot
-  // Current enabled slots: 1 (from heavy). Set up 8 slots on pool 1, then attempt 5 slots on pool 2:
-  const eightSlots = Array.from({ length: 8 }, (_, i) => ({ model: `m-${i}` }));
-  const put8 = await app.handle(
-    new Request("http://localhost/pools/p1", {
-      method: "PUT",
-      ...putBody({ name: "p1", enabled: true, roles: ["builder"], slots: eightSlots }),
-    }),
-  );
-  expect(put8.status).toBe(200);
-
-  const fiveSlots = Array.from({ length: 5 }, (_, i) => ({ model: `m2-${i}` }));
-  const putOver12 = await app.handle(
-    new Request("http://localhost/pools/p2", {
-      method: "PUT",
-      ...putBody({ name: "p2", enabled: true, roles: ["reviewer"], slots: fiveSlots }),
-    }),
-  );
-  expect(putOver12.status).toBe(400);
-  expect(await putOver12.json()).toMatchObject({ code: "invalid" });
-
-  // DELETE → 200 and gone from GET
-  const del = await app.handle(new Request("http://localhost/pools/heavy", { method: "DELETE" }));
-  expect(del.status).toBe(200);
+  const del = await app.handle(new Request("http://localhost/engines/sonnet", { method: "DELETE" }));
   expect(await del.json()).toEqual({ ok: true });
+  const missing = await app.handle(new Request("http://localhost/engines/sonnet", { method: "DELETE" }));
+  expect(missing.status).toBe(404);
 
-  const afterDel = await app.handle(new Request("http://localhost/pools"));
-  const afterDelList = ((await afterDel.json()) as { pools: Array<{ id: string }> }).pools;
-  expect(afterDelList.map((p) => p.id)).not.toContain("heavy");
-
-  // DELETE unknown id → 404 { code: "not-found" }
-  const delMissing = await app.handle(new Request("http://localhost/pools/non-existent", { method: "DELETE" }));
-  expect(delMissing.status).toBe(404);
-  expect(await delMissing.json()).toMatchObject({ code: "not-found" });
-
-  // PUT pool (3 slots) with maxWorkers: 2 → 200 with maxWorkers: 2 and persists in GET
-  const threeSlots = [{ model: "m-0" }, { model: "m-1" }, { model: "m-2" }];
-  const putCap = await app.handle(
-    new Request("http://localhost/pools/capped", {
-      method: "PUT",
-      ...putBody({ name: "capped", roles: ["builder"], slots: threeSlots, maxWorkers: 2 }),
-    }),
-  );
-  expect(putCap.status).toBe(200);
-  const savedCap = await putCap.json();
-  expect(savedCap).toMatchObject({ id: "capped", maxWorkers: 2 });
-
-  const gotCapped = await app.handle(new Request("http://localhost/pools"));
-  const cappedInGet = ((await gotCapped.json()) as { pools: Array<{ id: string; maxWorkers?: number }> }).pools.find(
-    (p) => p.id === "capped",
-  );
-  expect(cappedInGet?.maxWorkers).toBe(2);
-
-  // maxWorkers: 4 (3 slots) → 400 { code: "invalid" }
-  const putCapTooHigh = await app.handle(
-    new Request("http://localhost/pools/capped", {
-      method: "PUT",
-      ...putBody({ name: "capped", roles: ["builder"], slots: threeSlots, maxWorkers: 4 }),
-    }),
-  );
-  expect(putCapTooHigh.status).toBe(400);
-  expect(await putCapTooHigh.json()).toMatchObject({ code: "invalid" });
-
-  // maxWorkers: 0 → 422
-  const putCapZero = await app.handle(
-    new Request("http://localhost/pools/capped", {
-      method: "PUT",
-      ...putBody({ name: "capped", roles: ["builder"], slots: threeSlots, maxWorkers: 0 }),
-    }),
-  );
-  expect(putCapZero.status).toBe(422);
+  const models = await app.handle(new Request("http://localhost/claude-models"));
+  expect(((await models.json()) as { models: Array<{ id: string }> }).models.map((m) => m.id)).toEqual(["sonnet", "opus", "haiku"]);
 });
 
-test("PUT /pools/settings round-trips; GET /pools carries settings", async () => {
+test("GET /explain/:actor walks the lineup: env pin → project → actor → default", async () => {
   const app = createApp(db);
-  const json = { headers: { "content-type": "application/json" } };
-  const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
+  db.setEngine("glm", { name: "GLM", harness: "pi", provider: "zai", model: "glm-5.3", thinking: "max" });
+  db.setEngine("sonnet", { name: "Sonnet", harness: "claude", model: "sonnet" });
+  const get = async (url: string) => (await app.handle(new Request(url))).json() as Promise<{ source: string; next: { id: string } | null; text: string }>;
 
-  const put5 = await app.handle(
-    new Request("http://localhost/pools/settings", {
-      method: "PUT",
-      ...putBody({ maxWorkers: 5 }),
-    }),
-  );
-  expect(put5.status).toBe(200);
-  expect(await put5.json()).toEqual({ maxWorkers: 5 });
-
-  const got = await app.handle(new Request("http://localhost/pools"));
-  expect(got.status).toBe(200);
-  expect(((await got.json()) as any).settings).toEqual({ maxWorkers: 5 });
-
-  const put0 = await app.handle(
-    new Request("http://localhost/pools/settings", {
-      method: "PUT",
-      ...putBody({ maxWorkers: 0 }),
-    }),
-  );
-  expect(put0.status).toBe(422);
-
-  const put21 = await app.handle(
-    new Request("http://localhost/pools/settings", {
-      method: "PUT",
-      ...putBody({ maxWorkers: 21 }),
-    }),
-  );
-  expect(put21.status).toBe(422);
-
-  const putFraction = await app.handle(
-    new Request("http://localhost/pools/settings", {
-      method: "PUT",
-      ...putBody({ maxWorkers: 2.5 }),
-    }),
-  );
-  expect(putFraction.status).toBe(400);
-  expect(await putFraction.json()).toMatchObject({ code: "invalid" });
+  expect(await get("http://localhost/explain/builder")).toMatchObject({ source: "default", next: { id: "default" } });
+  db.setAgentConfig("builder", { runsOn: ["glm", "sonnet"] });
+  const actor = await get("http://localhost/explain/builder");
+  expect(actor).toMatchObject({ source: "actor", next: { id: "glm" } });
+  expect(actor.text).toContain("next spawn → GLM");
+  db.setProjectAgentConfig("jlox", "builder", { runsOn: ["sonnet"] });
+  expect(await get("http://localhost/explain/builder?project=jlox")).toMatchObject({ source: "project", next: { id: "sonnet" } });
+  expect(await get("http://localhost/explain/builder?project=kanban")).toMatchObject({ source: "actor" });
 });
 
-test("/activity carries the resolved model per session", async () => {
+test("/activity carries the engine and resolved model per session", async () => {
   const app = createApp(db);
-  db.setPool("heavy", {
-    name: "heavy pool",
-    enabled: true,
-    roles: ["reviewer"],
-    slots: [
-      { provider: "anthropic", model: "claude-3-5-sonnet" },
-      { provider: "openai", model: "gpt-4o" },
-    ],
-  });
+  db.setEngine("sonnet", { name: "sonnet engine", harness: "pi", provider: "anthropic", model: "claude-3-5-sonnet" });
+  db.setEngine("gpt", { name: "gpt engine", harness: "pi", provider: "openai", model: "gpt-4o" });
+  db.setAgentConfig("reviewer", { runsOn: ["sonnet", "gpt"] });
 
   const card1 = db.createTask({ title: "card 1", lane: "review" });
   db.createComment(card1.id, { author: "pi-builder", kind: "handoff", body: "done" });
@@ -929,21 +807,11 @@ test("/activity carries the resolved model per session", async () => {
 
   const res = await app.handle(new Request("http://localhost/activity"));
   expect(res.status).toBe(200);
-  const data = (await res.json()) as { sessions: Array<{ taskId: string; model?: string; modelLabel?: string; pool?: string }> };
+  const data = (await res.json()) as { sessions: Array<{ taskId: string; model?: string; modelLabel?: string; engine?: string }> };
   expect(data.sessions.length).toBe(2);
-
-  const models = data.sessions.map((s) => s.model);
-  expect(models).toContain("claude-3-5-sonnet");
-  expect(models).toContain("gpt-4o");
-
-  const labels = data.sessions.map((s) => s.modelLabel);
-  expect(labels).toContain("anthropic · claude-3-5-sonnet · max");
-  expect(labels).toContain("openai · gpt-4o · max");
-
-  for (const s of data.sessions) {
-    expect(s.pool).toBe("heavy pool");
-    expect(s.modelLabel).toContain("· max");
-  }
+  // one seat each: the second review falls back to the lineup's second engine
+  expect(data.sessions.map((s) => s.engine).sort()).toEqual(["gpt engine", "sonnet engine"]);
+  expect(data.sessions.map((s) => s.modelLabel).sort()).toEqual(["anthropic · claude-3-5-sonnet · max", "openai · gpt-4o · max"]);
 
   handle.stop();
   for (const f of finishes) f();
@@ -1601,9 +1469,9 @@ test("GET /projects/:name/agents lists overrides sorted by actor", async () => {
     triggers: [{ kind: "on-enter" }],
   });
   for (const [actor, body] of [
-    ["reviewer", { model: "r" }],
-    ["builder", { model: "b" }],
-    ["designer", { model: "d" }],
+    ["reviewer", { context: "r" }],
+    ["builder", { context: "b" }],
+    ["designer", { context: "d" }],
   ] as const) {
     const put = await app.handle(new Request(`http://localhost/projects/list-proj/agents/${actor}`, { method: "PUT", ...putBody(body) }));
     expect(put.status).toBe(200);
@@ -1614,9 +1482,9 @@ test("GET /projects/:name/agents lists overrides sorted by actor", async () => {
   expect(got.status).toBe(200);
   expect(await got.json()).toEqual({
     agents: [
-      { actor: "builder", config: { model: "b" } },
-      { actor: "designer", config: { model: "d" } },
-      { actor: "reviewer", config: { model: "r" } },
+      { actor: "builder", config: { context: "b" } },
+      { actor: "designer", config: { context: "d" } },
+      { actor: "reviewer", config: { context: "r" } },
     ],
   });
 
@@ -1630,9 +1498,9 @@ test("GET /projects/:name/agents lists overrides sorted by actor", async () => {
   const stale = await app.handle(new Request("http://localhost/projects/list-proj/agents"));
   expect(await stale.json()).toEqual({
     agents: [
-      { actor: "builder", config: { model: "b" } },
-      { actor: "designer", config: { model: "d" } },
-      { actor: "reviewer", config: { model: "r" } },
+      { actor: "builder", config: { context: "b" } },
+      { actor: "designer", config: { context: "d" } },
+      { actor: "reviewer", config: { context: "r" } },
     ],
   });
 
@@ -1648,10 +1516,10 @@ test("PUT /projects/:name/agents/:actor stores the present-key config", async ()
   const url = "http://localhost/projects/ov-proj/agents/reviewer";
 
   const put = await app.handle(
-    new Request(url, { method: "PUT", ...putBody({ model: "m", thinking: "high", skills: ["~/.pi/agent/skills/rust"] }) }),
+    new Request(url, { method: "PUT", ...putBody({ context: "m", tools: "high", skills: ["~/.pi/agent/skills/rust"] }) }),
   );
   expect(put.status).toBe(200);
-  expect(await put.json()).toEqual({ agent: { model: "m", thinking: "high", skills: ["~/.pi/agent/skills/rust"] } });
+  expect(await put.json()).toEqual({ agent: { context: "m", tools: "high", skills: ["~/.pi/agent/skills/rust"] } });
 
   // an explicitly empty skills array is stored as present (present-key rule)
   const emptySkills = await app.handle(new Request(url, { method: "PUT", ...putBody({ skills: [] }) }));
@@ -1671,9 +1539,9 @@ test("PUT /projects/:name/agents/:actor stores the present-key config", async ()
     actors: [{ id: "designer", author: "pi-designer", instructions: "Design {id}" }],
     triggers: [{ kind: "on-enter" }],
   });
-  const designer = await app.handle(new Request("http://localhost/projects/ov-proj/agents/designer", { method: "PUT", ...putBody({ model: "design-v1" }) }));
+  const designer = await app.handle(new Request("http://localhost/projects/ov-proj/agents/designer", { method: "PUT", ...putBody({ context: "design-v1" }) }));
   expect(designer.status).toBe(200);
-  expect(await designer.json()).toEqual({ agent: { model: "design-v1" } });
+  expect(await designer.json()).toEqual({ agent: { context: "design-v1" } });
 
   // the override's upsert registers the project tag with v1 defaults
   const projects = (await (await app.handle(new Request("http://localhost/projects"))).json()) as {
@@ -1701,7 +1569,7 @@ test("PUT /projects/:name/agents/:actor validates actor, params and body", async
   expect(longName.status).toBe(422);
 
   // body validation matches PUT /agents/:role verbatim
-  const badThinking = await app.handle(new Request("http://localhost/projects/val-proj/agents/reviewer", { method: "PUT", ...putBody({ thinking: "ultra" }) }));
+  const badThinking = await app.handle(new Request("http://localhost/projects/val-proj/agents/reviewer", { method: "PUT", ...putBody({ timeoutMs: 5 }) }));
   expect(badThinking.status).toBe(422);
   const shortTimeout = await app.handle(new Request("http://localhost/projects/val-proj/agents/reviewer", { method: "PUT", ...putBody({ timeoutMs: 5 }) }));
   expect(shortTimeout.status).toBe(422);
@@ -1717,7 +1585,7 @@ test("DELETE /projects/:name/agents/:actor clears, repeats and never registers",
   const json = { headers: { "content-type": "application/json" } };
   const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
 
-  const put = await app.handle(new Request("http://localhost/projects/del-proj/agents/reviewer", { method: "PUT", ...putBody({ model: "m" }) }));
+  const put = await app.handle(new Request("http://localhost/projects/del-proj/agents/reviewer", { method: "PUT", ...putBody({ context: "m" }) }));
   expect(put.status).toBe(200);
   const del = await app.handle(new Request("http://localhost/projects/del-proj/agents/reviewer", { method: "DELETE" }));
   expect(del.status).toBe(200);

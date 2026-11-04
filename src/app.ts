@@ -2,7 +2,9 @@ import * as path from "node:path";
 import { homedir } from "node:os";
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneContext, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type WorkerPool, type ProjectRoute } from "./db";import { parseGhRef, refreshGhUrl } from "./gh";
+import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneContext, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type Engine, type ProjectRoute } from "./db";
+import { CLAUDE_MODELS, type ClaudeModel } from "./claude";
+import { explain, formatExplanation, type Explanation } from "./engines";import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listChatModels, listPiModels } from "./models";
@@ -40,20 +42,7 @@ const LaneContextBody = t.Object({
       deathHint: t.Optional(t.String()),
       config: t.Optional(
         t.Object({
-          provider: t.Optional(t.String()),
-          model: t.Optional(t.String()),
-          thinking: t.Optional(
-            t.Union([
-              t.Literal(""),
-              t.Literal("off"),
-              t.Literal("minimal"),
-              t.Literal("low"),
-              t.Literal("medium"),
-              t.Literal("high"),
-              t.Literal("xhigh"),
-              t.Literal("max"),
-            ]),
-          ),
+          runsOn: t.Optional(t.Array(t.String({ minLength: 1 }))),
           skills: t.Optional(t.Array(t.String({ minLength: 1 }))),
           context: t.Optional(t.String()),
           tools: t.Optional(t.String()),
@@ -117,20 +106,7 @@ const LaneContextBody = t.Object({
 
 /** Body shared verbatim by PUT /agents/:role and PUT /projects/:name/agents/:actor. */
 const AgentConfigBody = t.Object({
-  provider: t.Optional(t.String()),
-  model: t.Optional(t.String()),
-  thinking: t.Optional(
-    t.Union([
-      t.Literal(""),
-      t.Literal("off"),
-      t.Literal("minimal"),
-      t.Literal("low"),
-      t.Literal("medium"),
-      t.Literal("high"),
-      t.Literal("xhigh"),
-      t.Literal("max"),
-    ]),
-  ),
+  runsOn: t.Optional(t.Array(t.String({ minLength: 1 }))),
   skills: t.Optional(t.Array(t.String({ minLength: 1 }))),
   context: t.Optional(t.String()),
   tools: t.Optional(t.String()),
@@ -1126,30 +1102,45 @@ export const createApp = (
         body: AgentConfigBody,
       },
     )
-    .get("/pools", (): { pools: WorkerPool[]; settings: { maxWorkers: number } } => ({
-      pools: db.pools(),
-      settings: { maxWorkers: db.maxWorkers() },
+    .get("/claude-models", (): { models: ClaudeModel[] } => ({ models: CLAUDE_MODELS }))
+    .get("/engines", (): { engines: Engine[]; settings: { maxWorkers: number; defaultEngine: string | null } } => ({
+      engines: db.engines(),
+      settings: { maxWorkers: db.maxWorkers(), defaultEngine: db.defaultEngineId() },
     }))
     .put(
-      "/pools/settings",
-      ({ body, status }): { maxWorkers: number } | unknown => {
+      "/engines/settings",
+      ({ body, status }): { maxWorkers: number; defaultEngine: string | null } | unknown => {
         try {
-          return status(200, { maxWorkers: db.setMaxWorkers(body.maxWorkers) });
+          if (body.maxWorkers !== undefined) db.setMaxWorkers(body.maxWorkers);
+          if (body.defaultEngine !== undefined) db.setDefaultEngine(body.defaultEngine);
+          return status(200, { maxWorkers: db.maxWorkers(), defaultEngine: db.defaultEngineId() });
         } catch (e) {
           return fail(e, status);
         }
       },
       {
         body: t.Object({
-          maxWorkers: t.Number({ minimum: 1, maximum: 20 }),
+          maxWorkers: t.Optional(t.Number({ minimum: 1, maximum: 20 })),
+          defaultEngine: t.Optional(t.Union([t.String({ minLength: 1 }), t.Null()])),
         }),
       },
     )
     .put(
-      "/pools/:id",
-      ({ params, body, status }): WorkerPool | unknown => {
+      "/engines/order",
+      ({ body, status }): { engines: Engine[] } | unknown => {
         try {
-          return status(200, db.setPool(params.id, body));
+          return status(200, { engines: db.reorderEngines(body.ids) });
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      { body: t.Object({ ids: t.Array(t.String()) }) },
+    )
+    .put(
+      "/engines/:id",
+      ({ params, body, status }): Engine | unknown => {
+        try {
+          return status(200, db.setEngine(params.id, body));
         } catch (e) {
           return fail(e, status);
         }
@@ -1158,26 +1149,54 @@ export const createApp = (
         params: t.Object({ id: t.String() }),
         body: t.Object({
           name: t.String({ minLength: 1, maxLength: 60 }),
+          harness: t.Union([t.Literal("pi"), t.Literal("claude")]),
+          provider: t.Optional(t.String()),
+          model: t.Optional(t.String()),
+          thinking: t.Optional(
+            t.Union([
+              t.Literal(""),
+              t.Literal("off"),
+              t.Literal("minimal"),
+              t.Literal("low"),
+              t.Literal("medium"),
+              t.Literal("high"),
+              t.Literal("xhigh"),
+              t.Literal("max"),
+            ]),
+          ),
+          flags: t.Optional(t.Array(t.String({ minLength: 1 }))),
+          seats: t.Optional(t.Number({ minimum: 1, maximum: 12 })),
           enabled: t.Optional(t.Boolean()),
-          roles: t.Array(t.Union([t.Literal("planner"), t.Literal("reviewer"), t.Literal("builder"), t.Literal("plan-reviewer"), t.Literal("elaborator")]), { minItems: 1 }),
-          slots: t.Array(t.Object({ provider: t.Optional(t.String()), model: t.Optional(t.String()), thinking: t.Optional(t.Union([t.Literal(""), t.Literal("off"), t.Literal("minimal"), t.Literal("low"), t.Literal("medium"), t.Literal("high"), t.Literal("xhigh"), t.Literal("max")])) }), { minItems: 1, maxItems: 8 }),
-          maxWorkers: t.Optional(t.Number({ minimum: 1 })),
         }),
       },
     )
     .delete(
-      "/pools/:id",
+      "/engines/:id",
       ({ params, status }): { ok: true } | unknown => {
         try {
-          db.deletePool(params.id);
+          db.deleteEngine(params.id);
           return { ok: true as const };
         } catch (e) {
           return fail(e, status);
         }
       },
-      {
-        params: t.Object({ id: t.String() }),
+      { params: t.Object({ id: t.String() }) },
+    )
+    // the "why does this actor run on that engine" chain — the web Next spawn line and `kanban explain`
+    .get(
+      "/explain/:actor",
+      ({ params, query }): Explanation & { text: string } => {
+        const act = activitySnapshot();
+        const busy = new Map<string, number>();
+        for (const s of act.sessions) if (s.engine) busy.set(s.engine, (busy.get(s.engine) ?? 0) + 1);
+        const cooling = new Map(act.engines.filter((e) => e.coolingUntil).map((e) => [e.engineId, e.coolingUntil!]));
+        const x = explain(db, params.actor, query.project || undefined, {
+          busy: (e) => busy.get(e.name) ?? 0,
+          coolingUntil: (e) => cooling.get(e.id) ?? null,
+        });
+        return { ...x, text: formatExplanation(x) };
       },
+      { params: t.Object({ actor: t.String() }), query: t.Object({ project: t.Optional(t.String()) }) },
     )
     .get("/projects", (): { projects: ProjectRoute[] } => ({ projects: db.listProjects() }))
     .put(

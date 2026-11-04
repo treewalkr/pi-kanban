@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultLaneContext, KanbanDb } from "../src/db";
+import { defaultLaneContext, KanbanDb, type Engine } from "../src/db";
+import { CLAUDE_BUILD_TOOLS, CLAUDE_READ_TOOLS, claudeFlags, isClaudeSessionId } from "../src/claude";
 import {
   BUILDER_AUTHOR,
   DEFAULT_GATE_TIMEOUT_MS,
@@ -28,7 +29,6 @@ import {
   formatPiEvent,
   killAgentSessions,
   MAX_SKILL_CHARS,
-  mergeSlotConfig,
   modelConfigLabel,
   plannerPrompt,
   planReviewerPrompt,
@@ -47,6 +47,30 @@ import {
 } from "../src/autoreview";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Pre-engines pool shape → engines + lineups, for the dispatch tests: each
+ * slot below maxWorkers becomes a one-seat engine (disabled with the pool),
+ * and every covered role's lineup lists them in slot order.
+ */
+type ShimSlot = { provider?: string; model?: string; thinking?: "" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" };
+function poolShim(db: KanbanDb, id: string, pool: { name?: string; enabled?: boolean; roles: string[]; slots: ShimSlot[]; maxWorkers?: number }): void {
+  for (const e of db.engines()) if (e.id.startsWith(`${id}-`)) db.deleteEngine(e.id);
+  const ids = pool.slots.slice(0, pool.maxWorkers ?? pool.slots.length).map((slot, i) => {
+    const eid = `${id}-${i}`;
+    db.setEngine(eid, { name: `${pool.name ?? id} ${i}`, harness: "pi", ...slot, thinking: slot.thinking || undefined, enabled: pool.enabled !== false });
+    return eid;
+  });
+  for (const role of pool.roles) db.setAgentConfig(role, { ...(db.agentConfig(role) ?? {}), runsOn: ids });
+}
+/** A full Engine from a partial (unit tests of the flag builders). */
+function eng(e: Partial<Engine>): Engine {
+  return { id: "e", name: "E", harness: "pi", flags: [], seats: 1, enabled: true, updatedAt: 0, ...e };
+}
+function deletePoolShim(db: KanbanDb, id: string): void {
+  for (const e of db.engines()) if (e.id.startsWith(`${id}-`)) db.deleteEngine(e.id);
+}
+
 
 /** Run with the agent env vars cleared, then set from `env`, restoring after. */
 const AGENT_ENV_KEYS = ["KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING", "KANBAN_AUTOREVIEW_GATE"];
@@ -463,7 +487,7 @@ describe("auto-review", () => {
 
   test("global max workers caps total in-flight sessions below pool capacity", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("heavy", {
+    poolShim(w, "heavy", {
       name: "heavy",
       enabled: true,
       roles: ["reviewer"],
@@ -489,7 +513,7 @@ describe("auto-review", () => {
 
   test("a free default slot stays waiting when the global cap is full", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("heavy", {
+    poolShim(w, "heavy", {
       name: "heavy",
       enabled: true,
       roles: ["reviewer"],
@@ -516,7 +540,7 @@ describe("auto-review", () => {
 
   test("pool maxWorkers throttles a pool below its slot count", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("heavy", {
+    poolShim(w, "heavy", {
       name: "heavy",
       enabled: true,
       roles: ["reviewer"],
@@ -542,7 +566,7 @@ describe("auto-review", () => {
 
   test("absent pool maxWorkers behaves as slots.length", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("heavy", {
+    poolShim(w, "heavy", {
       name: "heavy",
       enabled: true,
       roles: ["reviewer"],
@@ -746,14 +770,14 @@ describe("auto-review", () => {
 
   test("agentFlags: reviewer defaults to thinking max, builder to nothing", () => {
     withAgentEnv({}, () => {
-      expect(agentFlags("reviewer", null)).toEqual(["--thinking", "max"]);
-      expect(agentFlags("builder", null)).toEqual([]);
+      expect(agentFlags("reviewer", eng({}), null)).toEqual(["--thinking", "max"]);
+      expect(agentFlags("builder", eng({}), null)).toEqual([]);
     });
   });
 
   test("two reviewer cards spawn concurrently under a 2-slot pool; a third waits", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("rev-pool", {
+    poolShim(w, "rev-pool", {
       name: "reviewer pool",
       enabled: true,
       roles: ["reviewer"],
@@ -780,7 +804,7 @@ describe("auto-review", () => {
 
   test("builder-only pool never takes reviewer jobs; uncovered roles share the default slot", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("b-pool", {
+    poolShim(w, "b-pool", {
       name: "builder pool",
       enabled: true,
       roles: ["builder"],
@@ -806,65 +830,40 @@ describe("auto-review", () => {
     expect(calls[1].job.task.id).not.toBe(firstId);
   });
 
-  test("mergeSlotConfig: set fields override, unset inherit, null role config works", () => {
-    expect(mergeSlotConfig({ model: "a", thinking: "high" }, { model: "b" })).toEqual({
-      model: "b",
-      thinking: "high",
-    });
-    expect(mergeSlotConfig(null, { model: "b" })).toEqual({ model: "b" });
-    expect(mergeSlotConfig({ model: "a" }, {})).toEqual({ model: "a" });
-    expect(mergeSlotConfig(null, {})).toBeNull();
-    // skills/context/timeout fields pass through untouched
-    expect(
-      mergeSlotConfig(
-        { model: "a", skills: ["s1"], context: "ctx", tools: "bash", extraArgs: ["--x"], timeoutMs: 120_000 },
-        { model: "b", provider: "anthropic" },
-      ),
-    ).toEqual({
-      model: "b",
-      provider: "anthropic",
-      skills: ["s1"],
-      context: "ctx",
-      tools: "bash",
-      extraArgs: ["--x"],
-      timeoutMs: 120_000,
-    });
-  });
-
-  test("slot flags override the role config end to end", async () => {
+  test("the engine supplies the model; the actor config supplies behavior", async () => {
     const { dbFile, writer: w } = setup();
-    w.setAgentConfig("reviewer", { model: "a" });
-    w.setPool("rev-pool", {
+    w.setAgentConfig("reviewer", { context: "a" });
+    poolShim(w, "rev-pool", {
       name: "rev",
       enabled: true,
       roles: ["reviewer"],
       slots: [{ model: "b" }],
     });
     cardInReview(w);
-    let capturedConfig: any = null;
+    let captured: Parameters<SpawnFn>[1] | null = null;
     const spawnFn: SpawnFn = (job, ctx) => {
-      capturedConfig = ctx.config;
+      captured = ctx;
       return Promise.resolve({ code: 0 });
     };
     start(spawnFn, dbFile);
     await sleep(50);
 
-    expect(capturedConfig).not.toBeNull();
-    expect(capturedConfig.model).toBe("b");
+    expect(captured!.engine.model).toBe("b");
+    expect(captured!.config).toMatchObject({ context: "a", runsOn: ["rev-pool-0"] });
   });
 
   test("a provider-quota death cools the slot and the next spawn fails over to the healthy slot", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("rev-pool", {
+    poolShim(w, "rev-pool", {
       name: "Reviewers",
       enabled: true,
       roles: ["reviewer"],
-      slots: [{ model: "zcode" }, { model: "okay" }],
+      slots: [{ provider: "zcode", model: "zcode" }, { provider: "okay", model: "okay" }],
     });
     const card1 = cardInReview(w, "card 1");
     const spawnedModels: string[] = [];
     const spawnFn: SpawnFn = async (job, ctx) => {
-      const model = ctx.config?.model ?? "";
+      const model = ctx.engine.model ?? "";
       spawnedModels.push(model);
       if (model === "zcode") {
         return {
@@ -896,16 +895,12 @@ describe("auto-review", () => {
 
   test("a cooling slot requalifies after cooldown expiry; re-saving a pool resets cooldowns instantly", async () => {
     const { dbFile, writer: w } = setup();
-    const pool = w.setPool("rev-pool", {
-      name: "Reviewers",
-      enabled: true,
-      roles: ["reviewer"],
-      slots: [{ model: "s0" }, { model: "s1" }],
-    });
+    const pool = { name: "Reviewers", enabled: true, roles: ["reviewer"], slots: [{ provider: "p0", model: "s0" }, { provider: "p1", model: "s1" }] };
+    poolShim(w, "rev-pool", pool);
     const spawnedModels: string[] = [];
     let s0ShouldFail = true;
     const spawnFn: SpawnFn = async (job, ctx) => {
-      const model = ctx.config?.model ?? "";
+      const model = ctx.engine.model ?? "";
       spawnedModels.push(model);
       if (model === "s0" && s0ShouldFail) {
         return {
@@ -944,7 +939,7 @@ describe("auto-review", () => {
     expect(spawnedModels).toEqual(["s0", "s1", "s0", "s0"]);
 
     // Slot 0 is cooling. Re-saving the pool bumps updatedAt and resets cooldowns instantly!
-    w.setPool("rev-pool", {
+    poolShim(w, "rev-pool", {
       name: pool.name,
       enabled: pool.enabled,
       roles: pool.roles,
@@ -960,7 +955,7 @@ describe("auto-review", () => {
 
   test("a quota-reached-with-wait-hint death applies the capped cooldown to the slot", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("p1", {
+    poolShim(w, "p1", {
       name: "Reviewers",
       enabled: true,
       roles: ["reviewer"],
@@ -984,13 +979,13 @@ describe("auto-review", () => {
     expect(inc.cooldownUntil - inc.lastSeenAt).toBe(60 * 60_000);
   });
 
-  test("activitySnapshot exposes incidents and pool summaries after a provider-quota death", async () => {
+  test("activitySnapshot exposes incidents and engine summaries after a provider-quota death", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("rev-pool", {
+    poolShim(w, "rev-pool", {
       name: "Reviewers",
       enabled: true,
       roles: ["reviewer"],
-      slots: [{ model: "zcode" }, { model: "okay" }],
+      slots: [{ provider: "zcode", model: "zcode" }, { provider: "okay", model: "okay" }],
     });
     cardInReview(w, "card 1");
     const spawnFn: SpawnFn = async () => ({
@@ -1003,28 +998,47 @@ describe("auto-review", () => {
     await sleep(60);
 
     const snapshot = activitySnapshot();
-    expect(snapshot.incidents).toHaveLength(1);
     expect(snapshot.incidents[0]).toEqual({
-      poolId: "rev-pool",
-      poolName: "Reviewers",
-      slotIndex: 0,
+      account: "pi:zcode",
+      engineId: "rev-pool-0",
+      engineName: "Reviewers 0",
       cause: "provider-quota",
-      count: 1,
+      count: expect.any(Number),
       firstSeenAt: expect.any(Number),
       lastSeenAt: expect.any(Number),
       cooldownUntil: expect.any(Number),
     });
     expect(snapshot.incidents[0].cooldownUntil).toBeGreaterThan(now);
+    const zcode = snapshot.engines.find((e) => e.engineId === "rev-pool-0")!;
+    expect(zcode).toMatchObject({ account: "pi:zcode", seats: 1, lastCause: "provider-quota" });
+    expect(zcode.coolingUntil).toBeGreaterThan(now);
+    expect(snapshot.engines.find((e) => e.engineId === "rev-pool-1")?.coolingUntil).toBeUndefined();
+  });
 
-    expect(snapshot.pools).toEqual([
-      {
-        poolId: "rev-pool",
-        poolName: "Reviewers",
-        totalSlots: 2,
-        coolingSlots: 1,
-        lastCause: "provider-quota",
-      },
-    ]);
+  test("a quota death cools every engine on the same account, not just the one that hit it", async () => {
+    const { dbFile, writer: w } = setup();
+    // two engines on one zcode account, then a different account as the last fallback
+    poolShim(w, "rev-pool", {
+      name: "Reviewers",
+      roles: ["reviewer"],
+      slots: [
+        { provider: "zcode", model: "flash" },
+        { provider: "zcode", model: "turbo" },
+        { provider: "zai", model: "glm" },
+      ],
+    });
+    cardInReview(w, "card 1");
+    const spawned: string[] = [];
+    const spawnFn: SpawnFn = async (job, ctx) => {
+      spawned.push(ctx.engine.model ?? "");
+      if (ctx.engine.provider === "zcode") return { code: 1, stderrTail: "Start Plan has no active model quota" };
+      ctx.emit("text: working");
+      return { code: 0 };
+    };
+    start(spawnFn, dbFile, { retryDelayMs: 5 });
+    await sleep(120);
+    // the old per-slot health would have burned the retry on "turbo" (same exhausted account)
+    expect(spawned).toEqual(["flash", "glm"]);
   });
 
   test("a rate-limit death auto-retries via the resume queue, bounded at two, then parks as today", async () => {
@@ -1085,7 +1099,7 @@ describe("auto-review", () => {
 
   test("all slots cooling parks the card with one consolidated incident comment", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("p1", {
+    poolShim(w, "p1", {
       name: "Reviewers",
       enabled: true,
       roles: ["reviewer"],
@@ -1108,15 +1122,15 @@ describe("auto-review", () => {
     expect(spawns).toBe(1);
     const last = db!.comments(card.id).at(-1)!;
     expect(last.body).toStartWith(KanbanDb.SESSION_DIED_PREFIX);
-    expect(last.body).toContain("'Reviewers': slot 0 provider-quota ×1");
-    expect(last.body).toContain("— every slot is cooling down:");
+    expect(last.body).toContain("'Reviewers 0' provider-quota ×1");
+    expect(last.body).toContain("— every engine in the lineup is cooling down:");
     expect(last.body).toEndWith("; comment on this card to re-trigger.");
     expect(db!.resumeRequests()).toHaveLength(0);
   });
 
   test("pool edits apply to the next spawn", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("p-edit", {
+    poolShim(w, "p-edit", {
       name: "edit pool",
       enabled: true,
       roles: ["reviewer"],
@@ -1129,7 +1143,7 @@ describe("auto-review", () => {
     const configs: any[] = [];
     const calls: Array<{ finish: (res: SpawnResult) => void }> = [];
     const spawnFn: SpawnFn = (job, ctx) => {
-      configs.push(ctx.config);
+      configs.push(ctx.engine);
       return new Promise<SpawnResult>((resolve) => calls.push({ finish: resolve }));
     };
     start(spawnFn, dbFile);
@@ -1139,7 +1153,7 @@ describe("auto-review", () => {
     expect(configs[0].model).toBe("m-a");
 
     // while spawn 1 is in flight, edit pool
-    w.setPool("p-edit", {
+    poolShim(w, "p-edit", {
       name: "edit pool",
       enabled: true,
       roles: ["reviewer"],
@@ -1157,7 +1171,7 @@ describe("auto-review", () => {
     // 1. Delete mid-flight
     {
       const { dbFile, writer: w } = setup();
-      w.setPool("p-del", {
+      poolShim(w, "p-del", {
         name: "del pool",
         enabled: true,
         roles: ["reviewer"],
@@ -1169,7 +1183,7 @@ describe("auto-review", () => {
       await sleep(50);
 
       expect(calls.length).toBe(1);
-      w.deletePool("p-del");
+      deletePoolShim(w, "p-del");
 
       calls[0].finish({ code: 0 });
       await sleep(50);
@@ -1184,7 +1198,7 @@ describe("auto-review", () => {
     // 2. Set enabled: false mid-flight
     {
       const { dbFile, writer: w } = setup();
-      w.setPool("p-dis", {
+      poolShim(w, "p-dis", {
         name: "dis pool",
         enabled: true,
         roles: ["reviewer"],
@@ -1196,7 +1210,7 @@ describe("auto-review", () => {
       await sleep(50);
 
       expect(calls.length).toBe(1);
-      w.setPool("p-dis", {
+      poolShim(w, "p-dis", {
         name: "dis pool",
         enabled: false,
         roles: ["reviewer"],
@@ -1216,7 +1230,7 @@ describe("auto-review", () => {
 
   test("pause kill ends every in-flight session across slots", async () => {
     const { dbFile, writer: w } = setup();
-    w.setPool("p-pause", {
+    poolShim(w, "p-pause", {
       name: "pause pool",
       enabled: true,
       roles: ["reviewer"],
@@ -1248,109 +1262,104 @@ describe("auto-review", () => {
     expect(last2.body).toContain("exit 143");
   });
 
-  test("agentFlags: board config maps onto pi flags, skills activated into the system prompt", () => {
+  test("agentFlags: the engine maps onto pi flags, the actor's behavior follows, engine flags last", () => {
     const skillDir = makeSkill("demo", "# Rules\nBe terse.");
-    withAgentEnv({}, () => {
-      expect(
-        agentFlags("reviewer", {
-          provider: "anthropic",
-          model: "claude-opus-4-5",
-          thinking: "high",
-          skills: [skillDir],
-          context: "we value perf",
-          tools: "-edit",
-          extraArgs: ["--no-mcp"],
-        }),
-      ).toEqual([
-        "--provider",
-        "anthropic",
-        "--model",
-        "claude-opus-4-5",
-        "--thinking",
-        "high",
-        "--skill",
-        skillDir,
-        "--append-system-prompt",
-        `we value perf\n\n<skill name="demo" location="${join(skillDir, "SKILL.md")}">\nReferences are relative to ${skillDir}.\n\n# Rules\nBe terse.\n</skill>`,
-        "--tools",
-        "-edit",
-        "--no-mcp",
-      ]);
-    });
-  });
-
-  test("agentFlags: env beats config; empty thinking env disables it", () => {
-    withAgentEnv({ KANBAN_AUTOREVIEW_MODEL: "openai/o3", KANBAN_AUTOREVIEW_THINKING: "low" }, () => {
-      expect(agentFlags("reviewer", { model: "claude-x", thinking: "max" })).toEqual([
-        "--model",
-        "openai/o3",
-        "--thinking",
-        "low",
-      ]);
-    });
-    withAgentEnv({ KANBAN_AUTOREVIEW_MODEL: "openai/o3", KANBAN_AUTOREVIEW_THINKING: "" }, () => {
-      expect(agentFlags("reviewer", { thinking: "max" })).toEqual(["--model", "openai/o3"]);
-    });
-  });
-
-  test("resolvedModelConfig: env beats config beats role default; provider passes through; empty env thinking disables", () => {
-    withAgentEnv({}, () => {
-      expect(resolvedModelConfig("reviewer", null)).toEqual({ thinking: "max" });
-      expect(resolvedModelConfig("builder", null)).toEqual({});
-      expect(
-        resolvedModelConfig("reviewer", {
-          provider: "anthropic",
-          model: "claude-x",
-          thinking: "high",
-        }),
-      ).toEqual({
-        provider: "anthropic",
-        model: "claude-x",
-        thinking: "high",
-      });
-    });
-
-    withAgentEnv(
-      {
-        KANBAN_AUTOREVIEW_MODEL: "openai/o3",
-        KANBAN_AUTOREVIEW_THINKING: "low",
-      },
-      () => {
-        expect(
-          resolvedModelConfig("reviewer", {
-            provider: "anthropic",
-            model: "claude-x",
-            thinking: "high",
-          }),
-        ).toEqual({
-          provider: "anthropic",
-          model: "openai/o3",
-          thinking: "low",
-        });
-      },
-    );
-
-    withAgentEnv({ KANBAN_AUTOREVIEW_THINKING: "" }, () => {
-      const mc = resolvedModelConfig("reviewer", { thinking: "max" });
-      expect(mc.thinking).toBeUndefined();
-    });
-  });
-
-  test("modelConfigLabel: provider · model · thinking, default-model fallback, unset parts dropped", () => {
+    const engine = eng({ provider: "anthropic", model: "claude-opus-4-5", thinking: "high", flags: ["--offline"] });
     expect(
-      modelConfigLabel({
-        provider: "anthropic",
-        model: "claude-x",
-        thinking: "high",
+      agentFlags("reviewer", engine, {
+        skills: [skillDir],
+        context: "we value perf",
+        tools: "-edit",
+        extraArgs: ["--no-mcp"],
       }),
-    ).toBe("anthropic · claude-x · high");
-    expect(
-      modelConfigLabel({
-        model: "gemini-4-argon",
-        thinking: "high",
-      }),
-    ).toBe("gemini-4-argon · high");
+    ).toEqual([
+      "--provider",
+      "anthropic",
+      "--model",
+      "claude-opus-4-5",
+      "--thinking",
+      "high",
+      "--skill",
+      skillDir,
+      "--append-system-prompt",
+      `we value perf\n\n<skill name="demo" location="${join(skillDir, "SKILL.md")}">\nReferences are relative to ${skillDir}.\n\n# Rules\nBe terse.\n</skill>`,
+      "--tools",
+      "-edit",
+      "--no-mcp",
+      "--offline",
+    ]);
+  });
+
+  test("claudeFlags: model alias, /tmp writable, skills as prompt text, role allowlist, no pi-only fields", () => {
+    const skillDir = makeSkill("demo", "Be terse.");
+    const engine = eng({ harness: "claude", model: "opus", flags: ["--max-turns", "40"] });
+    const args = claudeFlags("planner", engine, { skills: [skillDir], context: "ctx", tools: "-edit", extraArgs: ["--no-mcp"] });
+    expect(args.slice(0, 5)).toEqual(["--output-format", "stream-json", "--verbose", "--model", "opus"]);
+    expect(args).toContain("--add-dir");
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain('<skill name="demo"');
+    expect(args[args.indexOf("--allowedTools") + 1]).toBe(CLAUDE_READ_TOOLS.join(","));
+    expect(args).not.toContain("--no-mcp"); // a pi flag never reaches claude
+    expect(args).not.toContain("-edit");
+    expect(args.slice(-2)).toEqual(["--max-turns", "40"]);
+    expect(claudeFlags("builder", eng({ harness: "claude" }), null)[4]).toBe("sonnet");
+    expect(claudeFlags("builder", eng({ harness: "claude" }), null)).toContain(CLAUDE_BUILD_TOOLS.join(","));
+  });
+
+  test("resolvedModelConfig: the engine's fields; thinking falls back to the role default on pi only", () => {
+    expect(resolvedModelConfig("reviewer", eng({}))).toEqual({ harness: "pi", thinking: "max" });
+    expect(resolvedModelConfig("builder", eng({}))).toEqual({ harness: "pi" });
+    expect(resolvedModelConfig("reviewer", eng({ provider: "anthropic", model: "claude-x", thinking: "high" }))).toEqual({
+      harness: "pi",
+      provider: "anthropic",
+      model: "claude-x",
+      thinking: "high",
+    });
+    expect(resolvedModelConfig("reviewer", eng({ harness: "claude", model: "sonnet" }))).toEqual({ harness: "claude", model: "sonnet" });
+  });
+
+  test("modelConfigLabel: provider · model · thinking, default-model fallback, claude labelled by harness", () => {
+    expect(modelConfigLabel({ provider: "anthropic", model: "claude-x", thinking: "high" })).toBe("anthropic · claude-x · high");
+    expect(modelConfigLabel({ model: "gemini-4-argon", thinking: "high" })).toBe("gemini-4-argon · high");
     expect(modelConfigLabel({})).toBe("default model");
+    expect(modelConfigLabel({ harness: "claude", model: "opus" })).toBe("claude · opus");
+  });
+
+  test("KANBAN_ENGINE pins every spawn to one engine, beating project and actor lineups", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setEngine("a", { name: "A", harness: "pi", model: "a" });
+    w.setEngine("b", { name: "B", harness: "pi", model: "b" });
+    w.setAgentConfig("reviewer", { runsOn: ["a"] });
+    cardInReview(w);
+    const models: string[] = [];
+    const spawnFn: SpawnFn = (_job, ctx) => {
+      models.push(ctx.engine.model ?? "");
+      return Promise.resolve({ code: 1 });
+    };
+    process.env.KANBAN_ENGINE = "B";
+    try {
+      start(spawnFn, dbFile);
+      await sleep(30);
+    } finally {
+      delete process.env.KANBAN_ENGINE;
+    }
+    expect(models).toEqual(["b"]);
+  });
+
+  test("a claude engine gets a UUID session id; a pi resume onto claude starts fresh", async () => {
+    const { dbFile, writer: w } = setup();
+    w.setEngine("sonnet", { name: "Sonnet", harness: "claude", model: "sonnet" });
+    w.setAgentConfig("reviewer", { runsOn: ["sonnet"] });
+    cardInReview(w);
+    const seen: Array<{ engine: string; sessionId?: string }> = [];
+    const spawnFn: SpawnFn = (job, ctx) => {
+      seen.push({ engine: ctx.engine.harness, sessionId: job.sessionId });
+      return Promise.resolve({ code: 1 });
+    };
+    start(spawnFn, dbFile);
+    await sleep(30);
+    expect(seen[0]!.engine).toBe("claude");
+    expect(isClaudeSessionId(seen[0]!.sessionId)).toBe(true);
+    expect(isClaudeSessionId("kanban-abc-reviewer-xyz")).toBe(false);
   });
 
   test("defaults: 2h total cap, 10 min stall window", () => {
@@ -1361,15 +1370,16 @@ describe("auto-review", () => {
   test("spawn carries the board config: context, skills and timeout reach the session", async () => {
     const { dbFile, writer: w } = setup();
     cardInReview(w);
+    w.setEngine("opus", { name: "Opus", harness: "pi", model: "claude-opus-4-5" });
     w.setAgentConfig("reviewer", {
-      model: "claude-opus-4-5",
+      runsOn: ["opus"],
       skills: [makeSkill("lens", "review with perf in mind")],
       context: "we value perf over features",
       timeoutMs: 300_000,
     });
     const seen: Array<{ flags: string[]; timeoutMs: number }> = [];
     const spawnFn: SpawnFn = (job, ctx) => {
-      seen.push({ flags: agentFlags(job.role, ctx.config), timeoutMs: ctx.timeoutMs });
+      seen.push({ flags: agentFlags(job.role, ctx.engine, ctx.config), timeoutMs: ctx.timeoutMs });
       return Promise.resolve({ code: 1 }); // session "fails": no verdict, so the loop stops here
     };
     start(spawnFn, dbFile);
@@ -1419,7 +1429,7 @@ describe("auto-review", () => {
     w.setAgentConfig("reviewer", { skills: [skillDir] });
     const seen: string[][] = [];
     const spawnFn: SpawnFn = (job, ctx) => {
-      seen.push(agentFlags(job.role, ctx.config));
+      seen.push(agentFlags(job.role, ctx.engine, ctx.config));
       return Promise.resolve({ code: 1 });
     };
     start(spawnFn, dbFile);
@@ -1593,6 +1603,7 @@ describe("auto-review", () => {
           timeoutMs: 30_000,
           stallMs: 500,
           config: null,
+          engine: eng({}),
           log: (msg) => logs.push(msg),
           emit: (line) => emitted.push(line),
           track: () => () => {},
@@ -1623,6 +1634,7 @@ describe("auto-review", () => {
           timeoutMs: 30_000,
           stallMs: 500,
           config: null,
+          engine: eng({}),
           log: (msg) => logs.push(msg),
           emit: (line) => emitted.push(line),
           track: () => () => {},
@@ -1651,6 +1663,7 @@ describe("auto-review", () => {
           timeoutMs: 800,
           stallMs: 5_000,
           config: null,
+          engine: eng({}),
           log: (msg) => logs.push(msg),
           emit: (line) => emitted.push(line),
           track: () => () => {},
@@ -1685,7 +1698,8 @@ describe("auto-review", () => {
   test("every finished session records its model config in header and first log line", async () => {
     const { dbFile, writer: w } = setup();
     const card = cardInReview(w);
-    w.setAgentConfig("reviewer", { provider: "anthropic", model: "claude-x", thinking: "high" });
+    w.setEngine("x", { name: "X", harness: "pi", provider: "anthropic", model: "claude-x", thinking: "high" });
+    w.setAgentConfig("reviewer", { runsOn: ["x"] });
     const spawnFn: SpawnFn = (_job, context) => {
       context.emit("session started");
       return Promise.resolve({ code: 0 });
@@ -2318,7 +2332,7 @@ describe("auto-plan", () => {
   test("plan reviewer defaults to thinking max; prompt forbids the gate", () => {
     const task = { id: "abc12", title: "plan me", laneId: "plan" } as never;
     withAgentEnv({}, () => {
-      expect(agentFlags("plan-reviewer", null)).toEqual(["--thinking", "max"]);
+      expect(agentFlags("plan-reviewer", eng({}), null)).toEqual(["--thinking", "max"]);
     });
     expect(planReviewerPrompt(task)).toContain("never run kanban approve/reject");
   });
@@ -2465,7 +2479,7 @@ describe("auto-plan", () => {
   test("planner defaults to thinking max; prompt forbids moving the card or touching the gate", () => {
     const task = { id: "abc12", title: "plan me", laneId: "plan" } as never;
     withAgentEnv({}, () => {
-      expect(agentFlags("planner", null)).toEqual(["--thinking", "max"]);
+      expect(agentFlags("planner", eng({}), null)).toEqual(["--thinking", "max"]);
     });
     expect(plannerPrompt(task)).toContain("Never move the card");
     expect(plannerPrompt(task)).toContain("never run kanban approve/reject");
@@ -2661,36 +2675,20 @@ test("plannerPrompt names a per-run plan file so concurrent runs never clobber",
 });
 
 describe("applyProjectOverride", () => {
-  test("present scalars replace (trimmed), absent keys inherit", () => {
+  test("a present lineup replaces whole; present scalars replace (trimmed); absent keys inherit", () => {
     expect(
       applyProjectOverride(
-        {
-          model: "a",
-          provider: "p",
-          thinking: "high",
-          context: "ctx",
-          tools: "bash",
-          skills: ["s1"],
-          extraArgs: ["--x"],
-          timeoutMs: 120_000,
-        },
-        { model: "  b  ", provider: "   ", thinking: "low", context: " c2 " },
+        { runsOn: ["a", "b"], context: "ctx", tools: "bash", skills: ["s1"], extraArgs: ["--x"], timeoutMs: 120_000 },
+        { runsOn: ["c"], tools: "   ", context: " c2 " },
       ),
-    ).toEqual({
-      model: "b",
-      provider: "p",
-      thinking: "low",
-      context: "c2",
-      tools: "bash",
-      skills: ["s1"],
-      extraArgs: ["--x"],
-      timeoutMs: 120_000,
-    });
+    ).toEqual({ runsOn: ["c"], context: "c2", tools: "bash", skills: ["s1"], extraArgs: ["--x"], timeoutMs: 120_000 });
+    // an empty override lineup inherits the actor's — lineups never merge
+    expect(applyProjectOverride({ runsOn: ["a"] }, { runsOn: [] })).toEqual({ runsOn: ["a"] });
   });
 
   test("a present [] replaces skills and extraArgs wholesale", () => {
-    expect(applyProjectOverride({ model: "a", skills: ["s1"], extraArgs: ["--x"] }, { skills: [] })).toEqual({
-      model: "a",
+    expect(applyProjectOverride({ context: "a", skills: ["s1"], extraArgs: ["--x"] }, { skills: [] })).toEqual({
+      context: "a",
       skills: [],
       extraArgs: ["--x"],
     });
@@ -2704,61 +2702,59 @@ describe("applyProjectOverride", () => {
     expect(applyProjectOverride(null, null)).toBeNull();
     expect(applyProjectOverride(null, {})).toBeNull();
     expect(applyProjectOverride({}, {})).toBeNull();
-    expect(applyProjectOverride(null, { model: "m" })).toEqual({ model: "m" });
+    expect(applyProjectOverride(null, { context: "m" })).toEqual({ context: "m" });
     expect(applyProjectOverride({ skills: [] }, {})).toEqual({ skills: [] });
-    expect(applyProjectOverride({ model: "a" }, null)).toEqual({ model: "a" });
-    expect(applyProjectOverride({ thinking: "max" }, { thinking: "off" })).toEqual({ thinking: "off" });
+    expect(applyProjectOverride({ context: "a" }, null)).toEqual({ context: "a" });
+    expect(applyProjectOverride({ timeoutMs: 60_000 }, { timeoutMs: 90_000 })).toEqual({ timeoutMs: 90_000 });
   });
 });
 
 describe("project overrides", () => {
-  test("override beats pool slot and board actor config", async () => {
+  test("an override lineup beats the actor lineup for that project only", async () => {
     const { dbFile, writer: w } = setup();
-    w.setAgentConfig("reviewer", { model: "a" });
-    w.setPool("rev-pool", {
-      name: "rev",
-      enabled: true,
-      roles: ["reviewer"],
-      slots: [{ model: "b" }],
-    });
-    w.setProjectAgentConfig("demo", "reviewer", { model: "c", thinking: "low" });
+    w.setEngine("b", { name: "B", harness: "pi", model: "b" });
+    w.setEngine("c", { name: "C", harness: "pi", model: "c", thinking: "low" });
+    w.setAgentConfig("reviewer", { runsOn: ["b"] });
+    w.setProjectAgentConfig("demo", "reviewer", { runsOn: ["c"] });
     cardOnProject(w, "demo");
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
     await sleep(150);
 
     expect(calls.length).toBe(1);
-    expect(calls[0].ctx.config).toEqual({ model: "c", thinking: "low" });
+    expect(calls[0].ctx.engine).toMatchObject({ id: "c", model: "c", thinking: "low" });
     calls[0].finish({ code: 0 });
     await sleep(150);
 
-    // deleting the override row restores the pool slot
+    // deleting the override row restores the actor lineup
     w.setProjectAgentConfig("demo", "reviewer", null);
     cardOnProject(w, "demo", "second");
     await sleep(150);
     expect(calls.length).toBe(2);
-    expect(calls[1].ctx.config).toEqual({ model: "b" });
+    expect(calls[1].ctx.engine.id).toBe("b");
     calls[1].finish({ code: 0 });
   });
 
-  test("env model still beats a project override", async () => {
+  test("the env pin still beats a project override", async () => {
     const { dbFile, writer: w } = setup();
-    w.setAgentConfig("reviewer", { model: "a" });
-    w.setProjectAgentConfig("demo", "reviewer", { model: "c" });
+    w.setEngine("c", { name: "C", harness: "pi", model: "c" });
+    w.setEngine("env", { name: "Env", harness: "pi", model: "m-env" });
+    w.setProjectAgentConfig("demo", "reviewer", { runsOn: ["c"] });
     cardOnProject(w, "demo");
-    process.env.KANBAN_AUTOREVIEW_MODEL = "m-env";
-    const seen: Array<{ flags: string[]; model: string | undefined }> = [];
+    process.env.KANBAN_ENGINE = "env";
+    const seen: string[] = [];
     const spawnFn: SpawnFn = (job, ctx) => {
-      seen.push({ flags: agentFlags(job.role, ctx.config), model: ctx.config?.model });
+      const flags = agentFlags(job.role, ctx.engine, ctx.config);
+      seen.push(flags[flags.indexOf("--model") + 1]!);
       return Promise.resolve({ code: 1 });
     };
-    start(spawnFn, dbFile);
-    await sleep(150);
-
-    const modelIdx = seen[0]!.flags.indexOf("--model");
-    expect(seen[0]!.flags[modelIdx + 1]).toBe("m-env"); // env beats at flag time
-    expect(seen[0]!.model).toBe("c"); // the override is still the stored config
-    delete process.env.KANBAN_AUTOREVIEW_MODEL;
+    try {
+      start(spawnFn, dbFile);
+      await sleep(150);
+    } finally {
+      delete process.env.KANBAN_ENGINE;
+    }
+    expect(seen[0]).toBe("m-env");
   });
 
   test("override timeoutMs and skills reach the spawn seam", async () => {
@@ -2800,8 +2796,10 @@ describe("project overrides", () => {
       actors: [{ id: "designer", author: "pi-designer", instructions: "Design {id}." }],
       triggers: [{ kind: "on-enter" }],
     });
-    w.setAgentConfig("designer", { model: "board" });
-    w.setProjectAgentConfig("demo", "designer", { model: "d" });
+    w.setEngine("board", { name: "Board", harness: "pi", model: "board" });
+    w.setEngine("d", { name: "D", harness: "pi", model: "d" });
+    w.setAgentConfig("designer", { runsOn: ["board"] });
+    w.setProjectAgentConfig("demo", "designer", { runsOn: ["d"] });
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile);
     const designCard = w.createTask({ title: "design me", lane: "design", project: "demo" });
@@ -2810,7 +2808,7 @@ describe("project overrides", () => {
     expect(calls.length).toBe(1);
     expect(calls[0].job.role).toBe("designer");
     expect(calls[0].job.task.id).toBe(designCard.id);
-    expect(calls[0].ctx.config).toEqual({ model: "d" });
+    expect(calls[0].ctx.engine.model).toBe("d");
     calls[0].finish({ code: 0 });
     await sleep(150);
 
@@ -2819,13 +2817,14 @@ describe("project overrides", () => {
     await sleep(150);
     const otherSpawn = calls.find((c) => c.job.task.id === otherCard.id);
     expect(otherSpawn).toBeDefined();
-    expect(otherSpawn!.ctx.config).toEqual({ model: "board" });
+    expect(otherSpawn!.ctx.engine.model).toBe("board");
     otherSpawn!.finish({ code: 0 });
   });
 
   test("override marker appears on the spawn start log", async () => {
     const { dbFile, writer: w } = setup();
-    w.setProjectAgentConfig("demo", "reviewer", { model: "c" });
+    w.setEngine("c", { name: "C", harness: "pi", model: "c" });
+    w.setProjectAgentConfig("demo", "reviewer", { runsOn: ["c"] });
     const logs: string[] = [];
     const { calls, spawnFn } = fakeSpawn();
     start(spawnFn, dbFile, { log: (msg) => logs.push(msg) });
@@ -2835,7 +2834,7 @@ describe("project overrides", () => {
     expect(calls.length).toBe(1);
     const markedLine = logs.find((l) => l.includes(`start ${calls[0]!.job.task.id}`));
     expect(markedLine).toBeDefined();
-    expect(markedLine!.endsWith("via default slot — project 'demo' override")).toBe(true);
+    expect(markedLine!.endsWith("on engine C — project 'demo' override")).toBe(true);
     calls[0]!.finish({ code: 0 });
     await sleep(150);
 
@@ -2846,7 +2845,7 @@ describe("project overrides", () => {
     expect(calls.length).toBe(2);
     const plainLine = logs.find((l) => l.includes(`start ${calls[1]!.job.task.id}`));
     expect(plainLine).toBeDefined();
-    expect(plainLine!.endsWith("via default slot")).toBe(true);
+    expect(plainLine!.endsWith("on engine pi default")).toBe(true);
     expect(plainLine!.includes("override")).toBe(false);
     calls[1]!.finish({ code: 0 });
   });
@@ -3067,7 +3066,7 @@ describe("pre-spawn gate", () => {
 
   test("no v4 settings: gate call, messages, and spawn config are today's", async () => {
     const { dbFile, writer: w } = setup();
-    w.setAgentConfig("reviewer", { model: "a" });
+    w.setAgentConfig("reviewer", { context: "a" });
     const card = cardInReview(w);
     let gateRed = true;
     const gateCalls: Array<{ cwd: string; timeoutMs: number; command: string | undefined }> = [];
@@ -3091,7 +3090,7 @@ describe("pre-spawn gate", () => {
     await sleep(150);
     expect(calls.length).toBe(1);
     expect(calls[0].job.task.id).toBe(card2.id);
-    expect(calls[0].ctx.config).toEqual({ model: "a" });
+    expect(calls[0].ctx.config).toEqual({ context: "a" });
     expect(calls[0].ctx.timeoutMs).toBe(DEFAULT_TIMEOUT_MS);
     const startLine = logs.find((l) => l.includes(`start ${card2.id}`));
     expect(startLine).toBeDefined();

@@ -1,14 +1,16 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import type { AgentConfig, AgentThinking, LaneActor, LaneContext, LaneTriggerRule } from "../../../src/db";
+  import { ChevronDown, ChevronUp, X } from "@lucide/svelte";
+  import type { AgentConfig, LaneActor, LaneContext, LaneTriggerRule } from "../../../src/db";
+  import { api } from "../api";
   import { agents, type SettingsRole } from "./agents.svelte";
+  import { engines, engineSummary } from "./engines.svelte";
   import { board } from "./board.svelte";
   import SkillPicker from "./SkillPicker.svelte";
 
   interface AgentForm {
-    provider: string;
-    model: string;
-    thinking: string;
+    /** The actor's engine lineup, in preference order (empty = board default). */
+    runsOn: string[];
     skills: string[];
     context: string;
     tools: string;
@@ -17,9 +19,7 @@
   }
 
   const toForm = (cfg: AgentConfig): AgentForm => ({
-    provider: cfg.provider ?? "",
-    model: cfg.model ?? "",
-    thinking: cfg.thinking ?? "",
+    runsOn: (cfg.runsOn ?? []).slice(),
     skills: (cfg.skills ?? []).slice(),
     context: cfg.context ?? "",
     tools: cfg.tools ?? "",
@@ -28,9 +28,7 @@
   });
 
   const toConfig = (f: AgentForm): AgentConfig => ({
-    provider: f.provider,
-    model: f.model,
-    thinking: f.thinking as AgentThinking, // the select only offers valid levels
+    runsOn: f.runsOn.slice(),
     skills: f.skills.slice(),
     context: f.context,
     tools: f.tools,
@@ -197,18 +195,45 @@
     void agents.loadWorkers();
   });
 
-  let providers = $derived([...new Set(agents.models.map((m) => m.provider))].sort());
-  let modelGroups = $derived.by(() => {
-    const forProvider = form.provider ? agents.models.filter((m) => m.provider === form.provider) : agents.models;
-    const groups = new Map<string, Array<{ id: string; label: string }>>();
-    for (const m of forProvider) {
-      const list = groups.get(m.provider) ?? [];
-      // some catalogs ship the same provider+id twice (zcode "Start") — one option each
-      if (list.some((e) => e.id === m.id)) continue;
-      list.push({ id: m.id, label: `${m.id} · ${m.context}${m.thinking ? " · thinks" : ""}` });
-      groups.set(m.provider, list);
-    }
-    return [...groups.entries()];
+  // the lineup editor picks from the engine registry
+  $effect(() => {
+    if (!engines.loaded) void engines.load();
+  });
+  let savedEngines = $derived(engines.engines.filter((e) => !engines.isDraft(e.id)));
+  let addable = $derived(savedEngines.filter((e) => !form.runsOn.includes(e.id)));
+  const engineName = (id: string) => engines.engines.find((e) => e.id === id)?.name ?? id;
+
+  function moveEngine(i: number, delta: -1 | 1): void {
+    const j = i + delta;
+    if (j < 0 || j >= form.runsOn.length) return;
+    const next = form.runsOn.slice();
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    form.runsOn = next;
+    touch();
+  }
+
+  function removeEngine(i: number): void {
+    form.runsOn = form.runsOn.filter((_, k) => k !== i);
+    touch();
+  }
+
+  function addEngine(id: string): void {
+    if (!id || form.runsOn.includes(id)) return;
+    form.runsOn = [...form.runsOn, id];
+    touch();
+  }
+
+  /** The server's answer to "what does this actor's next spawn run on, and why" (GET /explain). */
+  let explanation = $state<string | null>(null);
+  let explainSeq = 0;
+  $effect(() => {
+    const actor = role;
+    void JSON.stringify(form.runsOn); // re-ask when the lineup changes
+    void agents.saveState; // …and once the edit lands
+    const seq = ++explainSeq;
+    void api.explain({ actor }).get({ query: {} }).then(({ data }) => {
+      if (seq === explainSeq) explanation = data?.text ?? null;
+    });
   });
 
   async function selectLane(id: string): Promise<void> {
@@ -417,81 +442,64 @@
   {/if}
 
   <section class="settings-general-section">
-    <h3 class="settings-general-heading">Model</h3>
-    <p class="settings-general-description">Provider and model from pi's catalog; "pi default" defers to whatever pi itself is configured with.</p>
-    <div class="settings-form">
-      {#if agents.models.length > 0}
-        <div class="row">
-          <label>
-            provider
-            <select bind:value={form.provider} onchange={touch}>
-              <option value="">pi default</option>
-              {#each providers as p (p)}
-                <option value={p}>{p}</option>
-              {/each}
-              {#if form.provider && !providers.includes(form.provider)}
-                <option value={form.provider}>{form.provider} · custom</option>
-              {/if}
-            </select>
-          </label>
-          <label>
-            model
-            <select
-              bind:value={form.model}
-              onchange={(e) => {
-                const id = (e.currentTarget as HTMLSelectElement).value;
-                const hit = agents.models.find((m) => m.id === id && (!form.provider || m.provider === form.provider));
-                if (hit) form.provider = hit.provider;
-                touch();
-              }}
-            >
-              <option value="">pi default</option>
-              {#each modelGroups as [provider, ms] (provider)}
-                <optgroup label={provider}>
-                  {#each ms as m (m.id)}
-                    <option value={m.id}>{m.label}</option>
-                  {/each}
-                </optgroup>
-              {/each}
-              {#if form.model && !agents.models.some((m) => m.id === form.model)}
-                <option value={form.model}>{form.model} · custom</option>
-              {/if}
-            </select>
-          </label>
+    <h3 class="settings-general-heading">Runs on</h3>
+    <p class="settings-general-description">
+      The engines this actor runs on, in order: each spawn takes the first enabled engine with a free seat that isn't cooling down; the rest are fallbacks.
+      Empty runs on the board default. Models, thinking and seats live on the engines (Settings → Engines); a project can replace this lineup.
+    </p>
+    <div class="settings-form lineup" data-testid="lineup">
+      {#each form.runsOn as id, i (id)}
+        {@const e = engines.engines.find((x) => x.id === id)}
+        <div class="lineup-row">
+          <span class="lineup-rank">{i === 0 ? "first" : `fallback ${i}`}</span>
+          <span class="lineup-name">{engineName(id)}</span>
+          <span class="lineup-spec mono">{e ? `${engineSummary(e)} · ${e.seats} seat${e.seats === 1 ? "" : "s"}${e.enabled ? "" : " · disabled"}` : "unknown engine"}</span>
+          {#if i > 0 && e && engines.engines.find((x) => x.id === form.runsOn[0])?.harness !== e.harness}
+            <span class="lineup-warn" title="a transcript can't move between harnesses">fresh session on failover</span>
+          {/if}
+          <button type="button" class="ghost" aria-label={`move ${engineName(id)} up`} disabled={i === 0} onclick={() => moveEngine(i, -1)}>
+            <ChevronUp size={14} strokeWidth={1.75} />
+          </button>
+          <button type="button" class="ghost" aria-label={`move ${engineName(id)} down`} disabled={i === form.runsOn.length - 1} onclick={() => moveEngine(i, 1)}>
+            <ChevronDown size={14} strokeWidth={1.75} />
+          </button>
+          <button type="button" class="ghost" aria-label={`remove ${engineName(id)}`} onclick={() => removeEngine(i)}>
+            <X size={14} strokeWidth={1.75} />
+          </button>
         </div>
       {:else}
-        <div class="row">
-          <label>
-            provider
-            <input bind:value={form.provider} oninput={touch} placeholder="pi default (e.g. anthropic)" />
-          </label>
-          <label>
-            model
-            <input bind:value={form.model} oninput={touch} placeholder="pi default" />
-          </label>
-        </div>
+        <p class="lineup-empty">board default — {engines.settings.defaultEngine ? engineName(engines.settings.defaultEngine) : "pi default"}</p>
+      {/each}
+      <div class="row">
+        <label>
+          add engine
+          <select
+            aria-label="add engine"
+            value=""
+            onchange={(ev) => {
+              addEngine((ev.currentTarget as HTMLSelectElement).value);
+              (ev.currentTarget as HTMLSelectElement).value = "";
+            }}
+            disabled={addable.length === 0}
+          >
+            <option value="">{savedEngines.length === 0 ? "no engines yet — create one in Engines" : addable.length === 0 ? "every engine is in the lineup" : "choose…"}</option>
+            {#each addable as e (e.id)}
+              <option value={e.id}>{e.name} · {engineSummary(e)}</option>
+            {/each}
+          </select>
+        </label>
+      </div>
+      {#if explanation}
+        <pre class="explain mono" data-testid="explain">{explanation}</pre>
       {/if}
     </div>
   </section>
 
   <section class="settings-general-section">
-    <h3 class="settings-general-heading">Thinking &amp; timeout</h3>
-    <p class="settings-general-description">Reasoning effort and the total run cap. A session is killed when its output is silent for 10 min (stall) or at the cap — whichever comes first.</p>
+    <h3 class="settings-general-heading">Timeout</h3>
+    <p class="settings-general-description">The total run cap. A session is killed when its output is silent for 10 min (stall) or at the cap — whichever comes first.</p>
     <div class="settings-form">
       <div class="row">
-        <label>
-          thinking
-          <select bind:value={form.thinking} onchange={touch}>
-            <option value="">default{role === "reviewer" || role === "planner" || role === "plan-reviewer" ? " (max)" : ""}</option>
-            <option value="off">off</option>
-            <option value="minimal">minimal</option>
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-            <option value="xhigh">xhigh</option>
-            <option value="max">max</option>
-          </select>
-        </label>
         <label>
           timeout · min
           <input inputmode="numeric" bind:value={form.timeoutMin} oninput={touch} placeholder="120" />

@@ -61,7 +61,7 @@ function fakeServe(
     sessions?: unknown[];
     queued?: unknown[];
     incidents?: unknown[];
-    pools?: unknown[];
+    engines?: unknown[];
   },
 ): { port: number; stop: () => void } {
   const server = Bun.serve({
@@ -74,7 +74,7 @@ function fakeServe(
               sessions: [],
               queued: [],
               incidents: [],
-              pools: [],
+              engines: [],
               ...activity,
             }),
           )
@@ -1147,16 +1147,16 @@ test("ps lists serves with their live agent sessions; --json round-trips", async
   }
 });
 
-test("ps renders an incidents block per pool slot; --json round-trips", async () => {
+test("ps renders an incidents block per account; --json round-trips", async () => {
   const now = Date.now();
   const serve = fakeServe(
     { pid: 4243, version: VERSION, git: null },
     {
       incidents: [
         {
-          poolId: "p1",
-          poolName: "Builder",
-          slotIndex: 0,
+          account: "pi:zcode",
+          engineId: "flash",
+          engineName: "GLM Flash",
           cause: "provider-quota",
           count: 3,
           firstSeenAt: now - 12 * 60_000,
@@ -1164,9 +1164,9 @@ test("ps renders an incidents block per pool slot; --json round-trips", async ()
           cooldownUntil: now + 5 * 60_000, // cooling
         },
         {
-          poolId: "p1",
-          poolName: "Builder",
-          slotIndex: 1,
+          account: "pi:zai",
+          engineId: "glm",
+          engineName: "GLM",
           cause: "auth",
           count: 1,
           firstSeenAt: now - 30 * 60_000,
@@ -1174,98 +1174,81 @@ test("ps renders an incidents block per pool slot; --json round-trips", async ()
           cooldownUntil: now - 1000, // cooldown expired
         },
       ],
-      pools: [
-        {
-          poolId: "p1",
-          poolName: "Builder",
-          totalSlots: 2,
-          coolingSlots: 2,
-          lastCause: "provider-quota",
-        },
-      ],
+      engines: [{ engineId: "flash", engineName: "GLM Flash", account: "pi:zcode", seats: 8, coolingUntil: now + 5 * 60_000, lastCause: "provider-quota" }],
     },
   );
   try {
     const res = await cli("ps");
     expect(res.code).toBe(0);
-    expect(res.stdout).toContain("incident  Builder slot 0  provider-quota ×3  first 12m ago  cooldown");
+    expect(res.stdout).toContain("incident  pi:zcode (via GLM Flash)  provider-quota ×3  first 12m ago  cooldown");
     expect(res.stdout).toContain("left");
-    expect(res.stdout).toContain("incident  Builder slot 1  auth ×1  first 30m ago  cooldown expired");
+    expect(res.stdout).toContain("incident  pi:zai (via GLM)  auth ×1  first 30m ago  cooldown expired");
 
     const jsonRes = await cli("ps", "--json");
     expect(jsonRes.code).toBe(0);
     const data = JSON.parse(jsonRes.stdout) as {
-      serves: Array<{
-        port: number;
-        incidents: Array<{ cause: string }>;
-        pools: Array<{ coolingSlots: number }>;
-      }>;
+      serves: Array<{ port: number; incidents: Array<{ cause: string }>; engines: Array<{ seats: number }> }>;
     };
     const entry = data.serves.find((s) => s.port === serve.port)!;
     expect(entry.incidents[0].cause).toBe("provider-quota");
-    expect(entry.pools[0].coolingSlots).toBe(2);
+    expect(entry.engines[0].seats).toBe(8);
   } finally {
     serve.stop();
   }
 });
 
-test("check flags a pool with zero healthy slots", async () => {
+test("check flags a cooling engine; healthy engines stay quiet", async () => {
   const head = headState()?.head ?? "";
-  // 1. All-cooling pool
-  const allCoolingServe = fakeServe(
+  const cooling = fakeServe(
     { version: VERSION, git: { commit: head, head, dirty: false } },
-    {
-      pools: [
-        {
-          poolId: "p1",
-          poolName: "BuilderPool",
-          totalSlots: 2,
-          coolingSlots: 2,
-          lastCause: "provider-quota",
-        },
-      ],
-    },
+    { engines: [{ engineId: "flash", engineName: "GLM Flash", account: "pi:zcode", seats: 8, coolingUntil: Date.now() + 60_000, lastCause: "provider-quota" }] },
   );
   try {
-    const warnings = await serveWarnings(allCoolingServe.port);
-    expect(warnings.map((w) => w.kind)).toContain("pool-no-healthy-slots");
-    const w = warnings.find((w) => w.kind === "pool-no-healthy-slots")!;
-    expect(w.message).toContain(
-      "pool 'BuilderPool' has no healthy slots (2/2 cooling, last provider-quota) — edit the pool to reset cooldowns",
-    );
-
-    const checkRes = await cli("check", "--port", String(allCoolingServe.port));
+    const warnings = await serveWarnings(cooling.port);
+    const w = warnings.find((w) => w.kind === "engine-cooling")!;
+    expect(w.message).toContain("engine 'GLM Flash' is cooling (pi:zcode, last provider-quota)");
+    const checkRes = await cli("check", "--port", String(cooling.port));
     expect(checkRes.code).toBe(0);
-    expect(checkRes.stdout).toContain("no healthy slots");
+    expect(checkRes.stdout).toContain("is cooling");
   } finally {
-    allCoolingServe.stop();
+    cooling.stop();
   }
-
-  // 2. Healthy pool (or healthy serve with partial cooling / no pools) -> no such warning
-  const healthyServeInstance = fakeServe(
+  const healthy = fakeServe(
     { version: VERSION, git: { commit: head, head, dirty: false } },
-    {
-      pools: [
-        {
-          poolId: "p1",
-          poolName: "BuilderPool",
-          totalSlots: 2,
-          coolingSlots: 1, // 1 healthy, 1 cooling
-          lastCause: "provider-quota",
-        },
-      ],
-    },
+    { engines: [{ engineId: "flash", engineName: "GLM Flash", account: "pi:zcode", seats: 8 }] },
   );
   try {
-    const warnings = await serveWarnings(healthyServeInstance.port);
-    expect(warnings.some((w) => w.kind === "pool-no-healthy-slots")).toBe(false);
-
-    const checkRes = await cli("check", "--port", String(healthyServeInstance.port));
-    expect(checkRes.code).toBe(0);
-    expect(checkRes.stdout).not.toContain("no healthy slots");
+    expect((await serveWarnings(healthy.port)).some((w) => w.kind === "engine-cooling")).toBe(false);
   } finally {
-    healthyServeInstance.stop();
+    healthy.stop();
   }
+});
+
+test("engine verbs: add → ls → set → lane context --runs-on → explain → rm", async () => {
+  const add = await cli("engine", "add", "GLM", "--provider", "zai", "--model", "glm-5.3", "--thinking", "max", "--seats", "2");
+  expect(add.code).toBe(0);
+  expect(add.stdout).toContain("glm  GLM  zai · glm-5.3 · max  2 seats");
+  expect((await cli("engine", "add", "Sonnet", "--harness", "claude", "--model", "sonnet")).code).toBe(0);
+  const bad = await cli("engine", "add", "Bad", "--harness", "claude", "--provider", "anthropic");
+  expect(bad.code).not.toBe(0);
+
+  const ctx = await cli("lane", "context", "implement", "--actor", "builder", "--runs-on", "glm,Sonnet");
+  expect(ctx.code).toBe(0);
+  expect(ctx.stdout).toContain("runs on GLM → Sonnet");
+  const ls = await cli("engine", "ls");
+  expect(ls.stdout).toContain("used by builder");
+
+  expect((await cli("engine", "set", "glm", "--disable")).code).toBe(0);
+  const why = await cli("explain", "builder", "--port", "1");
+  expect(why.code).toBe(0);
+  expect(why.stdout).toContain("lineup from actor lineup");
+  expect(why.stdout).toContain("disabled");
+  expect(why.stdout).toContain("next spawn → Sonnet");
+
+  const rm = await cli("engine", "rm", "Sonnet");
+  expect(rm.stdout).toContain("dropped from builder");
+  const unknown = await cli("lane", "context", "implement", "--actor", "builder", "--runs-on", "ghost");
+  expect(unknown.code).not.toBe(0);
 });
 
 test("ps flags a lease whose serve died mid-build", async () => {

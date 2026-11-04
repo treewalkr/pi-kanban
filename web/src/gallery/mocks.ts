@@ -2,14 +2,14 @@
 // singletons so every component renders with zero server, and swaps the
 // mutating store methods for in-memory versions so gallery interactions can
 // never write to the real board over the dev API.
-import type { AgentConfig, AgentRole, Attachment, Lane, LanePatch, Task, TaskPatch, WorkerPool } from "../../../src/db";
+import type { AgentConfig, AgentRole, Attachment, Lane, LanePatch, Task, TaskPatch } from "../../../src/db";
 import type { AgentSessionInfo } from "../../../src/autoreview";
 import type { CatalogModel } from "../../../src/models";
 import { newId, slugify } from "../../../src/ids";
 import { board } from "../lib/board.svelte";
 import { drag } from "../lib/drag.svelte";
 import { agents } from "../lib/agents.svelte";
-import { pools } from "../lib/pools.svelte";
+import { engines, type EngineDraft } from "../lib/engines.svelte";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -411,20 +411,20 @@ function stubMutations(): void {
     return true;
   };
 
-  pools.save = async (pool: WorkerPool): Promise<boolean> => {
-    const idx = pools.pools.findIndex((p) => p.id === pool.id);
-    if (idx !== -1) {
-      pools.pools[idx] = pool;
-    } else {
-      pools.pools.push(pool);
-    }
+  engines.save = async (e: EngineDraft): Promise<boolean> => {
+    const idx = engines.engines.findIndex((x) => x.id === e.id);
+    if (idx !== -1) engines.engines[idx] = { ...e };
+    else engines.engines.push({ ...e });
     return true;
   };
 
-  pools.remove = async (id: string): Promise<boolean> => {
-    pools.pools = pools.pools.filter((p) => p.id !== id);
+  engines.remove = async (id: string): Promise<boolean> => {
+    engines.engines = engines.engines.filter((x) => x.id !== id);
     return true;
   };
+
+  engines.move = async (): Promise<void> => {};
+  engines.saveSettings = async (): Promise<boolean> => true;
 }
 
 // ---------- seed ----------
@@ -451,40 +451,25 @@ export function seed(): void {
   // loaded=true keeps SettingsPanel's agents tab from fetching the real config
   agents.open = false;
   agents.loaded = true;
-  agents.configs.reviewer = { provider: "anthropic", model: "claude-sonnet-4-6", thinking: "high", timeoutMs: 120 * 60_000 };
-  agents.configs.builder = { provider: "zai", model: "glm-5.3", thinking: "medium", skills: ["~/.pi/agent/skills/tdd"] };
+  agents.configs.reviewer = { runsOn: ["sonnet", "haiku"], timeoutMs: 120 * 60_000 };
+  agents.configs.builder = { runsOn: ["glm"], skills: ["~/.pi/agent/skills/tdd"] };
   agents.models = [...CATALOG];
   agents.skills = [
     { name: "caveman", description: "Terse caveman voice: answer first, fluff gone, every technical fact kept.", path: "~/.pi/agent/skills/caveman" },
     { name: "tdd", description: "Test-driven development. Red-green-refactor, tests worth keeping.", path: "~/.pi/agent/skills/tdd" },
   ];
 
-  pools.loaded = true;
-  pools.models = [...CATALOG];
-  pools.pools = [
-    {
-      id: "heavy",
-      name: "heavy",
-      enabled: true,
-      roles: ["builder"],
-      slots: [
-        { provider: "zai", model: "glm-5.3", thinking: "max" },
-        { provider: "zai", model: "glm-5.3", thinking: "max" },
-        { provider: "zai", model: "glm-5.3", thinking: "max" },
-      ],
-      updatedAt: now(),
-    },
-    {
-      id: "light",
-      name: "light",
-      enabled: true,
-      roles: ["planner", "reviewer"],
-      slots: [
-        { provider: "anthropic", model: "claude-haiku-4-5", thinking: "low" },
-        { provider: "anthropic", model: "claude-haiku-4-5", thinking: "low" },
-      ],
-      updatedAt: now(),
-    },
+  engines.loaded = true;
+  engines.models = [...CATALOG];
+  engines.claudeModels = [
+    { id: "sonnet", label: "sonnet", note: "balanced" },
+    { id: "opus", label: "opus", note: "strongest" },
+    { id: "haiku", label: "haiku", note: "fastest — light work" },
+  ];
+  engines.engines = [
+    { id: "glm", name: "GLM-5.3 · max", harness: "pi", provider: "zai", model: "glm-5.3", thinking: "max", flags: [], seats: 3, enabled: true },
+    { id: "sonnet", name: "Sonnet", harness: "pi", provider: "anthropic", model: "claude-sonnet-4-6", thinking: "high", flags: [], seats: 2, enabled: true },
+    { id: "haiku", name: "Claude Code haiku", harness: "claude", provider: "", model: "haiku", thinking: "", flags: [], seats: 1, enabled: true },
   ];
 
   stubMutations();

@@ -108,12 +108,12 @@ test("deleteTask cascades to elaboration_requests for task and descendants", () 
 
 test("setAgentConfig accepts elaborator; invalid role error names elaborator", () => {
   const saved = db.setAgentConfig("elaborator", {
-    model: "claude-haiku-3-5",
-    thinking: "off",
+    context: "claude-haiku-3-5",
+    tools: "off",
   });
   expect(saved).toEqual({
-    model: "claude-haiku-3-5",
-    thinking: "off",
+    context: "claude-haiku-3-5",
+    tools: "off",
   });
   expect(db.agentConfig("elaborator")).toEqual(saved);
 
@@ -383,7 +383,7 @@ test("POST /tasks elaborate flag queues exactly when set", async () => {
   expect(res3.status).toBe(422);
 });
 
-test("agents routes roundtrip elaborator; pools accept the role", async () => {
+test("agents routes roundtrip elaborator; an elaborator lineup takes engines", async () => {
   const app = createApp(db);
 
   // GET /agents elaborator is null initially
@@ -397,7 +397,7 @@ test("agents routes roundtrip elaborator; pools accept the role", async () => {
     new Request("http://localhost/agents/elaborator", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "claude-haiku-3-5" }),
+      body: JSON.stringify({ context: "claude-haiku-3-5" }),
     }),
   );
   expect(put1.status).toBe(200);
@@ -405,34 +405,30 @@ test("agents routes roundtrip elaborator; pools accept the role", async () => {
   // GET /agents reflects it
   const get2 = await app.handle(new Request("http://localhost/agents"));
   expect(get2.status).toBe(200);
-  const body2 = (await get2.json()) as { elaborator: { model: string } };
-  expect(body2.elaborator).toEqual({ model: "claude-haiku-3-5" });
+  const body2 = (await get2.json()) as { elaborator: { context: string } };
+  expect(body2.elaborator).toEqual({ context: "claude-haiku-3-5" });
 
   // PUT /agents/nope -> 422
   const put2 = await app.handle(
     new Request("http://localhost/agents/nope", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "claude-haiku-3-5" }),
+      body: JSON.stringify({ context: "claude-haiku-3-5" }),
     }),
   );
   expect(put2.status).toBe(422);
 
-  // db.setPool accepted
-  const pool = db.setPool("p1", { name: "light", roles: ["elaborator"], slots: [{ model: "m" }] });
-  expect(pool.roles).toEqual(["elaborator"]);
-
-  // PUT /pools/:id accepts elaborator
-  const putPool = await app.handle(
-    new Request("http://localhost/pools/p2", {
+  // the elaborator runs on any engine its lineup names
+  db.setEngine("haiku", { name: "Haiku", harness: "claude", model: "haiku" });
+  const put3 = await app.handle(
+    new Request("http://localhost/agents/elaborator", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "pool-elaborator", roles: ["elaborator"], slots: [{ model: "m" }] }),
+      body: JSON.stringify({ runsOn: ["haiku"] }),
     }),
   );
-  expect(putPool.status).toBe(200);
-  const pool2 = (await putPool.json()) as { roles: string[] };
-  expect(pool2.roles).toEqual(["elaborator"]);
+  expect(put3.status).toBe(200);
+  expect(db.agentConfig("elaborator")).toEqual({ runsOn: ["haiku"] });
 });
 
 test("POST /tasks/:id/elaborate queues the same request the CLI uses; unknown id 404s; re-POST re-queues", async () => {

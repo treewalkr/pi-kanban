@@ -1,16 +1,17 @@
-import { homedir } from "node:os";
-import { readFileSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, defaultLaneContext, epicPlanContext, PLAN_SECTIONS, PLAN_TEMPLATE, type AgentConfig, type AgentRole, type AgentThinking, type BuiltinAgentRole, type LaneActor, type LaneCapRule, type LaneContext, type LeaseOwner, type PoolSlot, type Task, type WorkerPool } from "./db";
+import { durationFor, runAgentChild } from "./agent-child";
+import { MAX_SKILL_CHARS, skillActivationPrompt } from "./skill-activation";
+import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, defaultLaneContext, epicPlanContext, PLAN_SECTIONS, PLAN_TEMPLATE, type AgentConfig, type AgentRole, type AgentThinking, type BuiltinAgentRole, type LaneActor, type LaneCapRule, type LaneContext, type Engine, type LeaseOwner, type Task } from "./db";
+import { claudeFlags, isClaudeSessionId, spawnClaude } from "./claude";
+import { DEFAULT_ENGINE_ID, effectiveThinking, engineLabel, resolveLineup } from "./engines";
 import {
   classifySpawnFailure,
   DEFAULT_COOLDOWN_MS,
   PROVIDER_LEVEL_CAUSES,
   RETRYABLE_CAUSES,
-  SlotHealth,
+  EngineHealth,
+  type EngineHealthSummary,
+  type EngineIncident,
   type IncidentCause,
-  type PoolHealthSummary,
-  type SlotIncident,
 } from "./incidents";
 
 export const RETRY_LIMIT = 2;
@@ -67,6 +68,8 @@ export interface SpawnContext {
   timeoutMs: number;
   stallMs: number;
   config: AgentConfig | null;
+  /** The engine the allocator picked for this spawn — decides harness, model, and flags. */
+  engine: Engine;
   log: (message: string) => void;
   /** Streams one formatted output line from the running session. */
   emit: (line: string) => void;
@@ -164,7 +167,8 @@ export interface AgentSessionInfo {
   log: string[];
   model?: string;
   modelLabel?: string;
-  pool?: string;
+  /** Name of the engine the session runs on. */
+  engine?: string;
 }
 
 /** A job waiting in the serial drain queue (no session yet), for /activity. */
@@ -178,8 +182,8 @@ export interface QueuedJobInfo {
 export interface ActivityReport {
   sessions: AgentSessionInfo[];
   queued: QueuedJobInfo[];
-  incidents: SlotIncident[];
-  pools: PoolHealthSummary[];
+  incidents: EngineIncident[];
+  engines: EngineHealthSummary[];
 }
 
 const activityProviders = new Set<() => ActivityReport>();
@@ -188,16 +192,16 @@ const activityProviders = new Set<() => ActivityReport>();
 export function activitySnapshot(): ActivityReport {
   const sessions: AgentSessionInfo[] = [];
   const queued: QueuedJobInfo[] = [];
-  const incidents: SlotIncident[] = [];
-  const pools: PoolHealthSummary[] = [];
+  const incidents: EngineIncident[] = [];
+  const engines: EngineHealthSummary[] = [];
   for (const provide of activityProviders) {
     const report = provide();
     sessions.push(...report.sessions);
     queued.push(...report.queued);
     incidents.push(...report.incidents);
-    pools.push(...report.pools);
+    engines.push(...report.engines);
   }
-  return { sessions, queued, incidents, pools };
+  return { sessions, queued, incidents, engines };
 }
 
 const pauseKillers = new Set<() => number>();
@@ -554,122 +558,62 @@ export function evaluateLaneContext(
   return { actor: armed };
 }
 
-/** Max characters of a SKILL.md body injected into the system prompt (argv safety). */
-export const MAX_SKILL_CHARS = 64 * 1024;
-
-function stripFrontmatter(content: string): string {
-  return content.replace(/^---\n[\s\S]*?\n---\n?/, "");
-}
+// shared with the claude harness; re-exported so existing importers (lane
+// workers, chat, tests) keep importing the helpers from here
+export { MAX_SKILL_CHARS, skillActivationPrompt };
 
 /**
- * Reads every configured skill path (directory → its SKILL.md, or the file
- * itself; `~` expanded), strips YAML frontmatter, and wraps the body in pi's
- * own <skill> block shape — the format `/skill:name` expands to, mirroring
- * pi's _expandSkillCommand — so the skill is active from the first token
- * instead of waiting for the model to open it. Unreadable paths warn via
- * onWarn and are skipped; a spawn never dies on a skill.
- */
-export function skillActivationPrompt(skills: string[], onWarn?: (message: string) => void): string {
-  const blocks: string[] = [];
-  for (const raw of skills) {
-    const base = raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
-    let filePath = base;
-    try {
-      if (statSync(base).isDirectory()) filePath = join(base, "SKILL.md");
-    } catch {
-      onWarn?.(`skill ${raw} not found — skipped`);
-      continue;
-    }
-    let content: string;
-    try {
-      content = readFileSync(filePath, "utf8");
-    } catch (err) {
-      onWarn?.(`skill ${raw} unreadable (${(err as Error).message}) — skipped`);
-      continue;
-    }
-    const stripped = stripFrontmatter(content).trim();
-    const body = stripped.slice(0, MAX_SKILL_CHARS);
-    if (body.length < stripped.length) onWarn?.(`skill ${raw} truncated at ${MAX_SKILL_CHARS} chars`);
-    const name = /^name:\s*(.+)$/m.exec(content)?.[1]?.trim() ?? basename(dirname(filePath));
-    blocks.push(`<skill name="${name}" location="${filePath}">\nReferences are relative to ${dirname(filePath)}.\n\n${body}\n</skill>`);
-  }
-  return blocks.join("\n\n");
-}
-
-/**
- * Merges a pool slot's set fields over the role's agent config.
- * Unset slot fields inherit from the role config; skills/context/tools/timeout
- * pass through untouched (a slot structurally cannot set them).
- * Returns null only when the merged config is empty.
- */
-export function mergeSlotConfig(cfg: AgentConfig | null, slot: PoolSlot | undefined): AgentConfig | null {
-  if (!cfg && !slot) return null;
-  const result: AgentConfig = cfg ? { ...cfg } : {};
-  if (slot?.provider?.trim()) result.provider = slot.provider.trim();
-  if (slot?.model?.trim()) result.model = slot.model.trim();
-  if (slot?.thinking) result.thinking = slot.thinking;
-  return Object.keys(result).length > 0 ? result : null;
-}
-
-/**
- * Merges a project's stored actor override over the merged agent config
- * (board actor config + pool slot). Present-key semantics: scalars
- * (provider/model/context/tools) replace only when present and non-empty
- * after trim; thinking/timeoutMs replace whenever present; skills/extraArgs
+ * Merges a project's stored actor override over the actor's config.
+ * Present-key semantics: `runsOn` replaces the whole lineup when non-empty
+ * (lineups never merge); context/tools replace only when present and
+ * non-empty after trim; timeoutMs replaces whenever present; skills/extraArgs
  * replace wholesale when the key is present (a present [] means none) and an
  * absent key inherits. Returns null only when the merged config is empty.
  */
 export function applyProjectOverride(cfg: AgentConfig | null, override: AgentConfig | null): AgentConfig | null {
   const result: AgentConfig = { ...(cfg ?? {}) };
-  if (override?.provider?.trim()) result.provider = override.provider.trim();
-  if (override?.model?.trim()) result.model = override.model.trim();
+  if (override?.runsOn && override.runsOn.length > 0) result.runsOn = override.runsOn;
   if (override?.context?.trim()) result.context = override.context.trim();
   if (override?.tools?.trim()) result.tools = override.tools.trim();
-  if (override?.thinking !== undefined) result.thinking = override.thinking;
   if (override?.skills !== undefined) result.skills = override.skills;
   if (override?.extraArgs !== undefined) result.extraArgs = override.extraArgs;
   if (override?.timeoutMs !== undefined) result.timeoutMs = override.timeoutMs;
   return Object.keys(result).length > 0 ? result : null;
 }
 
-/** The resolved model config of one spawn — what actually ran. */
+/** The resolved model config of one spawn — what actually ran, read off its engine. */
 export interface ModelConfig {
+  harness: "pi" | "claude";
   provider?: string;
-  model?: string; // absent = pi's default model
-  thinking?: AgentThinking; // AgentThinking imported (type-only) from ./db
+  model?: string; // absent = the harness's default model
+  thinking?: AgentThinking; // pi only: the engine's, else the role default
 }
 
-/** Env > config > role-default resolution — the same one agentFlags applies. */
-export function resolvedModelConfig(role: AgentRole, cfg: AgentConfig | null): ModelConfig {
-  const envModel = process.env.KANBAN_AUTOREVIEW_MODEL?.trim();
-  const envThinking = process.env.KANBAN_AUTOREVIEW_THINKING;
-  let thinking: AgentThinking | undefined =
-    (envThinking !== undefined && envThinking.trim() !== "" ? (envThinking.trim() as AgentThinking) : undefined) ||
-    (cfg?.thinking ? cfg.thinking : undefined) ||
-    (role === "reviewer" || role === "planner" || role === "plan-reviewer" ? "max" : undefined);
-  if (envThinking === "") thinking = undefined;
-  const mc: ModelConfig = {};
-  if (cfg?.provider) mc.provider = cfg.provider;
-  const model = envModel || cfg?.model;
-  if (model) mc.model = model;
+/** An engine's spawn-time model config: thinking falls back to the role default (max for reviewer/planner/plan-reviewer). */
+export function resolvedModelConfig(role: AgentRole, engine: Engine): ModelConfig {
+  const mc: ModelConfig = { harness: engine.harness };
+  if (engine.harness === "pi" && engine.provider) mc.provider = engine.provider;
+  if (engine.model) mc.model = engine.model;
+  const thinking = effectiveThinking(role, engine);
   if (thinking) mc.thinking = thinking;
   return mc;
 }
 
-/** "anthropic · claude-x · high" — unset parts dropped, model falls back to "default model". */
+/** "anthropic · claude-x · high" / "claude · sonnet" — unset parts dropped, model falls back to "default model". */
 export function modelConfigLabel(mc: Partial<ModelConfig>): string {
+  if (mc.harness === "claude") return `claude · ${mc.model ?? "default model"}`;
   return [mc.provider, mc.model ?? "default model", mc.thinking ?? ""].filter(Boolean).join(" · ");
 }
 
 /**
- * pi flags for a role: env (KANBAN_AUTOREVIEW_MODEL / KANBAN_AUTOREVIEW_THINKING)
- * beats the board config, which beats the built-in default (reviewer thinks max;
- * setting the thinking env var to "" disables thinking entirely). Configured
- * skills are activated by injecting their SKILL.md into the appended system
- * prompt (skillActivationPrompt); warnings from that go to onWarn.
+ * pi flags for one spawn: provider/model/thinking from the engine (thinking
+ * falls back to the role default), configured skills activated by injecting
+ * their SKILL.md into the appended system prompt (skillActivationPrompt;
+ * warnings go to onWarn), the actor's pi tool filter and extra flags, then the
+ * engine's raw flags.
  */
-export function agentFlags(role: AgentRole, cfg: AgentConfig | null, onWarn?: (message: string) => void): string[] {
-  const mc = resolvedModelConfig(role, cfg);
+export function agentFlags(role: AgentRole, engine: Engine, cfg: AgentConfig | null, onWarn?: (message: string) => void): string[] {
+  const mc = resolvedModelConfig(role, engine);
   const args: string[] = [];
   if (mc.provider) args.push("--provider", mc.provider);
   if (mc.model) args.push("--model", mc.model);
@@ -680,6 +624,7 @@ export function agentFlags(role: AgentRole, cfg: AgentConfig | null, onWarn?: (m
   if (appended) args.push("--append-system-prompt", appended);
   if (cfg?.tools) args.push("--tools", cfg.tools);
   args.push(...(cfg?.extraArgs ?? []));
+  args.push(...engine.flags);
   return args;
 }
 
@@ -693,10 +638,8 @@ export function sessionIdFor(job: AgentJob, now: number = Date.now()): string {
   return `kanban-${job.task.id}-${job.role}-${now.toString(36)}`;
 }
 
-/** "8s" / "59s" / "1 min" / "20 min" */
-export function durationFor(secs: number): string {
-  return secs < 60 ? `${secs}s` : `${Math.round(secs / 60)} min`;
-}
+// moved to agent-child.ts with the shared runner; re-exported for existing importers
+export { durationFor };
 
 /** The "why" for a death comment, from the spawn result plus what the session actually emitted. */
 export function deathReason(result: SpawnResult, secs: number, sessionLog: string[]): string {
@@ -729,105 +672,39 @@ export interface SpawnPiInput {
   track: (kill: () => void) => () => void;
 }
 
-/** The one spawn implementation: kill/timeout/stall timers, JSONL streaming, stderr tail. */
+/** The one pi spawn: the shared agent-child runner over pi's `--mode json` JSONL. */
 export function spawnPi(input: SpawnPiInput): Promise<SpawnResult> {
   const { cwd, sessionId, prompt, args, timeoutMs, stallMs, log, emit, track } = input;
-  const proc = Bun.spawn({
-    // json mode streams JSONL events while the session runs (--print waits for the end)
+  // json mode streams JSONL events while the session runs (--print waits for the end)
+  return runAgentChild({
     cmd: ["pi", "--mode", "json", "--session-id", sessionId, ...args, prompt],
     cwd,
-    env: process.env,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const untrack = track(() => proc.kill());
-  const stderr = new Response(proc.stderr).text();
-  let timedOut = false;
-  let stalled = false;
-  let stallTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const clearTimers = () => {
-    clearTimeout(timer);
-    if (stallTimer) clearTimeout(stallTimer);
-  };
-
-  const timer = setTimeout(() => {
-    timedOut = true;
-    if (stallTimer) clearTimeout(stallTimer);
-    proc.kill();
-  }, timeoutMs);
-  timer.unref?.();
-
-  const resetStallTimer = () => {
-    if (timedOut || stalled) return;
-    if (stallTimer) clearTimeout(stallTimer);
-    stallTimer = setTimeout(() => {
-      stalled = true;
-      clearTimeout(timer);
-      proc.kill();
-    }, stallMs);
-    stallTimer.unref?.();
-  };
-
-  resetStallTimer();
-
-  // stream events as they arrive: manual LF split (readline mis-splits unicode)
-  void (async () => {
-    const reader = proc.stdout.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value && value.byteLength > 0) {
-          resetStallTimer();
-        }
-        buf += decoder.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          const line = formatPiEvent(buf.slice(0, nl));
-          if (line) emit(line);
-          buf = buf.slice(nl + 1);
-        }
-      }
-    } catch {
-      // stream torn down (timeout kill / early exit) — exit handling below covers it
-    }
-  })();
-
-  return proc.exited.finally(untrack).then(async (code) => {
-    clearTimers();
-    const tail = (await stderr).trim();
-    if (stalled) log(`stalled — no output for ${durationFor(stallMs / 1000)}, killed`);
-    else if (timedOut) log(`timed out after ${Math.round(timeoutMs / 60_000)} min, killed`);
-    else if (code !== 0) {
-      if (tail) log(`exited ${code}, stderr tail:\n${tail.slice(-1500)}`);
-    }
-    return {
-      code: (timedOut || stalled) ? 1 : (code ?? 1),
-      stalled: stalled || undefined,
-      stalledAfterMs: stalled ? stallMs : undefined,
-      timedOut: timedOut || undefined,
-      stderrTail: tail ? tail.slice(-1500) : undefined,
-    };
+    timeoutMs,
+    stallMs,
+    log,
+    emit,
+    track,
+    formatEvent: formatPiEvent,
   });
 }
 
-export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, log, emit, track }) =>
-  // the loop's log lines stay job-prefixed ("reviewer <id>: stalled — …"); spawnPi logs bare
-  spawnPi({
+export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, engine, log, emit, track }) => {
+  // the loop's log lines stay job-prefixed ("reviewer <id>: stalled — …"); the harness logs bare
+  const shared = {
     cwd,
     sessionId: job.sessionId ?? sessionIdFor(job),
     prompt: job.prompt,
-    args: agentFlags(job.role, config, log),
     timeoutMs,
     stallMs,
-    log: (message) => log(`${job.role} ${job.task.id}: ${message}`),
+    log: (message: string) => log(`${job.role} ${job.task.id}: ${message}`),
     emit,
     track,
-  });
+  };
+  if (engine.harness === "claude") {
+    return spawnClaude({ ...shared, args: claudeFlags(job.role, engine, config, log), resume: job.mode === "resume" });
+  }
+  return spawnPi({ ...shared, args: agentFlags(job.role, engine, config, log) });
+};
 
 export const LEASE_TTL_MS = 60_000;
 
@@ -859,12 +736,12 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const queue: Array<AgentJob & { enqueuedAt: number }> = [];
   const inFlight = new Set<string>();
   const sessions = new Map<string, AgentSessionInfo>();
-  const health = new SlotHealth(opts.cooldownMs ?? DEFAULT_COOLDOWN_MS);
+  const health = new EngineHealth(opts.cooldownMs ?? DEFAULT_COOLDOWN_MS);
   const provide = (): ActivityReport => ({
     sessions: [...sessions.values()],
     queued: queue.map(({ task, role, enqueuedAt }) => ({ taskId: task.id, role, enqueuedAt })),
     incidents: health.incidents(),
-    pools: health.poolSummaries(db.pools()),
+    engines: health.summaries(db.engines()),
   });
   activityProviders.add(provide);
   // kills holds cleanup handles (spawn kills *and* heartbeat clears), so the
@@ -885,35 +762,52 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   let stopped = false;
 
   interface AllocatedSlot {
+    /** Seat key `${engineId}:${seat}` — held in busySlots while the session runs. */
     key: string;
-    slot?: PoolSlot;
-    pool?: WorkerPool;
-    slotIndex?: number;
+    engine: Engine;
+    /** 0 = the lineup's first choice; > 0 = a fallback. */
+    rank: number;
+    source: ReturnType<typeof resolveLineup>["source"];
   }
 
-  function freeSlotFor(role: AgentRole): AllocatedSlot | null {
-    const pools = db.pools();
-    health.syncPools(pools);
-    // pools serve built-in loop roles only; a custom lane actor always takes the default slot
-    const covering = pools.filter((p) => p.enabled && p.roles.includes(role as BuiltinAgentRole));
-    if (covering.length > 0) {
-      for (const pool of covering) {
-        const cap = pool.maxWorkers ?? pool.slots.length;
-        for (let i = 0; i < cap; i++) {
-          const key = `${pool.id}:${i}`;
-          if (!busySlots.has(key) && !health.isCooling(pool.id, i)) {
-            return { key, slot: pool.slots[i], pool, slotIndex: i };
-          }
-        }
+  /** Busy seats on an engine (seat keys are `${engineId}:${i}`). */
+  const busyOn = (engine: Engine): number => {
+    let n = 0;
+    for (const key of busySlots) if (key.startsWith(`${engine.id}:`)) n++;
+    return n;
+  };
+
+  /**
+   * The lineup allocator: resolve the actor's lineup (env pin → project
+   * override → actor → board default), take the first enabled, non-cooling
+   * engine with a free seat. Null = every engine in the lineup is full,
+   * cooling, or disabled — the job waits.
+   */
+  function allocate(role: AgentRole, project: string | undefined): AllocatedSlot | null {
+    health.syncEngines(db.engines());
+    const lineup = resolveLineup(db, role, project);
+    for (const [rank, engine] of lineup.engines.entries()) {
+      if (!engine.enabled || health.isCooling(engine)) continue;
+      for (let i = 0; i < engine.seats; i++) {
+        const key = `${engine.id}:${i}`;
+        if (!busySlots.has(key)) return { key, engine, rank, source: lineup.source };
       }
-      return null;
-    }
-    const key = "::default:0";
-    if (!busySlots.has(key)) {
-      return { key, slot: undefined, pool: undefined };
     }
     return null;
   }
+
+  // a cooled engine requalifies at expiry — wake the loop then (nothing else would)
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  const armExpiryRescan = (): void => {
+    const at = health.nextExpiry();
+    if (at === null) return;
+    if (expiryTimer) clearTimeout(expiryTimer);
+    expiryTimer = setTimeout(() => {
+      expiryTimer = undefined;
+      if (!stopped) scan();
+    }, Math.max(0, at - Date.now()) + 50);
+    expiryTimer.unref?.();
+  };
 
   /**
    * What the card needs right now: its lane's context interpreted, or nothing
@@ -1036,7 +930,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   }
 
   async function runJob(job: AgentJob, allocated: AllocatedSlot): Promise<void> {
-    const { slot, pool, slotIndex, key: slotKey } = allocated;
+    const { engine, key: slotKey } = allocated;
     try {
       const fresh = db.tasks().find((t) => t.id === job.task.id);
       if (!fresh) return;
@@ -1091,7 +985,9 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         return;
       }
       inFlight.add(job.task.id);
-      job.sessionId ??= sessionIdFor(job);
+      // the harness decides the session-id shape (claude accepts only UUIDs);
+      // a resume across harnesses keeps the old id and the harness starts fresh
+      job.sessionId ??= engine.harness === "claude" ? crypto.randomUUID() : sessionIdFor(job);
       db.setCardSession(job.task.id, job.role, job.sessionId);
       if (job.mode === "resume") {
         db.createComment(job.task.id, {
@@ -1102,12 +998,12 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       }
       const roleConfig = db.agentConfig(job.role); // fresh per spawn: web edits apply to the next session
       const override = db.projectAgentConfig(fresh.project, job.role);
-      const config = applyProjectOverride(mergeSlotConfig(roleConfig, slot), override);
-      const mc = resolvedModelConfig(job.role, config);
+      const config = applyProjectOverride(roleConfig, override);
+      const mc = resolvedModelConfig(job.role, engine);
       const label = modelConfigLabel(mc);
       const skills = config?.skills?.length ? `${config.skills.length} skill${config.skills.length === 1 ? "" : "s"}` : "";
-      const via = pool ? `via pool ${pool.name} slot ${slotIndex}` : "via default slot";
-      const overrideNote = override !== null ? ` — project '${fresh.project}' override` : "";
+      const via = `on engine ${engine.name}${allocated.rank > 0 ? ` (fallback #${allocated.rank})` : ""}`;
+      const overrideNote = allocated.source === "project" ? ` — project '${fresh.project}' override` : allocated.source === "env" ? " — KANBAN_ENGINE pin" : "";
       log(`${job.role} start ${job.task.id} "${job.task.title}" (${[label, skills].filter(Boolean).join(" · ")}) ${via}${overrideNote}`);
       const session: AgentSessionInfo = {
         taskId: job.task.id,
@@ -1116,7 +1012,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         log: [],
         modelLabel: label,
         ...(mc.model ? { model: mc.model } : {}),
-        ...(pool ? { pool: pool.name } : {}),
+        engine: engine.name,
       };
       // stop() must be able to silence the heartbeat even when the spawn
       // promise never settles (a stuck/fake child) — otherwise the 15s tick
@@ -1141,7 +1037,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       };
       let result: SpawnResult = { code: 1 };
       try {
-        result = await spawnFn(job, { cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, stallMs, config, log, emit, track: jobTrack });
+        result = await spawnFn(job, { cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, stallMs, config, engine, log, emit, track: jobTrack });
         if (result.stalled) emit(`stalled — no output for ${durationFor((result.stalledAfterMs ?? 0) / 1000)}, killed`);
         if (result.timedOut) emit("timed out — killed");
         if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
@@ -1220,7 +1116,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           continue;
         }
 
-        const allocated = freeSlotFor(job.role);
+        const allocated = allocate(job.role, fresh.project);
         if (!allocated) {
           remaining.push(job);
           continue;
@@ -1275,13 +1171,10 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       }
     } else {
       const { cause, waitHintMs } = classifySpawnFailure(result, session.log);
-      if (allocated.pool && allocated.slotIndex !== undefined && PROVIDER_LEVEL_CAUSES.has(cause)) {
-        health.record(
-          allocated.pool,
-          allocated.slotIndex,
-          cause,
-          waitHintMs != null ? { waitHintMs } : undefined,
-        );
+      if (PROVIDER_LEVEL_CAUSES.has(cause)) {
+        // the account is exhausted, not the seat: every engine on it cools together
+        health.record(allocated.engine, cause, waitHintMs != null ? { waitHintMs } : undefined);
+        armExpiryRescan();
       }
 
       // backward scan for retriesUsed:
@@ -1307,17 +1200,9 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         break;
       }
 
-      const covering = db.pools().filter((p) => p.enabled && p.roles.includes(job.role as BuiltinAgentRole));
-      const allCooling =
-        covering.length > 0 &&
-        covering.every((p) => {
-          const cap = p.maxWorkers ?? p.slots.length;
-          for (let i = 0; i < cap; i++) {
-            if (!health.isCooling(p.id, i)) return false;
-          }
-          return true;
-        });
-      const anyHealthy = covering.length > 0 && !allCooling;
+      const lineup = resolveLineup(db, job.role, task.project).engines.filter((e) => e.enabled);
+      const allCooling = lineup.length > 0 && lineup.every((e) => health.isCooling(e));
+      const anyHealthy = lineup.length > 0 && !allCooling;
 
       const label = actor?.deathLabel ?? job.role;
       const tail =
@@ -1327,29 +1212,22 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           : " — findings unaddressed, needs a human. comment on this card to re-trigger.");
 
       if (PROVIDER_LEVEL_CAUSES.has(cause) && allCooling) {
-        // Consolidated park when every slot is cooling
-        const desc = covering
-          .map((pool) => {
-            const cap = pool.maxWorkers ?? pool.slots.length;
-            const slotParts: string[] = [];
-            for (let i = 0; i < cap; i++) {
-              const inc = health.incident(pool.id, i);
-              if (inc) {
-                slotParts.push(`slot ${i} ${inc.cause} ×${inc.count}`);
-              }
-            }
-            return `'${pool.name}': ${slotParts.join(", ")}`;
+        // Consolidated park when every engine in the lineup is cooling
+        const desc = lineup
+          .map((e) => {
+            const inc = health.incident(e);
+            return `'${e.name}'${inc ? ` ${inc.cause} ×${inc.count}` : ""}`;
           })
-          .join("; ");
+          .join(", ");
         db.createComment(task.id, {
           author,
           kind: "comment",
-          body: `${KanbanDb.SESSION_DIED_PREFIX}${label} ${reason} — every slot is cooling down: ${desc}${tail}`,
+          body: `${KanbanDb.SESSION_DIED_PREFIX}${label} ${reason} — every engine in the lineup is cooling down: ${desc}${tail}`,
         });
       } else if (
         retriesUsed < RETRY_LIMIT &&
         (RETRYABLE_CAUSES.has(cause) ||
-          (PROVIDER_LEVEL_CAUSES.has(cause) && allocated.pool && anyHealthy))
+          (PROVIDER_LEVEL_CAUSES.has(cause) && anyHealthy))
       ) {
         // Retry
         const n = retriesUsed + 1;
@@ -1392,6 +1270,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       if (stopped) return;
       stopped = true;
       stopWatch();
+      if (expiryTimer) clearTimeout(expiryTimer);
       activityProviders.delete(provide);
       pauseKillers.delete(killInFlight);
       // a restart/shutdown kill must not leave the board silent — trace it on
