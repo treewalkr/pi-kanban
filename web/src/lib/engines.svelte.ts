@@ -42,6 +42,35 @@ function slugFor(name: string, taken: Set<string>): string {
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const key = (e: EngineDraft): string => JSON.stringify(e);
 
+/** Mirrors MAX_ENGINE_SEATS in src/db.ts and the /engines body schema. */
+export const MAX_SEATS = 12;
+
+/**
+ * Human text for a failed request: the API's own `{ error }`, or an Elysia
+ * validation body (`{ type: "validation", property: "/seats", summary }`)
+ * as "seats: <summary>".
+ */
+export function errorText(error: EdenError): string {
+  const v = error.value as { error?: unknown; type?: unknown; property?: unknown; summary?: unknown; message?: unknown } | string | undefined;
+  if (typeof v === "string" && v.trim()) return v;
+  if (v && typeof v === "object") {
+    if (typeof v.error === "string") return v.error;
+    if (v.type === "validation") {
+      const field = typeof v.property === "string" ? v.property.replace(/^\//, "") : "";
+      const msg = typeof v.summary === "string" ? v.summary : typeof v.message === "string" ? v.message : "invalid value";
+      return field ? `${field}: ${msg}` : msg;
+    }
+  }
+  return "request failed";
+}
+
+/** What blocks saving this draft before any request is made, or null. */
+export function draftProblem(e: EngineDraft): string | null {
+  if (!e.name.trim()) return "name is required";
+  if (!Number.isInteger(e.seats) || e.seats < 1 || e.seats > MAX_SEATS) return `seats must be a whole number from 1 to ${MAX_SEATS}`;
+  return null;
+}
+
 /** "zai · glm-5.3 · max" / "pi default" / "claude · sonnet" — the web twin of engineLabel. */
 export function engineSummary(e: Pick<EngineDraft, "harness" | "provider" | "model" | "thinking">): string {
   if (e.harness === "claude") return ["claude", e.model || "default", e.thinking].filter(Boolean).join(" · ");
@@ -59,6 +88,14 @@ class EnginesStore {
   private savedSettings = $state<{ maxWorkers: number; defaultEngine: string | null }>({ maxWorkers: 12, defaultEngine: null });
   /** Ids created locally and not yet PUT. */
   private drafts = new Set<string>();
+  /** Last failed save/delete per engine, pinned to the draft it failed on: any edit clears it. */
+  private failures = $state<Record<string, { key: string; message: string }>>({});
+
+  /** The server's rejection of this engine's current draft, if it still applies. */
+  errorFor(e: EngineDraft): string | null {
+    const f = this.failures[e.id];
+    return f && f.key === key(e) ? f.message : null;
+  }
 
   get dirty(): boolean {
     if (this.settingsDirty) return true;
@@ -94,8 +131,11 @@ class EnginesStore {
   }
 
   private fail(error: EdenError): void {
-    const value = error.value as { error?: string } | undefined;
-    board.error = value?.error ?? "request failed";
+    board.error = errorText(error);
+  }
+
+  private failOn(e: EngineDraft, error: EdenError): void {
+    this.failures[e.id] = { key: key(e), message: errorText(error) };
   }
 
   addDraft(name = "New engine"): EngineDraft {
@@ -147,9 +187,10 @@ class EnginesStore {
       enabled: e.enabled,
     });
     if (error) {
-      this.fail(error);
+      this.failOn(e, error);
       return false;
     }
+    delete this.failures[e.id];
     const saved = toDraft(data as Engine);
     const idx = this.engines.findIndex((x) => x.id === e.id);
     if (idx !== -1) this.engines[idx] = saved;
@@ -162,30 +203,19 @@ class EnginesStore {
     if (!this.drafts.has(id)) {
       const { error } = await api.engines({ id }).delete();
       if (error) {
-        this.fail(error);
+        const e = this.engines.find((x) => x.id === id);
+        if (e) this.failOn(e, error);
+        else this.fail(error);
         return false;
       }
     }
     this.drafts.delete(id);
+    delete this.failures[id];
     this.engines = this.engines.filter((e) => e.id !== id);
     this.saved = this.saved.filter((e) => e.id !== id);
     if (this.settings.defaultEngine === id) this.settings.defaultEngine = null;
     if (this.savedSettings.defaultEngine === id) this.savedSettings = { ...this.savedSettings, defaultEngine: null };
     return true;
-  }
-
-  /** Move one saved engine up/down the registry; persists immediately (order is display order). */
-  async move(id: string, delta: -1 | 1): Promise<void> {
-    const i = this.engines.findIndex((e) => e.id === id);
-    const j = i + delta;
-    if (i === -1 || j < 0 || j >= this.engines.length) return;
-    const next = [...this.engines];
-    [next[i], next[j]] = [next[j]!, next[i]!];
-    this.engines = next;
-    const ids = next.filter((e) => !this.drafts.has(e.id)).map((e) => e.id);
-    const { error } = await api.engines.order.put({ ids });
-    if (error) this.fail(error);
-    else this.saved = ids.map((sid) => this.saved.find((s) => s.id === sid)!).filter(Boolean);
   }
 
   async saveSettings(): Promise<boolean> {
