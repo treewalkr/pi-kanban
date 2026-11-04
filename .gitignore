@@ -10,3 +10,6 @@ data/
 test-results/
 docs/*
 !docs/adr
+
+# design prototypes (interactive scratch, see .prototypes/*/DESIGN.md)
+.prototypes/
