@@ -743,15 +743,17 @@ export const EPIC_PLAN_REVIEWER_INSTRUCTIONS = `You are pi-plan-reviewer. Kanban
 Verdict exactly as usual (never move the card, never approve/reject — the human owns the gate): pass parks it for the human; block carries --finding per rubric hit.
 Your last line: a one-sentence verdict on the decomposition.`;
 
-/** The plan-lane context, chartered for epics: same actors, gates, and exits —
- *  the planner and plan-reviewer swap to decomposition instructions and the
- *  charter template replaces the build template (ceqfq). */
-export function epicPlanContext(): LaneContext {
-  const base = defaultLaneContext("plan")!;
+/** The context an epic plans under: any lane that hands out an artifact
+ *  template swaps it for the decomposition charter (ceqfq) — the seeded
+ *  planner/plan-reviewer instructions swap too when the lane uses those actor
+ *  ids, and everything else (custom actors, gates, exits) stays the lane's own.
+ *  Keyed on the template, not the 'plan' id, so custom plan-like lanes charter
+ *  their epics instead of handing them the build template. */
+export function epicPlanContextFor(ctx: LaneContext): LaneContext {
   return {
-    ...base,
+    ...ctx,
     template: EPIC_PLAN_TEMPLATE.trim(),
-    actors: base.actors.map((a) =>
+    actors: ctx.actors.map((a) =>
       a.id === "planner"
         ? { ...a, instructions: EPIC_PLANNER_INSTRUCTIONS }
         : a.id === "plan-reviewer"
@@ -759,6 +761,13 @@ export function epicPlanContext(): LaneContext {
           : a,
     ),
   };
+}
+
+/** The plan-lane context, chartered for epics: same actors, gates, and exits —
+ *  the planner and plan-reviewer swap to decomposition instructions and the
+ *  charter template replaces the build template (ceqfq). */
+export function epicPlanContext(): LaneContext {
+  return epicPlanContextFor(defaultLaneContext("plan")!);
 }
 
 export const BUILDER_PLAN_INSTRUCTIONS = `You are pi-builder. Kanban card {id} "{title}" had its plan approved; build it in this repo.

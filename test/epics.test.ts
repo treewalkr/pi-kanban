@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { KanbanDb, EPICS_LANE_ID, epicPlanContext } from "../src/db";
+import { KanbanDb, EPICS_LANE_ID, epicPlanContext, epicPlanContextFor, type LaneContext } from "../src/db";
 
 let dir = "";
 let db: KanbanDb;
@@ -60,6 +60,27 @@ test("epicPlanContext swaps the charter in but keeps gates and exits", () => {
   expect(planner.instructions).toContain("decomposition charter");
   expect(epic.exits).toEqual(base.exits);
   expect(epic.gate?.approveTarget).toBe(base.gate?.approveTarget); // the branch is per-card, in approveTask
+});
+
+test("epicPlanContextFor charters a custom plan-like lane without discarding its workflow", () => {
+  const custom: LaneContext = {
+    artifact: "spec",
+    template: "# build template",
+    actors: [
+      { id: "planner", author: "pi-planner", instructions: "build template instructions" },
+      { id: "critic", author: "pi-critic", instructions: "custom critic" },
+    ],
+    triggers: [{ kind: "on-enter" }],
+    gate: { approveTarget: "implement", rejectPrefix: "spec rejected" },
+  };
+  const chartered = epicPlanContextFor(custom);
+  expect(chartered.template).toContain("Boundary contracts");
+  expect(chartered.artifact).toBe("spec"); // the lane keeps its own artifact name
+  expect(chartered.gate).toBe(custom.gate); // and its own gate
+  const critic = chartered.actors.find((a) => a.id === "critic")!;
+  expect(critic.instructions).toBe("custom critic"); // unknown actors untouched
+  const planner = chartered.actors.find((a) => a.id === "planner")!;
+  expect(planner.instructions).toContain("decomposition charter"); // seeded ids still swap
 });
 
 // D. the gate: approve arms epics into Epics, unarmed
