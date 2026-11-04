@@ -8,7 +8,8 @@ import { importIssues, parseGhRef, refreshGhUrl } from "./gh";
 import { searchBoard, HARD_RESULT_LIMIT, MAX_RESULTS } from "./search";
 import { cardFileDiff } from "./diff";
 import { VERSION, headState } from "./version";
-import type { IncidentCause, PoolHealthSummary, SlotIncident } from "./incidents";
+import type { EngineHealthSummary, EngineIncident, IncidentCause } from "./incidents";
+import { engineLabel, explain, findEngine, formatExplanation } from "./engines";
 
 export const HELP = `kanban ${VERSION} — task board for the pi agent
 
@@ -54,8 +55,13 @@ usage:
   kanban lane context <ref> [--json]        (a lane's workflow context: actors, triggers, exits, gate, cap)
   kanban lane context <ref> --actor <id> --author <pi-name> --instructions <text|@file>
                           [--template <text|@file>] [--artifact <name>] [--trigger <on-enter|human-comment>]…
-                          [--approve-to <lane>] [--cap <n>] [--provider <p>] [--model <m>] [--thinking <t>]
+                          [--approve-to <lane>] [--cap <n>] [--runs-on <engine,…>]
                           [--test-gate | --no-test-gate]   (create or patch the context; --from <file> loads JSON; --clear removes it)
+  kanban engine ls [--json]                    (engines: harness · provider · model · thinking · seats · who runs on them)
+  kanban engine add <name> | set <id|name> [--harness pi|claude] [--provider <p>] [--model <m>] [--thinking <t>]
+                          [--seats <n>] [--flag <f>]… [--enable|--disable] [--default]   (create or patch an engine)
+  kanban engine rm <id|name> | default <id|name|none>   (delete — drops it from every lineup; set the board default engine)
+  kanban explain <actor> [--project <name>]    (what the actor's next spawn runs on, and why: env pin → project → actor → default)
   kanban worker run <lane> [--focus <text>] [--author <name>]   (queue a lane worker run; drained by serve --agents)
   kanban worker ls [--lane <ref>] [--json]     (lane worker runs: id · lane · status · age · summary)
   kanban project ls | show <name> | add <path> [--name <n>] | set <name> [--repo <path> | --clear-repo] [--test-gate | --no-test-gate]
@@ -85,9 +91,9 @@ export interface Parsed {
   positional: string[];
 }
 
-const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus", "actor", "instructions", "template", "artifact", "approve-to", "cap", "provider", "model", "thinking", "repo", "test-cmd", "name"])
-const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear", "test-gate", "no-test-gate", "clear-repo", "clear-test-cmd"])
-const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag", "trigger"]) // repeatable: each occurrence appends one value
+const VALUE_FLAGS = new Set(["note", "lane", "project", "pos", "title", "port", "parent", "author", "kind", "message", "priority", "as", "v", "from", "to", "limit", "before", "owner", "focus", "actor", "instructions", "template", "artifact", "approve-to", "cap", "provider", "model", "thinking", "repo", "test-cmd", "name", "harness", "seats", "runs-on"])
+const BOOL_FLAGS = new Set(["json", "force", "next", "prev", "open", "fg", "top", "clear-note", "clear-parent", "approve", "block", "auto-review", "agents", "pass", "clear-blocked-by", "clear-tags", "elaborate", "clear", "test-gate", "no-test-gate", "clear-repo", "clear-test-cmd", "enable", "disable", "default"])
+const MULTI_FLAGS = new Set(["finding", "blocked-by", "tag", "trigger", "flag"]) // repeatable: each occurrence appends one value
 export function parse(argv: string[]): Parsed {
   const flags: Record<string, string | true | string[]> = {};
   const positional: string[] = [];
@@ -134,14 +140,51 @@ const arr = (flags: Parsed["flags"], key: string): string[] => {
 /** `@path` reads a file's contents; anything else is the literal value (lane context --instructions/--template). */
 const flagFileValue = (v: string): string => (v.startsWith("@") ? readFileSync(v.slice(1), "utf8") : v);
 
+/** "a,b" engine refs (ids or names) → ids; an unknown ref throws. */
+function engineRefs(db: KanbanDb, raw: string): string[] {
+  return raw
+    .split(",")
+    .map((r) => r.trim())
+    .filter(Boolean)
+    .map((r) => {
+      const e = findEngine(db, r);
+      if (!e || e.id === "default") throw new KanbanError(`unknown engine '${r}' (kanban engine ls)`, "invalid");
+      return e.id;
+    });
+}
+
+/** A fresh engine id from its name: kebab slug, suffixed until free. */
+function engineSlug(db: KanbanDb, name: string): string {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "engine";
+  let id = base;
+  for (let n = 2; db.engine(id) || id === "default"; n++) id = `${base}-${n}`;
+  return id;
+}
+
+/** Who runs on an engine: actor lineups (board + lane copies dedupe by id) and project overrides. */
+function engineUsers(db: KanbanDb, id: string): string[] {
+  const users = new Set<string>();
+  for (const role of ["planner", "plan-reviewer", "builder", "reviewer", "elaborator", "manager", "worker"]) {
+    if (db.agentConfig(role)?.runsOn?.includes(id)) users.add(role);
+  }
+  for (const ctx of Object.values(db.laneContexts())) {
+    for (const a of ctx?.actors ?? []) if (a.config?.runsOn?.includes(id)) users.add(a.id);
+  }
+  for (const p of db.listProjects()) {
+    for (const o of db.listProjectAgentConfigs(p.name)) if (o.config.runsOn?.includes(id)) users.add(`${o.actor}@${p.name}`);
+  }
+  return [...users];
+}
+
 /** Human-readable one-screen view of a lane's workflow context (`kanban lane context <ref>`). */
-function laneContextSummary(lane: { id: string; name: string }, ctx: LaneContext): string {
+function laneContextSummary(lane: { id: string; name: string }, ctx: LaneContext, db?: KanbanDb): string {
   const lines: string[] = [`${lane.id}  ${lane.name}`];
   if (ctx.artifact || ctx.template) {
     lines.push(`  artifact: ${ctx.artifact ?? "—"}${ctx.template ? ` · template ${ctx.template.length} chars` : ""}`);
   }
   ctx.actors.forEach((a, i) => {
-    lines.push(`  actor ${i + 1}. ${a.id} (${a.author})${a.config?.model ? ` · ${a.config.model}` : ""}`);
+    const runsOn = (a.config?.runsOn ?? []).map((id) => db?.engine(id)?.name ?? id);
+    lines.push(`  actor ${i + 1}. ${a.id} (${a.author})${runsOn.length ? ` · runs on ${runsOn.join(" → ")}` : ""}`);
   });
   lines.push(`  triggers: ${ctx.triggers.map((t) => t.kind).join(", ")}`);
   if (ctx.exits?.length) {
@@ -244,7 +287,7 @@ export interface ServeWarning {
     | "serve-dirty"
     | "serve-version-split"
     | "serve-head-split"
-    | "pool-no-healthy-slots";
+    | "engine-cooling";
   message: string;
 }
 
@@ -292,7 +335,7 @@ interface ActivitySession {
   startedAt: number;
   model?: string;
   modelLabel?: string;
-  pool?: string;
+  engine?: string;
 }
 interface ActivityQueued {
   taskId: string;
@@ -302,8 +345,8 @@ interface ActivityQueued {
 interface ActivitySnapshot {
   sessions: ActivitySession[];
   queued: ActivityQueued[];
-  incidents?: SlotIncident[];
-  pools?: PoolHealthSummary[];
+  incidents?: EngineIncident[];
+  engines?: EngineHealthSummary[];
 }
 
 /** pid liveness via signal 0 — EPERM (alive but not ours) still counts; ESRCH means gone. */
@@ -396,12 +439,12 @@ export async function serveWarnings(port: number): Promise<ServeWarning[]> {
   try {
     const actRes = await fetch(`http://127.0.0.1:${port}/activity`, { signal: AbortSignal.timeout(1500) });
     const act = (await actRes.json().catch(() => null)) as Partial<ActivitySnapshot> | null;
-    for (const pool of act?.pools ?? []) {
-      if (pool.totalSlots > 0 && pool.coolingSlots === pool.totalSlots) {
-        const lastPart = pool.lastCause ? `, last ${pool.lastCause}` : "";
+    for (const e of act?.engines ?? []) {
+      if (e.coolingUntil && e.coolingUntil > Date.now()) {
+        const lastPart = e.lastCause ? `, last ${e.lastCause}` : "";
         out.push({
-          kind: "pool-no-healthy-slots",
-          message: `pool '${pool.poolName}' has no healthy slots (${pool.coolingSlots}/${pool.totalSlots} cooling${lastPart}) — edit the pool to reset cooldowns`,
+          kind: "engine-cooling",
+          message: `engine '${e.engineName}' is cooling (${e.account}${lastPart}) — every engine on that account waits; edit the engine to reset`,
         });
       }
     }
@@ -1187,7 +1230,7 @@ async function main(): Promise<number> {
                     sessions: parsed.sessions ?? [],
                     queued: parsed.queued ?? [],
                     incidents: parsed.incidents ?? [],
-                    pools: parsed.pools ?? [],
+                    engines: parsed.engines ?? [],
                   }
                 : null;
             } catch {
@@ -1217,7 +1260,7 @@ async function main(): Promise<number> {
               sessions: activity[i]?.sessions ?? [],
               queued: activity[i]?.queued ?? [],
               incidents: activity[i]?.incidents ?? [],
-              pools: activity[i]?.pools ?? [],
+              engines: activity[i]?.engines ?? [],
             })),
             abandonedLeases: abandoned,
           });
@@ -1249,7 +1292,7 @@ async function main(): Promise<number> {
                 ? "cooldown expired"
                 : `cooldown ${ageShort(inc.cooldownUntil - now)} left`;
             out(
-              `  incident  ${inc.poolName} slot ${inc.slotIndex}  ${inc.cause} ×${inc.count}  first ${ageShort(now - inc.firstSeenAt)} ago  ${cooldownStr}`,
+              `  incident  ${inc.account} (via ${inc.engineName})  ${inc.cause} ×${inc.count}  first ${ageShort(now - inc.firstSeenAt)} ago  ${cooldownStr}`,
             );
           }
           if (
@@ -1353,7 +1396,7 @@ async function main(): Promise<number> {
             const ref = subRest[0] ?? "";
             if (!ref) {
               throw new KanbanError(
-                "usage: kanban lane context <ref> [--json] [--clear] [--from <file>] [--actor <id>] [--author <pi-name>] [--instructions <text|@file>] [--template <text|@file>] [--artifact <name>] [--trigger <on-enter|human-comment>]… [--approve-to <lane>] [--cap <n>] [--provider <p>] [--model <m>] [--thinking <t>] [--test-gate | --no-test-gate]",
+                "usage: kanban lane context <ref> [--json] [--clear] [--from <file>] [--actor <id>] [--author <pi-name>] [--instructions <text|@file>] [--template <text|@file>] [--artifact <name>] [--trigger <on-enter|human-comment>]… [--approve-to <lane>] [--cap <n>] [--runs-on <engine,…>] [--test-gate | --no-test-gate]",
                 "invalid",
               );
             }
@@ -1374,10 +1417,10 @@ async function main(): Promise<number> {
               }
               const saved = db.setLaneContext(lane.id, parsed);
               if (json) jsonOut({ laneId: lane.id, context: saved });
-              else out(laneContextSummary(lane, saved!));
+              else out(laneContextSummary(lane, saved!, db));
               return 0;
             }
-            if (str(flags, "actor") || str(flags, "instructions") || str(flags, "template") || str(flags, "artifact") || arr(flags, "trigger").length > 0 || str(flags, "approve-to") || str(flags, "cap") || str(flags, "provider") || str(flags, "model") || str(flags, "thinking") || flags["test-gate"] || flags["no-test-gate"] || flags.author !== undefined) {
+            if (str(flags, "actor") || str(flags, "instructions") || str(flags, "template") || str(flags, "artifact") || arr(flags, "trigger").length > 0 || str(flags, "approve-to") || str(flags, "cap") || str(flags, "runs-on") || flags["test-gate"] || flags["no-test-gate"] || flags.author !== undefined) {
               const ctx: LaneContext = db.laneContext(lane.id) ?? { actors: [], triggers: [] };
               ctx.actors = [...ctx.actors];
               ctx.triggers = [...ctx.triggers];
@@ -1389,17 +1432,16 @@ async function main(): Promise<number> {
                 actor = { id: actorId, author: "", instructions: "" };
                 ctx.actors.push(actor);
               }
-              if (!actor && (flags.author !== undefined || str(flags, "instructions") || str(flags, "provider") || str(flags, "model") || str(flags, "thinking"))) {
-                throw new KanbanError("--author/--instructions/--provider/--model/--thinking need --actor (or an existing actor on the lane)", "invalid");
+              if (!actor && (flags.author !== undefined || str(flags, "instructions") || str(flags, "runs-on"))) {
+                throw new KanbanError("--author/--instructions/--runs-on need --actor (or an existing actor on the lane)", "invalid");
               }
               if (actor) {
                 if (flags.author !== undefined) actor.author = str(flags, "author") ?? "";
                 const instr = str(flags, "instructions");
                 if (instr) actor.instructions = flagFileValue(instr);
                 const config: AgentConfig = { ...actor.config };
-                if (str(flags, "provider")) config.provider = str(flags, "provider");
-                if (str(flags, "model")) config.model = str(flags, "model");
-                if (str(flags, "thinking")) config.thinking = str(flags, "thinking") as AgentThinking;
+                const runsOn = str(flags, "runs-on");
+                if (runsOn) config.runsOn = engineRefs(db, runsOn);
                 if (Object.keys(config).length > 0) actor.config = config;
               }
               const template = str(flags, "template");
@@ -1437,12 +1479,12 @@ async function main(): Promise<number> {
               if (ctx.triggers.length === 0) ctx.triggers = [{ kind: "on-enter" }];
               const saved = db.setLaneContext(lane.id, ctx);
               if (json) jsonOut({ laneId: lane.id, context: saved });
-              else out(laneContextSummary(lane, saved!));
+              else out(laneContextSummary(lane, saved!, db));
               return 0;
             }
             const context = db.laneContext(lane.id);
             if (json) jsonOut({ laneId: lane.id, context });
-            else if (context) out(laneContextSummary(lane, context));
+            else if (context) out(laneContextSummary(lane, context, db));
             else {
               out(`${lane.id}  no workflow context — set one: kanban lane context ${lane.id} --actor <id> --author <pi-name> --instructions <text>`);
             }
@@ -1451,6 +1493,98 @@ async function main(): Promise<number> {
           default:
             throw new KanbanError(`unknown lane subcommand '${sub}' (ls | add | rename | rm | limit | context)`, "invalid");
         }
+      }
+
+      case "engine": {
+        const [sub = "ls", ...subRest] = positional;
+        if (sub === "ls") {
+          const engines = db.engines();
+          const def = db.defaultEngineId();
+          if (json) {
+            jsonOut({ engines, defaultEngine: def, maxWorkers: db.maxWorkers() });
+            return 0;
+          }
+          if (engines.length === 0) out(c.dim("no engines — every actor runs on pi's own default (add one: kanban engine add <name> --harness pi --provider <p> --model <m>)"));
+          for (const e of engines) {
+            const users = engineUsers(db, e.id);
+            out(
+              `${e.id.padEnd(12)} ${e.name.padEnd(24)} ${engineLabel(e).padEnd(40)} ${e.seats} seat${e.seats === 1 ? "" : "s"}${e.enabled ? "" : c.dim(" · disabled")}${e.id === def ? c.dim(" · board default") : ""}${users.length ? c.dim(` · used by ${users.join(", ")}`) : ""}`,
+            );
+          }
+          out(c.dim(`board concurrency ${db.maxWorkers()} · empty lineups run on ${def ? db.engine(def)?.name : "pi default"}`));
+          return 0;
+        }
+        if (sub === "add" || sub === "set") {
+          const ref = subRest.join(" ").trim();
+          if (!ref) {
+            throw new KanbanError(
+              `usage: kanban engine ${sub} <${sub === "add" ? "name" : "id|name"}> [--name <n>] [--harness pi|claude] [--provider <p>] [--model <m>] [--thinking <t>] [--seats <n>] [--flag <f>]… [--enable|--disable] [--default]`,
+              "invalid",
+            );
+          }
+          const existing = sub === "set" ? findEngine(db, ref) : null;
+          if (sub === "set" && (!existing || existing.id === "default")) throw new KanbanError(`engine '${ref}' not found`, "not-found");
+          const name = str(flags, "name") ?? existing?.name ?? ref;
+          const id = existing?.id ?? engineSlug(db, name);
+          const pick = <K extends "provider" | "model" | "thinking">(k: K) => (flags[k] !== undefined ? (str(flags, k) ?? "") : (existing?.[k] ?? ""));
+          const seatsRaw = str(flags, "seats");
+          const saved = db.setEngine(id, {
+            name,
+            harness: (str(flags, "harness") ?? existing?.harness ?? "pi") as "pi" | "claude",
+            provider: pick("provider"),
+            model: pick("model"),
+            thinking: pick("thinking") as AgentThinking,
+            flags: arr(flags, "flag").length > 0 ? arr(flags, "flag") : (existing?.flags ?? []),
+            seats: seatsRaw !== undefined ? Number(seatsRaw) : (existing?.seats ?? 1),
+            enabled: flags.disable ? false : flags.enable ? true : (existing?.enabled ?? true),
+          });
+          if (flags.default) db.setDefaultEngine(saved.id);
+          if (json) jsonOut(saved);
+          else out(`${saved.id}  ${saved.name}  ${engineLabel(saved)}  ${saved.seats} seat${saved.seats === 1 ? "" : "s"}${flags.default ? " · board default" : ""}`);
+          return 0;
+        }
+        if (sub === "rm") {
+          const e = findEngine(db, subRest.join(" "));
+          if (!e || e.id === "default") throw new KanbanError(`engine '${subRest.join(" ")}' not found`, "not-found");
+          const users = engineUsers(db, e.id);
+          db.deleteEngine(e.id);
+          if (json) jsonOut({ ok: true, id: e.id, droppedFrom: users });
+          else out(`${e.id}  deleted${users.length ? ` — dropped from ${users.join(", ")}` : ""}`);
+          return 0;
+        }
+        if (sub === "default") {
+          const ref = subRest.join(" ").trim();
+          const id = ref === "" || ref === "none" ? null : (findEngine(db, ref)?.id ?? ref);
+          const set = db.setDefaultEngine(id === "default" ? null : id);
+          out(`board default engine → ${set ? db.engine(set)!.name : "pi default"}`);
+          return 0;
+        }
+        throw new KanbanError(`unknown engine subcommand '${sub}' (ls | add | set | rm | default)`, "invalid");
+      }
+
+      case "explain": {
+        const actor = positional[0];
+        if (!actor) throw new KanbanError("usage: kanban explain <actor> [--project <name>]", "invalid");
+        const project = str(flags, "project");
+        // seats/cooldowns live in the serve process — ask it, else explain statically
+        const port = str(flags, "port") ?? process.env.KANBAN_PORT ?? "4600";
+        try {
+          const res = await fetch(`http://127.0.0.1:${port}/explain/${encodeURIComponent(actor)}${project ? `?project=${encodeURIComponent(project)}` : ""}`, {
+            signal: AbortSignal.timeout(1500),
+          });
+          if (res.ok) {
+            const body = (await res.json()) as { text: string };
+            if (json) jsonOut(body);
+            else out(body.text);
+            return 0;
+          }
+        } catch {
+          /* no serve — static explanation below */
+        }
+        const x = explain(db, actor, project);
+        if (json) jsonOut(x);
+        else out(`${formatExplanation(x)}\n${c.dim("  (no serve reachable — seat and cooldown state not shown)")}`);
+        return 0;
       }
 
       case "worker": {

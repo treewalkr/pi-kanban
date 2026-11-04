@@ -79,16 +79,55 @@ export type AgentRole = BuiltinAgentRole | (string & {});
 
 export type AgentThinking = "" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-/** Per-role pi agent settings for the auto-review loop; stored as one JSON blob per role. */
-export interface AgentConfig {
+/** Which headless harness an engine spawns: pi (`pi --mode json`) or Claude Code (`claude -p`). */
+export type HarnessId = "pi" | "claude";
+
+/**
+ * A named, coherent run target — the only home of model config (card: engines).
+ * pi engines carry provider/model/thinking; claude engines carry only a model
+ * alias (claude resolves its own auth and thinking). `seats` caps concurrent
+ * sessions on this engine; `flags` are raw harness flags.
+ */
+export interface Engine {
+  id: string;
+  name: string;
+  harness: HarnessId;
   provider?: string;
   model?: string;
   thinking?: AgentThinking;
+  flags: string[];
+  seats: number;
+  enabled: boolean;
+  updatedAt: number;
+}
+
+export type EngineInput = Omit<Engine, "id" | "updatedAt" | "flags" | "seats" | "enabled"> & {
+  flags?: string[];
+  seats?: number;
+  enabled?: boolean;
+};
+
+export const MAX_ENGINE_SEATS = 12;
+
+/**
+ * Per-actor agent behavior for the auto-agent loop; stored as one JSON blob per role.
+ * Which model runs is never here: `runsOn` is the actor's engine lineup (first
+ * available engine wins, the rest are fallbacks; empty = board default engine).
+ */
+export interface AgentConfig {
+  runsOn?: string[]; // engine ids, in preference order
   skills?: string[]; // paths passed to pi as --skill
   context?: string; // passed as --append-system-prompt
   tools?: string;
-  extraArgs?: string[]; // raw pi flags
+  extraArgs?: string[]; // raw pi flags (pi engines only — claude engines carry their own flags)
   timeoutMs?: number;
+}
+
+/** Pre-engines model fields, read only by the one-time fold (migrateEngines). */
+interface LegacyModelFields {
+  provider?: string;
+  model?: string;
+  thinking?: AgentThinking;
 }
 
 /** One agent on a lane's workflow chain (card 3n96c): its author, prompt, and settings. */
@@ -106,7 +145,7 @@ export interface LaneActor {
   /** Optional label + hint for session-death comments. */
   deathLabel?: string;
   deathHint?: string;
-  /** Per-actor pi agent configuration (model, provider, thinking, skills, context, tools, extraArgs, timeoutMs). */
+  /** Per-actor agent configuration (engine lineup `runsOn`, skills, context, tools, extraArgs, timeoutMs). */
   config?: AgentConfig;
 }
 
@@ -183,22 +222,12 @@ export interface LaneContext {
   testGate?: boolean;
 }
 
-export interface PoolSlot {
-  provider?: string;
-  model?: string;
-  thinking?: AgentThinking;
-}
-
-export interface WorkerPool {
-  id: string;
-  name: string;
-  enabled: boolean;
-  /** Built-in loop roles only — pools serve the loop, not custom lane actors. */
-  roles: BuiltinAgentRole[];
-  slots: PoolSlot[];
-  /** Max concurrent sessions from this pool; absent = slots.length. */
+/** Pre-engines worker pool blob (worker_pools rows stay as an inert backup after the fold). */
+interface LegacyPool {
+  enabled?: boolean;
+  roles?: string[];
+  slots?: LegacyModelFields[];
   maxWorkers?: number;
-  updatedAt: number;
 }
 
 /** One dispatch of a lane worker — queued by CLI/manager, drained by the serve-process runner (lane-workers.ts). */
@@ -551,6 +580,12 @@ CREATE TABLE IF NOT EXISTS elaboration_requests (
 );
 CREATE TABLE IF NOT EXISTS worker_pools (
   id TEXT PRIMARY KEY,
+  config TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS engines (
+  id TEXT PRIMARY KEY,
+  position INTEGER NOT NULL,
   config TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -1286,6 +1321,7 @@ export class KanbanDb {
     this.migratePlansTable();
     this.migrateProjectsSeed();
     this.migrateLaneContexts();
+    this.migrateEngines();
     this.backfillLaneEvents();
   }
 
@@ -1486,6 +1522,155 @@ export class KanbanDb {
         this.q("UPDATE lanes SET context = ? WHERE id = ?").run(JSON.stringify(ctx), laneId);
       }
       this.q("INSERT OR REPLACE INTO board_state (key, value) VALUES ('lane_contexts_seeded', '1')").run();
+    });
+  }
+
+  /**
+   * One-time fold (card: engines): every distinct (provider, model, thinking)
+   * the old surfaces could spawn — pool slots, role configs, project overrides —
+   * becomes an engine, pool slot order becomes each covered role's lineup, and
+   * the legacy model fields are stripped. Exact preservation: a pool's slots
+   * become seats on its engines (only slots below the pool's maxWorkers ever
+   * ran); a role's own model shadowed by a pool is dropped, as it never ran.
+   * worker_pools rows stay as an inert backup. Guarded by a board_state flag.
+   */
+  private migrateEngines(): void {
+    const flagged = () =>
+      this.q("SELECT value FROM board_state WHERE key = 'engines_folded'").get() as { value: string } | undefined;
+    if (flagged()) return;
+    this.tx(() => {
+      if (flagged()) return;
+      const parse = <T>(raw: string): T | null => {
+        try {
+          return JSON.parse(raw) as T;
+        } catch {
+          return null;
+        }
+      };
+      const roleRows = this.q("SELECT role, config FROM agent_configs").all() as Array<{ role: string; config: string }>;
+      const legacy = new Map<string, AgentConfig & LegacyModelFields>();
+      for (const r of roleRows) {
+        const cfg = parse<AgentConfig & LegacyModelFields>(r.config);
+        if (cfg) legacy.set(r.role, cfg);
+      }
+      const engines: Array<{ id: string; name: string; combo: LegacyModelFields; seats: number }> = [];
+      const byKey = new Map<string, (typeof engines)[number]>();
+      const keyOf = (c: LegacyModelFields) => [c.provider ?? "", c.model ?? "", c.thinking ?? ""].join("\u0000");
+      const engineFor = (c: LegacyModelFields, addSeats: number) => {
+        const key = keyOf(c);
+        let e = byKey.get(key);
+        if (!e) {
+          e = { id: `eng-${engines.length + 1}`, name: "", combo: c, seats: 0 };
+          engines.push(e);
+          byKey.set(key, e);
+        }
+        e.seats += addSeats;
+        return e;
+      };
+      const combo = (...layers: Array<LegacyModelFields | undefined>): LegacyModelFields => {
+        const c: LegacyModelFields = {};
+        for (const l of layers) {
+          if (l?.provider?.trim()) c.provider = l.provider.trim();
+          if (l?.model?.trim()) c.model = l.model.trim();
+          if (l?.thinking) c.thinking = l.thinking;
+        }
+        return c;
+      };
+      const hasModel = (c: LegacyModelFields | undefined) => Boolean(c?.provider?.trim() || c?.model?.trim() || c?.thinking);
+      const lineups = new Map<string, string[]>();
+      const push = (role: string, id: string) => {
+        const l = lineups.get(role) ?? [];
+        if (!l.includes(id)) l.push(id);
+        lineups.set(role, l);
+      };
+      const pools = this.q("SELECT config FROM worker_pools ORDER BY rowid").all() as Array<{ config: string }>;
+      for (const row of pools) {
+        const pool = parse<LegacyPool>(row.config);
+        if (!pool?.enabled || !Array.isArray(pool.slots) || !Array.isArray(pool.roles)) continue;
+        const cap = Math.min(pool.maxWorkers ?? pool.slots.length, pool.slots.length);
+        for (let i = 0; i < cap; i++) {
+          const seen = new Set<string>(); // an inherit slot serving roles with different models seats each once
+          for (const role of pool.roles) {
+            const c = combo(legacy.get(role), pool.slots[i]);
+            const key = keyOf(c);
+            const e = engineFor(c, seen.has(key) ? 0 : 1);
+            seen.add(key);
+            push(role, e.id);
+          }
+        }
+      }
+      for (const [role, cfg] of legacy) {
+        if (lineups.has(role) || !hasModel(cfg)) continue;
+        push(role, engineFor(combo(cfg), 1).id);
+      }
+      const overrides = this.q("SELECT project, actor, config FROM project_agent_configs").all() as Array<{
+        project: string;
+        actor: string;
+        config: string;
+      }>;
+      const overrideLineups = new Map<string, string[]>();
+      for (const o of overrides) {
+        const cfg = parse<AgentConfig & LegacyModelFields>(o.config);
+        if (!cfg || !hasModel(cfg)) continue;
+        // a model-only override used to merge over the role's provider: fold the same pair
+        const base = legacy.get(o.actor);
+        const c = combo(cfg.model && !cfg.provider ? { provider: base?.provider } : undefined, cfg);
+        overrideLineups.set(`${o.project}\u0000${o.actor}`, [engineFor(c, 1).id]);
+      }
+      // names: model (last path segment) · thinking, provider-qualified on collision
+      const taken = new Set<string>();
+      for (const e of engines) {
+        const base = [e.combo.model?.split("/").pop() || "pi default", e.combo.thinking].filter(Boolean).join(" · ");
+        let name = base;
+        if (taken.has(name.toLowerCase()) && e.combo.provider) name = `${base} (${e.combo.provider})`;
+        for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base} #${n}`;
+        taken.add(name.toLowerCase());
+        e.name = name;
+      }
+      const now = Date.now();
+      engines.forEach((e, position) => {
+        const cfg: Record<string, unknown> = { name: e.name, harness: "pi", flags: [], seats: Math.min(MAX_ENGINE_SEATS, Math.max(1, e.seats)), enabled: true };
+        if (e.combo.provider) cfg.provider = e.combo.provider;
+        if (e.combo.model) cfg.model = e.combo.model;
+        if (e.combo.thinking) cfg.thinking = e.combo.thinking;
+        this.q("INSERT OR IGNORE INTO engines (id, position, config, updated_at) VALUES (?, ?, ?, ?)").run(e.id, position, JSON.stringify(cfg), now);
+      });
+      const strip = (cfg: AgentConfig & LegacyModelFields, runsOn: string[] | undefined): AgentConfig => {
+        const { provider: _p, model: _m, thinking: _t, ...rest } = cfg;
+        const out: AgentConfig = { ...rest };
+        if (runsOn && runsOn.length > 0) out.runsOn = runsOn;
+        else delete out.runsOn;
+        return out;
+      };
+      for (const [role, cfg] of legacy) {
+        this.q("UPDATE agent_configs SET config = ? WHERE role = ?").run(JSON.stringify(strip(cfg, lineups.get(role))), role);
+      }
+      const laneRows = this.q("SELECT id, context FROM lanes WHERE context IS NOT NULL").all() as Array<{ id: string; context: string }>;
+      for (const row of laneRows) {
+        const ctx = parse<LaneContext>(row.context);
+        if (!ctx || !Array.isArray(ctx.actors)) continue;
+        let changed = false;
+        for (const actor of ctx.actors) {
+          const runsOn = lineups.get(actor.id);
+          if (!actor.config && !runsOn) continue;
+          const next = strip({ ...(legacy.get(actor.id) ?? actor.config ?? {}) } as AgentConfig & LegacyModelFields, runsOn);
+          if (Object.keys(next).length > 0) actor.config = next;
+          else delete actor.config;
+          changed = true;
+        }
+        if (changed) this.q("UPDATE lanes SET context = ? WHERE id = ?").run(JSON.stringify(ctx), row.id);
+      }
+      for (const o of overrides) {
+        const cfg = parse<AgentConfig & LegacyModelFields>(o.config);
+        if (!cfg) continue;
+        const runsOn = overrideLineups.get(`${o.project}\u0000${o.actor}`);
+        this.q("UPDATE project_agent_configs SET config = ? WHERE project = ? AND actor = ?").run(
+          JSON.stringify(strip(cfg, runsOn ?? cfg.runsOn)),
+          o.project,
+          o.actor,
+        );
+      }
+      this.q("INSERT OR REPLACE INTO board_state (key, value) VALUES ('engines_folded', '1')").run();
     });
   }
 
@@ -1735,9 +1920,10 @@ export class KanbanDb {
   /** Strip empty strings from an override agent config; empty skills/extraArgs preserved if present. */
   private cleanProjectOverride(config: AgentConfig): AgentConfig {
     const clean: AgentConfig = {};
-    if (config.provider?.trim()) clean.provider = config.provider.trim();
-    if (config.model?.trim()) clean.model = config.model.trim();
-    if (config.thinking) clean.thinking = config.thinking;
+    if (config.runsOn !== undefined) {
+      const runsOn = this.cleanRunsOn(config.runsOn);
+      if (runsOn.length > 0) clean.runsOn = runsOn;
+    }
     if (config.skills !== undefined) {
       clean.skills = config.skills.map((s) => s.trim()).filter(Boolean);
     }
@@ -3718,9 +3904,8 @@ export class KanbanDb {
   /** Strip empty strings/arrays from an agent config (the stored shape). */
   private cleanAgentConfig(config: AgentConfig): AgentConfig {
     const clean: AgentConfig = {};
-    if (config.provider?.trim()) clean.provider = config.provider.trim();
-    if (config.model?.trim()) clean.model = config.model.trim();
-    if (config.thinking) clean.thinking = config.thinking;
+    const runsOn = this.cleanRunsOn(config.runsOn ?? []);
+    if (runsOn.length > 0) clean.runsOn = runsOn;
     const skills = (config.skills ?? []).map((s) => s.trim()).filter(Boolean);
     if (skills.length > 0) clean.skills = skills;
     if (config.context?.trim()) clean.context = config.context.trim();
@@ -3739,137 +3924,196 @@ export class KanbanDb {
     ).run(role, JSON.stringify(clean), Date.now());
   }
 
-  // ---------- worker pools ----------
+  /** Trimmed, deduped engine ids; an id that names no engine throws (a lineup never dangles). */
+  private cleanRunsOn(runsOn: string[]): string[] {
+    const ids: string[] = [];
+    for (const raw of runsOn) {
+      const id = raw.trim();
+      if (!id || ids.includes(id)) continue;
+      if (!this.engine(id)) throw new KanbanError(`unknown engine '${id}'`, "invalid");
+      ids.push(id);
+    }
+    return ids;
+  }
 
-  pools(): WorkerPool[] {
-    const rows = this.q("SELECT id, config, updated_at FROM worker_pools ORDER BY rowid").all() as Array<{
+  // ---------- engines ----------
+
+  private engineFromRow(r: { id: string; config: string; updated_at: number }): Engine | null {
+    let parsed: Partial<Engine>;
+    try {
+      parsed = JSON.parse(r.config) as Partial<Engine>;
+    } catch {
+      return null; // a corrupt row reads as absent — one bad blob never stops the loop
+    }
+    const e: Engine = {
+      id: r.id,
+      name: parsed.name ?? r.id,
+      harness: parsed.harness === "claude" ? "claude" : "pi",
+      flags: Array.isArray(parsed.flags) ? parsed.flags : [],
+      seats: Number.isInteger(parsed.seats) ? parsed.seats! : 1,
+      enabled: parsed.enabled !== false,
+      updatedAt: r.updated_at,
+    };
+    if (parsed.provider) e.provider = parsed.provider;
+    if (parsed.model) e.model = parsed.model;
+    if (parsed.thinking) e.thinking = parsed.thinking;
+    return e;
+  }
+
+  /** Every engine, in registry order (position, then creation). */
+  engines(): Engine[] {
+    const rows = this.q("SELECT id, config, updated_at FROM engines ORDER BY position, rowid").all() as Array<{
       id: string;
       config: string;
       updated_at: number;
     }>;
-    return rows.map((r) => {
-      const parsed = JSON.parse(r.config);
-      const pool: WorkerPool = {
-        id: r.id,
-        name: parsed.name,
-        enabled: Boolean(parsed.enabled),
-        roles: parsed.roles,
-        slots: parsed.slots,
-        updatedAt: r.updated_at,
+    return rows.map((r) => this.engineFromRow(r)).filter((e): e is Engine => e !== null);
+  }
+
+  engine(id: string): Engine | null {
+    const row = this.q("SELECT id, config, updated_at FROM engines WHERE id = ?").get(id) as
+      | { id: string; config: string; updated_at: number }
+      | null;
+    return row ? this.engineFromRow(row) : null;
+  }
+
+  /**
+   * Create or fully replace an engine. Coherence is enforced here: a claude
+   * engine has no provider or thinking (claude resolves both itself); seats are
+   * 1–MAX_ENGINE_SEATS; names are unique (case-insensitive) so the CLI can
+   * address engines by name. An update keeps its registry position.
+   */
+  setEngine(id: string, input: EngineInput): Engine {
+    if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(id)) {
+      throw new KanbanError(`engine id '${id}' must be lowercase kebab, up to 48 chars`, "invalid");
+    }
+    const name = input.name?.trim() ?? "";
+    if (!name || name.length > 60) throw new KanbanError("engine name must be 1-60 characters", "invalid");
+    if (input.harness !== "pi" && input.harness !== "claude") {
+      throw new KanbanError("engine harness must be pi or claude", "invalid");
+    }
+    const provider = input.provider?.trim() ?? "";
+    const model = input.model?.trim() ?? "";
+    const thinking = input.thinking ?? "";
+    if (input.harness === "claude" && (provider || thinking)) {
+      throw new KanbanError("a claude engine takes a model alias only — claude resolves its own provider and thinking", "invalid");
+    }
+    if (thinking && !(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as string[]).includes(thinking)) {
+      throw new KanbanError(`unknown thinking level '${thinking}'`, "invalid");
+    }
+    const seats = input.seats ?? 1;
+    if (!Number.isInteger(seats) || seats < 1 || seats > MAX_ENGINE_SEATS) {
+      throw new KanbanError(`engine seats must be between 1 and ${MAX_ENGINE_SEATS}`, "invalid");
+    }
+    for (const other of this.engines()) {
+      if (other.id !== id && other.name.toLowerCase() === name.toLowerCase()) {
+        throw new KanbanError(`engine name '${name}' is taken`, "invalid");
+      }
+    }
+    const cfg: Record<string, unknown> = {
+      name,
+      harness: input.harness,
+      flags: (input.flags ?? []).map((f) => f.trim()).filter(Boolean),
+      seats,
+      enabled: input.enabled !== false,
+    };
+    if (provider) cfg.provider = provider;
+    if (model) cfg.model = model;
+    if (thinking) cfg.thinking = thinking;
+    const now = Date.now();
+    this.tx(() => {
+      const next = (this.q("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM engines").get() as { p: number }).p;
+      this.q(
+        `INSERT INTO engines (id, position, config, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at`,
+      ).run(id, next, JSON.stringify(cfg), now);
+    });
+    return this.engine(id)!;
+  }
+
+  /** Delete an engine and drop it from every lineup, override, and the board default. */
+  deleteEngine(id: string): void {
+    if (!this.engine(id)) throw new KanbanError(`engine ${id} not found`, "not-found");
+    this.tx(() => {
+      this.q("DELETE FROM engines WHERE id = ?").run(id);
+      const drop = (cfg: AgentConfig): boolean => {
+        if (!cfg.runsOn?.includes(id)) return false;
+        cfg.runsOn = cfg.runsOn.filter((x) => x !== id);
+        if (cfg.runsOn.length === 0) delete cfg.runsOn;
+        return true;
       };
-      if (parsed.maxWorkers !== undefined) pool.maxWorkers = parsed.maxWorkers;
-      return pool;
+      for (const r of this.q("SELECT role, config FROM agent_configs").all() as Array<{ role: string; config: string }>) {
+        try {
+          const cfg = JSON.parse(r.config) as AgentConfig;
+          if (drop(cfg)) this.q("UPDATE agent_configs SET config = ? WHERE role = ?").run(JSON.stringify(cfg), r.role);
+        } catch {
+          /* corrupt row stays as is */
+        }
+      }
+      for (const r of this.q("SELECT id, context FROM lanes WHERE context IS NOT NULL").all() as Array<{ id: string; context: string }>) {
+        try {
+          const ctx = JSON.parse(r.context) as LaneContext;
+          let changed = false;
+          for (const a of ctx.actors) {
+            if (a.config && drop(a.config)) {
+              changed = true;
+              if (Object.keys(a.config).length === 0) delete a.config;
+            }
+          }
+          if (changed) this.q("UPDATE lanes SET context = ? WHERE id = ?").run(JSON.stringify(ctx), r.id);
+        } catch {
+          /* corrupt row stays as is */
+        }
+      }
+      for (const r of this.q("SELECT project, actor, config FROM project_agent_configs").all() as Array<{
+        project: string;
+        actor: string;
+        config: string;
+      }>) {
+        try {
+          const cfg = JSON.parse(r.config) as AgentConfig;
+          if (drop(cfg)) {
+            this.q("UPDATE project_agent_configs SET config = ? WHERE project = ? AND actor = ?").run(JSON.stringify(cfg), r.project, r.actor);
+          }
+        } catch {
+          /* corrupt row stays as is */
+        }
+      }
+      if (this.defaultEngineId() === null) {
+        this.q("DELETE FROM board_state WHERE key = 'default_engine' AND value = ?").run(id);
+      }
     });
   }
 
-  pool(id: string): WorkerPool | null {
-    const row = this.q("SELECT id, config, updated_at FROM worker_pools WHERE id = ?").get(id) as
-      | { id: string; config: string; updated_at: number }
-      | undefined;
-    if (!row) return null;
-    const parsed = JSON.parse(row.config);
-    const pool: WorkerPool = {
-      id: row.id,
-      name: parsed.name,
-      enabled: Boolean(parsed.enabled),
-      roles: parsed.roles,
-      slots: parsed.slots,
-      updatedAt: row.updated_at,
-    };
-    if (parsed.maxWorkers !== undefined) pool.maxWorkers = parsed.maxWorkers;
-    return pool;
+  /** Rewrite the registry order; ids must be exactly the existing set. */
+  reorderEngines(ids: string[]): Engine[] {
+    const current = this.engines().map((e) => e.id);
+    const unique = new Set(ids);
+    if (unique.size !== ids.length || ids.length !== current.length || current.some((id) => !unique.has(id))) {
+      throw new KanbanError("engine order must list every engine exactly once", "invalid");
+    }
+    this.tx(() => {
+      ids.forEach((id, i) => this.q("UPDATE engines SET position = ? WHERE id = ?").run(i, id));
+    });
+    return this.engines();
   }
 
-  setPool(
-    id: string,
-    input: { name: string; enabled?: boolean; roles: BuiltinAgentRole[]; slots: PoolSlot[]; maxWorkers?: number },
-  ): WorkerPool {
-    const name = input.name?.trim() ?? "";
-    if (!name) throw new KanbanError("pool name must not be empty", "invalid");
+  /** The engine an empty lineup runs on; null = the built-in "pi default" (pi's own settings, one seat). */
+  defaultEngineId(): string | null {
+    const row = this.q("SELECT value FROM board_state WHERE key = 'default_engine'").get() as { value: string } | undefined;
+    return row && this.engine(row.value) ? row.value : null;
+  }
 
-    const dedupedRoles: BuiltinAgentRole[] = [];
-    const seenRoles = new Set<string>();
-    let invalidRole = false;
-    for (const r of input.roles ?? []) {
-      if (!AGENT_ROLES.has(r)) {
-        invalidRole = true;
-        break;
-      }
-      if (!seenRoles.has(r)) {
-        seenRoles.add(r);
-        dedupedRoles.push(r as BuiltinAgentRole);
-      }
+  setDefaultEngine(id: string | null): string | null {
+    if (id === null) {
+      this.q("DELETE FROM board_state WHERE key = 'default_engine'").run();
+      return null;
     }
-    if (invalidRole || dedupedRoles.length === 0 || dedupedRoles.length > 4) {
-      throw new KanbanError(`pool '${id}' must serve 1-4 known roles`, "invalid");
-    }
-
-    const cleanSlots: PoolSlot[] = [];
-    for (const s of input.slots ?? []) {
-      const cleanSlot: PoolSlot = {};
-      if (s.provider?.trim()) cleanSlot.provider = s.provider.trim();
-      if (s.model?.trim()) cleanSlot.model = s.model.trim();
-      if (s.thinking) cleanSlot.thinking = s.thinking;
-      // fully-inherit slots are valid: they run as lanes on the role's own config
-      cleanSlots.push(cleanSlot);
-    }
-    if (cleanSlots.length === 0 || cleanSlots.length > 8) {
-      throw new KanbanError(`pool '${id}' must have 1-8 slots`, "invalid");
-    }
-
-    if (
-      input.maxWorkers !== undefined &&
-      (!Number.isInteger(input.maxWorkers) || input.maxWorkers < 1 || input.maxWorkers > cleanSlots.length)
-    ) {
-      throw new KanbanError(
-        `pool '${id}' maxWorkers must be between 1 and ${cleanSlots.length} (its slot count)`,
-        "invalid",
-      );
-    }
-
-    const enabled = Boolean(input.enabled);
-
-    let totalEnabledSlots = enabled ? cleanSlots.length : 0;
-    for (const p of this.pools()) {
-      if (p.id !== id && p.enabled) {
-        totalEnabledSlots += p.slots.length;
-      }
-    }
-    if (totalEnabledSlots > 12) {
-      throw new KanbanError("board-wide enabled slots would exceed 12", "invalid");
-    }
-
-    const now = Date.now();
-    const configBlob: Record<string, any> = {
-      name,
-      enabled,
-      roles: dedupedRoles,
-      slots: cleanSlots,
-    };
-    if (input.maxWorkers !== undefined) configBlob.maxWorkers = input.maxWorkers;
-
+    if (!this.engine(id)) throw new KanbanError(`unknown engine '${id}'`, "invalid");
     this.q(
-      `INSERT INTO worker_pools (id, config, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at`,
-    ).run(id, JSON.stringify(configBlob), now);
-
-    const pool: WorkerPool = {
-      id,
-      name,
-      enabled,
-      roles: dedupedRoles,
-      slots: cleanSlots,
-      updatedAt: now,
-    };
-    if (input.maxWorkers !== undefined) pool.maxWorkers = input.maxWorkers;
-    return pool;
-  }
-
-  deletePool(id: string): void {
-    const info = this.q("DELETE FROM worker_pools WHERE id = ?").run(id);
-    if (info.changes === 0) {
-      throw new KanbanError(`no pool '${id}'`, "not-found");
-    }
+      "INSERT INTO board_state (key, value) VALUES ('default_engine', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(id);
+    return id;
   }
 
   // ---------- lane workers ----------
