@@ -134,6 +134,50 @@ test("a supervising child epic counts as in flight for its grandparent", () => {
   expect(db.resolveTask(grand.id).laneId).toBe("done");
 });
 
+// E2. entry auto-done: an epic arriving in Epics with its children already settled
+// completes on arrival, not only on the next child move (review blocker, ceqfq)
+
+test("an epic approved with settled children auto-dones on entry, authored kanban", () => {
+  const epic = db.createTask({ title: "epic", lane: "plan" });
+  const c1 = db.createTask({ title: "c1", lane: "backlog", parent: epic.id });
+  const defer = db.createTask({ title: "defer", lane: "backlog", parent: epic.id });
+  db.updateTask(c1.id, { lane: "done" });
+  db.attach(epic.id, "plan", "# charter");
+  const approved = db.approveTask(epic.id, { author: "user" });
+  expect(approved.task.laneId).toBe("done"); // nothing in flight, a child settled
+  const note = db.comments(epic.id).find((c) => c.body.includes("epic complete"));
+  expect(note?.author).toBe("kanban"); // a board action, not a user comment
+  expect(db.resolveTask(defer.id).laneId).toBe("backlog"); // the defer survives
+});
+
+test("an epic approved with only Backlog children still parks in Epics to supervise", () => {
+  const epic = db.createTask({ title: "epic", lane: "plan" });
+  db.createTask({ title: "c1", lane: "backlog", parent: epic.id });
+  db.attach(epic.id, "plan", "# charter");
+  const approved = db.approveTask(epic.id, { author: "user" });
+  expect(approved.task.laneId).toBe(EPICS_LANE_ID); // waves unreleased — no insta-complete
+});
+
+test("a hand mv into Epics with settled children auto-dones; deleting the last in-flight child does too", () => {
+  const epic = db.createTask({ title: "epic", lane: "plan" });
+  const c1 = db.createTask({ title: "c1", lane: "backlog", parent: epic.id });
+  const defer = db.createTask({ title: "defer", lane: "backlog", parent: epic.id });
+  db.updateTask(c1.id, { lane: "done" });
+  db.moveTask(epic.id, EPICS_LANE_ID);
+  expect(db.resolveTask(epic.id).laneId).toBe("done");
+
+  // same for the delete path: an in-flight child removed from an Epics epic
+  const epic2 = db.createTask({ title: "epic2", lane: "plan" });
+  const c2 = db.createTask({ title: "c2", lane: "backlog", parent: epic2.id });
+  db.createTask({ title: "defer2", lane: "backlog", parent: epic2.id });
+  db.updateTask(epic2.id, { lane: EPICS_LANE_ID }); // parks: c2 in backlog
+  db.updateTask(c2.id, { lane: "implement" }); // now in flight
+  expect(db.resolveTask(epic2.id).laneId).toBe(EPICS_LANE_ID);
+  db.deleteTask(c2.id, true);
+  expect(db.resolveTask(epic2.id).laneId).toBe("done"); // last in-flight child deleted
+  void defer;
+});
+
 // F. check invariants
 
 test("check: epic in Epics with children in workflow lanes is clean; epic in implement warns; defers under a done epic are fine", () => {
