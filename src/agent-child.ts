@@ -19,6 +19,8 @@ export interface AgentChildInput {
   emit: (line: string) => void;
   /** Registers the child's kill handle so shutdown can terminate in-flight sessions; returns an untrack cleanup function. */
   track: (kill: () => void) => () => void;
+  /** Signals raw stdout activity — fires on bytes even when the formatter drops them (a runtime whose events format to null still proves it is alive). */
+  touch?: () => void;
   /** One raw stdout JSONL line → one formatted log line, or null for noise. */
   formatEvent: (line: string) => string | null;
 }
@@ -29,7 +31,7 @@ export interface AgentChildInput {
  * stall timers, JSONL streaming through the runtime's formatter, stderr tail.
  */
 export function runAgentChild(input: AgentChildInput): Promise<SpawnResult> {
-  const { cmd, stdin, cwd, timeoutMs, stallMs, log, emit, track, formatEvent } = input;
+  const { cmd, stdin, cwd, timeoutMs, stallMs, log, emit, track, touch, formatEvent } = input;
   const proc = Bun.spawn({
     cmd,
     cwd,
@@ -85,6 +87,7 @@ export function runAgentChild(input: AgentChildInput): Promise<SpawnResult> {
         if (done) break;
         if (value && value.byteLength > 0) {
           resetStallTimer();
+          touch?.();
         }
         buf += decoder.decode(value, { stream: true });
         let nl: number;

@@ -18,6 +18,7 @@ import {
   defaultSpawn,
   durationFor,
   formatPiEvent,
+  killAgentSession,
   killAgentSessions,
   MAX_SKILL_CHARS,
   modelConfigLabel,
@@ -1615,7 +1616,12 @@ describe("auto-review", () => {
     };
     start(spawnFn, dbFile);
     expect(activitySnapshot().sessions.map((s) => s.taskId)).toEqual([card.id]);
+    const born = activitySnapshot().sessions[0]!;
+    expect(born.lastActivityAt).toBe(born.startedAt); // no output yet — activity starts at birth
+    await sleep(20);
     ctx.emit("session started");
+    const stirred = activitySnapshot().sessions[0]!;
+    expect(stirred.lastActivityAt).toBeGreaterThan(born.startedAt); // a formatted line is activity
     ctx.emit("→ bash: bun test");
     const snap = activitySnapshot().sessions[0]!;
     expect(snap.role).toBe("reviewer");
@@ -1624,6 +1630,62 @@ describe("auto-review", () => {
     finish({ code: 0 });
     await sleep(20);
     expect(activitySnapshot().sessions.some((s) => s.taskId === card.id)).toBe(false);
+  });
+
+  test("activity registry: raw child output counts as activity even when the formatter drops it", async () => {
+    // the zcode case: stream bytes flow but every line formats to null — the log
+    // stays silent while lastActivityAt keeps proving the session alive
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    let ctx!: SpawnContext;
+    let finish!: (result: SpawnResult) => void;
+    const spawnFn: SpawnFn = (_job, context) => {
+      ctx = context;
+      return new Promise<SpawnResult>((resolve) => (finish = resolve));
+    };
+    start(spawnFn, dbFile);
+    const born = activitySnapshot().sessions[0]!;
+    await sleep(20);
+    ctx.touch?.();
+    const touched = activitySnapshot().sessions[0]!;
+    expect(touched.lastActivityAt).toBeGreaterThan(born.startedAt);
+    expect(touched.log).toEqual(["model: default model · max"]); // nothing formatted — only the spawn line
+    finish({ code: 0 });
+    await sleep(20);
+    expect(activitySnapshot().sessions.length).toBe(0);
+  });
+
+  test("killAgentSession ends one session through the normal death path", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const other = cardInReview(w, "other card");
+    let killed = false;
+    let resolveSpawn!: (r: SpawnResult) => void;
+    const spawnFn: SpawnFn = (job, ctx) => {
+      ctx.track(() => {
+        killed = true;
+        resolveSpawn({ code: 143 });
+      });
+      return new Promise<SpawnResult>((r) => (resolveSpawn = r));
+    };
+    start(spawnFn, dbFile);
+    await sleep(150); // one of the two cards holds the serial drain slot
+
+    // the drain is serial — kill whichever session is actually live, not a guessed id
+    const live = activitySnapshot().sessions[0]!;
+    expect([card.id, other.id]).toContain(live.taskId);
+    expect(killAgentSession("nope")).toBe(false); // unknown id: nothing to kill
+    expect(killAgentSession(live.taskId)).toBe(true);
+    expect(killed).toBe(true);
+    await sleep(50);
+    // the killed session leaves a death trace; the untouched card keeps its handoff as the last comment
+    const last = w.comments(live.taskId).at(-1)!;
+    expect(last.author).toBe(REVIEWER_AUTHOR);
+    expect(last.body).toContain("comment on this card to re-trigger");
+    const survivor = live.taskId === card.id ? other.id : card.id;
+    expect(w.comments(survivor).at(-1)!.kind).toBe("handoff");
+    // the killed id is gone; whatever holds the drain slot next is not it
+    expect(activitySnapshot().sessions.every((s) => s.taskId !== live.taskId)).toBe(true);
   });
 
   test("activity registry: stop() clears sessions even with a pending spawn", () => {

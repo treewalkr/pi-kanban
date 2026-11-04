@@ -6,7 +6,7 @@ import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentCo
 import { CLAUDE_MODELS, type ClaudeModel } from "./claude";
 import { explain, formatExplanation, type Explanation } from "./engines";import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
-import { activitySnapshot, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
+import { activitySnapshot, killAgentSession, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
 import { listChatModels, listPiModels } from "./models";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
@@ -1088,6 +1088,17 @@ export const createApp = (
       skills: listPiSkills(),
     }))
     .get("/activity", (): ReturnType<typeof activitySnapshot> => activitySnapshot())
+    // per-session stop: kill flows through the normal death path — death comment,
+    // transcript attach, lease release — and the card's resume offer arms itself
+    .delete(
+      "/sessions/:taskId",
+      ({ params, status }) => {
+        if (!killAgentSession(params.taskId)) return status(404, { error: `no live session for ${params.taskId}` });
+        console.log(`[autoreview] session for ${params.taskId} killed by stop request`);
+        return { ok: true };
+      },
+      { params: t.Object({ taskId: t.String({ minLength: 1, maxLength: 48 }) }) },
+    )
     .put(
       "/agents/:role",
       ({ params, body, status }): AgentConfig | unknown => {

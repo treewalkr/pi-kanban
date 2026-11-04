@@ -78,6 +78,8 @@ export interface SpawnContext {
   emit: (line: string) => void;
   /** Registers the child's kill handle so shutdown can terminate in-flight sessions; returns an untrack cleanup function. */
   track: (kill: () => void) => () => void;
+  /** Signals raw child output — bytes count even when the formatter drops them, proving a quiet session alive. */
+  touch?: () => void;
 }
 
 /** How a spawned session ended: code plus the diagnostics a number can't carry. */
@@ -167,6 +169,8 @@ export interface AgentSessionInfo {
   taskId: string;
   role: AgentRole;
   startedAt: number;
+  /** Last child output (raw bytes or a formatted line) — separates a working session from a wedged one; starts at startedAt. */
+  lastActivityAt: number;
   log: string[];
   model?: string;
   modelLabel?: string;
@@ -226,6 +230,26 @@ export function killAgentSessions(): number {
     }
   }
   return killed;
+}
+
+/** Per-card kill handles for live sessions — one entry per running job, for the per-session stop verb. */
+const sessionKillers = new Map<string, () => void>();
+
+/**
+ * Kill one in-flight agent session (the per-session stop verb). The death flows
+ * through the normal finally/afterJob path — death comment, transcript, lease
+ * release — exactly like a stall or pause kill. Returns false when no live
+ * session runs under that task id.
+ */
+export function killAgentSession(taskId: string): boolean {
+  const kill = sessionKillers.get(taskId);
+  if (!kill) return false;
+  try {
+    kill();
+  } catch {
+    /* already gone */
+  }
+  return true;
 }
 
 /**
@@ -673,11 +697,13 @@ export interface SpawnPiInput {
   emit: (line: string) => void;
   /** Registers the child's kill handle so shutdown can terminate in-flight sessions; returns an untrack cleanup function. */
   track: (kill: () => void) => () => void;
+  /** Signals raw child output — bytes count even when the formatter drops them, proving a quiet session alive. */
+  touch?: () => void;
 }
 
 /** The one pi spawn: the shared agent-child runner over pi's `--mode json` JSONL. */
 export function spawnPi(input: SpawnPiInput): Promise<SpawnResult> {
-  const { cwd, sessionId, prompt, args, timeoutMs, stallMs, log, emit, track } = input;
+  const { cwd, sessionId, prompt, args, timeoutMs, stallMs, log, emit, track, touch } = input;
   // json mode streams JSONL events while the session runs (--print waits for the end)
   return runAgentChild({
     cmd: ["pi", "--mode", "json", "--session-id", sessionId, ...args, prompt],
@@ -687,11 +713,12 @@ export function spawnPi(input: SpawnPiInput): Promise<SpawnResult> {
     log,
     emit,
     track,
+    touch,
     formatEvent: formatPiEvent,
   });
 }
 
-export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, engine, log, emit, track }) => {
+export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, engine, log, emit, track, touch }) => {
   // the loop's log lines stay job-prefixed ("reviewer <id>: stalled — …"); the harness logs bare
   const shared = {
     cwd,
@@ -702,6 +729,7 @@ export const defaultSpawn: SpawnFn = (job, { cwd, timeoutMs, stallMs, config, en
     log: (message: string) => log(`${job.role} ${job.task.id}: ${message}`),
     emit,
     track,
+    touch,
   };
   if (engine.harness === "claude") {
     return spawnClaude({ ...shared, args: claudeFlags(job.role, engine, config, log), resume: job.mode === "resume" });
@@ -1012,10 +1040,12 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       const via = `on engine ${engine.name}${allocated.rank > 0 ? ` (fallback #${allocated.rank})` : ""}`;
       const overrideNote = allocated.source === "project" ? ` — project '${fresh.project}' override` : allocated.source === "env" ? " — KANBAN_ENGINE pin" : "";
       log(`${job.role} start ${job.task.id} "${job.task.title}" (${[label, skills].filter(Boolean).join(" · ")}) ${via}${overrideNote}`);
+      const startedAt = Date.now();
       const session: AgentSessionInfo = {
         taskId: job.task.id,
         role: job.role,
-        startedAt: Date.now(),
+        startedAt,
+        lastActivityAt: startedAt,
         log: [],
         modelLabel: label,
         ...(mc.model ? { model: mc.model } : {}),
@@ -1028,23 +1058,32 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       const stopBeat = track(() => clearInterval(beat));
       sessions.set(job.task.id, session);
       const emit = (line: string): void => {
+        session.lastActivityAt = Date.now();
         session.log.push(line);
         if (session.log.length > MAX_LOG_LINES) session.log.shift();
         log(`${job.role} ${job.task.id} │ ${line}`);
       };
       emit(`model: ${label}`);
       const jobKills = new Set<() => void>();
+      // the raw kill handles this spawn registered (jobKills holds their UNTRACKs —
+      // calling those only detaches; the per-session stop verb wants the kills)
+      const jobKillFns = new Set<() => void>();
       const jobTrack = (kill: () => void): (() => void) => {
+        jobKillFns.add(kill);
         const untrack = track(kill);
         jobKills.add(untrack);
         return () => {
+          jobKillFns.delete(kill);
           jobKills.delete(untrack);
           untrack();
         };
       };
       let result: SpawnResult = { code: 1 };
+      sessionKillers.set(job.task.id, () => {
+        for (const kill of [...jobKillFns]) kill();
+      });
       try {
-        result = await spawnFn(job, { cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, stallMs, config, engine, log, emit, track: jobTrack });
+        result = await spawnFn(job, { cwd, timeoutMs: config?.timeoutMs ?? timeoutMs, stallMs, config, engine, log, emit, track: jobTrack, touch: () => { session.lastActivityAt = Date.now(); } });
         if (result.stalled) emit(`stalled — no output for ${durationFor((result.stalledAfterMs ?? 0) / 1000)}, killed`);
         if (result.timedOut) emit("timed out — killed");
         if (result.stderrTail) emit(`stderr tail:\n${result.stderrTail}`);
@@ -1068,6 +1107,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           }
         }
         sessions.delete(job.task.id);
+        sessionKillers.delete(job.task.id);
         stopBeat();
         clearInterval(beat);
         if (!stopped) {
