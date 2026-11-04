@@ -44,7 +44,7 @@ export function deletePoolShim(db: KanbanDb, id: string): void {
 export const AGENT_ENV_KEYS = ["KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING", "KANBAN_AUTOREVIEW_GATE"];
 export let savedAgentEnv: Record<string, string | undefined> = {};
 
-export function saveAgentEnv(): void {
+function saveAgentEnv(): void {
   savedAgentEnv = Object.fromEntries(AGENT_ENV_KEYS.map((k) => [k, process.env[k]]));
   for (const k of AGENT_ENV_KEYS) delete process.env[k];
 }
@@ -72,7 +72,7 @@ export function makeSkill(name: string, body: string): string {
   return skillDir;
 }
 
-export function cleanupSkillsAndEnv(): void {
+function cleanupSkillsAndEnv(): void {
   for (const d of skillDirs.splice(0)) rmSync(d, { recursive: true, force: true });
   for (const [k, v] of Object.entries(savedAgentEnv)) {
     if (v === undefined) delete process.env[k];
@@ -100,7 +100,7 @@ export function setup(): { dbFile: string; writer: KanbanDb } {
   return { dbFile, writer };
 }
 
-export function teardownLoop(): void {
+function teardownLoop(): void {
   stop?.();
   db?.close();
   writer?.close();
