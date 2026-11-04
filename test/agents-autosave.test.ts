@@ -75,7 +75,7 @@ describe("agents auto-save store", () => {
 
   test("schedule PUTs /agents/:role once after DEBOUNCE_MS with the edited config", async () => {
     jest.useFakeTimers();
-    const config: AgentConfig = { model: "claude-3-7-sonnet", provider: "anthropic" };
+    const config: AgentConfig = { context: "claude-3-7-sonnet", tools: "anthropic" };
     agents.schedule("reviewer", () => config);
 
     expect(calls.length).toBe(0);
@@ -95,11 +95,11 @@ describe("agents auto-save store", () => {
 
   test("rapid schedules coalesce into a single PUT with the latest config", async () => {
     jest.useFakeTimers();
-    agents.schedule("reviewer", () => ({ model: "v1" }));
+    agents.schedule("reviewer", () => ({ context: "v1" }));
     jest.advanceTimersByTime(200);
-    agents.schedule("reviewer", () => ({ model: "v2" }));
+    agents.schedule("reviewer", () => ({ context: "v2" }));
     jest.advanceTimersByTime(200);
-    agents.schedule("reviewer", () => ({ model: "v3" }));
+    agents.schedule("reviewer", () => ({ context: "v3" }));
 
     expect(calls.length).toBe(0);
 
@@ -108,18 +108,18 @@ describe("agents auto-save store", () => {
     await Promise.resolve();
 
     expect(calls.length).toBe(1);
-    expect(calls[0].body).toEqual({ model: "v3" });
+    expect(calls[0].body).toEqual({ context: "v3" });
   });
 
   test("flush() PUTs immediately without waiting for the debounce", async () => {
     jest.useFakeTimers();
-    agents.schedule("reviewer", () => ({ model: "immediate" }));
+    agents.schedule("reviewer", () => ({ context: "immediate" }));
     expect(calls.length).toBe(0);
 
     const ok = await agents.flush();
     expect(ok).toBe(true);
     expect(calls.length).toBe(1);
-    expect(calls[0].body).toEqual({ model: "immediate" });
+    expect(calls[0].body).toEqual({ context: "immediate" });
 
     jest.advanceTimersByTime(DEBOUNCE_MS * 2);
     await Promise.resolve();
@@ -144,7 +144,7 @@ describe("agents auto-save store", () => {
         headers: { "Content-Type": "application/json" },
       });
 
-    agents.schedule("reviewer", () => ({ model: "fail-then-succeed" }));
+    agents.schedule("reviewer", () => ({ context: "fail-then-succeed" }));
     const ok1 = await agents.flush();
 
     expect(ok1).toBe(false);
@@ -157,7 +157,7 @@ describe("agents auto-save store", () => {
 
     expect(ok2).toBe(true);
     expect(calls.length).toBe(2);
-    expect(calls[1].body).toEqual({ model: "fail-then-succeed" });
+    expect(calls[1].body).toEqual({ context: "fail-then-succeed" });
     expect(board.error).toBe("");
     expect(agents.saveState).toBe("saved");
   });
@@ -165,12 +165,12 @@ describe("agents auto-save store", () => {
   test("close() flushes pending edits and only closes on success", async () => {
     // Success case
     agents.open = true;
-    agents.schedule("reviewer", () => ({ model: "close-success" }));
+    agents.schedule("reviewer", () => ({ context: "close-success" }));
     const closePromise = agents.close();
     expect(agents.open).toBe(true);
     await closePromise;
     expect(calls.length).toBe(1);
-    expect(calls[0].body).toEqual({ model: "close-success" });
+    expect(calls[0].body).toEqual({ context: "close-success" });
     expect(agents.open).toBe(false);
     expect(agents.saveState).toBe("idle");
 
@@ -181,7 +181,7 @@ describe("agents auto-save store", () => {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });
-    agents.schedule("reviewer", () => ({ model: "close-fail" }));
+    agents.schedule("reviewer", () => ({ context: "close-fail" }));
     await agents.close();
     expect(agents.open).toBe(true);
     expect(agents.saveState).toBe("failed");
@@ -199,7 +199,7 @@ describe("agents auto-save store", () => {
       });
     };
 
-    agents.schedule("reviewer", () => ({ model: "fail" }));
+    agents.schedule("reviewer", () => ({ context: "fail" }));
     const flushPromise = agents.flush();
 
     await new Promise((r) => setTimeout(r, 10));
@@ -219,7 +219,7 @@ describe("agents auto-save store", () => {
     board.error = "";
     putHandler = async () => {
       await new Promise((r) => setTimeout(r, 20));
-      return new Response(JSON.stringify({ model: "retry-ok" }), {
+      return new Response(JSON.stringify({ context: "retry-ok" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -242,8 +242,8 @@ describe("agents auto-save store", () => {
     let firstPutStarted = false;
 
     putHandler = async (_url, body) => {
-      const b = body as { model?: string };
-      if (b.model === "A") {
+      const b = body as { context?: string };
+      if (b.context === "A") {
         firstPutStarted = true;
         await new Promise<void>((r) => {
           resolveFirstPut = r;
@@ -259,7 +259,7 @@ describe("agents auto-save store", () => {
       });
     };
 
-    agents.schedule("reviewer", () => ({ model: "A" }));
+    agents.schedule("reviewer", () => ({ context: "A" }));
     const flightA = agents.flush();
 
     while (!firstPutStarted) {
@@ -267,7 +267,7 @@ describe("agents auto-save store", () => {
     }
 
     // Schedule B while A is in flight
-    agents.schedule("reviewer", () => ({ model: "B" }));
+    agents.schedule("reviewer", () => ({ context: "B" }));
 
     // Call flush()
     const flushB = agents.flush();
@@ -278,10 +278,10 @@ describe("agents auto-save store", () => {
     await flushB;
 
     expect(calls.length).toBe(2);
-    expect(calls[0].body).toEqual({ model: "A" });
-    expect(calls[1].body).toEqual({ model: "B" });
+    expect(calls[0].body).toEqual({ context: "A" });
+    expect(calls[1].body).toEqual({ context: "B" });
     expect(agents.saveState).toBe("saved");
-    expect(agents.configs.reviewer).toEqual({ model: "B" });
+    expect(agents.configs.reviewer).toEqual({ context: "B" });
   });
 
   test("AgentsSettings markup: no save button; status and close live in the panel header", () => {

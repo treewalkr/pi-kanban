@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 /** Single source for the CLI banner, `kanban version`, and /health — bump with package.json. */
-export const VERSION = "0.9.0";
+export const VERSION = "0.10.0";
 
 // anchored to this file, not cwd: the bin symlink resolves to the real checkout,
 // and tests run from temp DBs without losing git context

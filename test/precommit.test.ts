@@ -104,7 +104,7 @@ function makeSandbox(opts: SandboxOpts = {}): Sandbox {
 import { test } from "bun:test";
 appendFileSync("gate.log", "test\\n");
 `;
-  // gate.sh runs `bun test` (the built-in runner), never `bun run test` —
+  // gate.sh runs `bun test --parallel` (the built-in runner), never `bun run test` —
   // so the stub test file itself appends "test" to gate.log when it runs.
   const smokeBody =
     smokeAppend +

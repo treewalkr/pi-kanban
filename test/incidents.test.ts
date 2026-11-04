@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { WorkerPool } from "../src/db";
+import type { Engine } from "../src/db";
 import {
   classifySpawnFailure,
   DEFAULT_COOLDOWN_MS,
   MAX_COOLDOWN_MS,
   MIN_HINT_COOLDOWN_MS,
   parseWaitHintMs,
-  SlotHealth,
+  EngineHealth,
 } from "../src/incidents";
 
 describe("incidents", () => {
@@ -128,82 +128,50 @@ describe("incidents", () => {
     expect(parseWaitHintMs("no hint here")).toBeNull();
   });
 
-  test("SlotHealth cools a slot, expires, accumulates, resets on pool save, and clamps wait hints", () => {
-    const health = new SlotHealth(DEFAULT_COOLDOWN_MS);
-    const pool: WorkerPool = {
-      id: "pool-1",
-      name: "Builder",
-      enabled: true,
-      roles: ["builder"],
-      slots: [{ model: "m1" }, { model: "m2" }],
-      updatedAt: 1000,
-    };
+  test("EngineHealth cools an account, expires, accumulates, resets on engine edit, clamps wait hints", () => {
+    const health = new EngineHealth(DEFAULT_COOLDOWN_MS);
+    const mk = (id: string, provider: string, extra: Partial<Engine> = {}): Engine => ({
+      id, name: id.toUpperCase(), harness: "pi", provider, model: id, flags: [], seats: 1, enabled: true, updatedAt: 1000, ...extra,
+    });
+    const flash = mk("flash", "zcode");
+    const turbo = mk("turbo", "zcode");
+    const glm = mk("glm", "zai");
+    const sonnet: Engine = { ...mk("sonnet", ""), harness: "claude", provider: undefined };
 
     const now = 5000;
-    // 1. isCooling true until now + cooldownMs
-    const inc1 = health.record(pool, 0, "provider-quota", { now });
-    expect(inc1.count).toBe(1);
-    expect(inc1.firstSeenAt).toBe(now);
-    expect(inc1.lastSeenAt).toBe(now);
+    // 1. a quota on one engine cools every engine on the account — and only that account
+    const inc1 = health.record(flash, "provider-quota", { now });
+    expect(inc1).toMatchObject({ account: "pi:zcode", engineId: "flash", engineName: "FLASH", count: 1, firstSeenAt: now, lastSeenAt: now });
     expect(inc1.cooldownUntil).toBe(now + DEFAULT_COOLDOWN_MS);
-    expect(health.isCooling(pool.id, 0, now)).toBe(true);
-    expect(health.isCooling(pool.id, 0, now + DEFAULT_COOLDOWN_MS - 1)).toBe(true);
-    expect(health.isCooling(pool.id, 0, now + DEFAULT_COOLDOWN_MS)).toBe(false);
+    expect(health.isCooling(flash, now)).toBe(true);
+    expect(health.isCooling(turbo, now)).toBe(true);
+    expect(health.isCooling(glm, now)).toBe(false);
+    expect(health.isCooling(sonnet, now)).toBe(false);
+    expect(health.isCooling(turbo, now + DEFAULT_COOLDOWN_MS - 1)).toBe(true);
+    expect(health.isCooling(turbo, now + DEFAULT_COOLDOWN_MS)).toBe(false);
+    expect(health.nextExpiry(now)).toBe(now + DEFAULT_COOLDOWN_MS);
+    expect(health.nextExpiry(now + DEFAULT_COOLDOWN_MS)).toBeNull();
 
-    // 2. second record -> count: 2, firstSeenAt kept
-    const now2 = now + 1000;
-    const inc2 = health.record(pool, 0, "provider-quota", { now: now2 });
-    expect(inc2.count).toBe(2);
-    expect(inc2.firstSeenAt).toBe(now);
-    expect(inc2.lastSeenAt).toBe(now2);
-    expect(inc2.cooldownUntil).toBe(now2 + DEFAULT_COOLDOWN_MS);
+    // 2. a second record accumulates on the account, firstSeenAt kept
+    const inc2 = health.record(turbo, "provider-quota", { now: now + 1000 });
+    expect(inc2).toMatchObject({ count: 2, firstSeenAt: now, lastSeenAt: now + 1000, engineId: "turbo" });
 
-    // 3. syncPools with bumped updatedAt clears
-    health.syncPools([{ ...pool, updatedAt: 2000 }]);
-    expect(health.incident(pool.id, 0)).toBeNull();
-    expect(health.isCooling(pool.id, 0, now2)).toBe(false);
+    // 3. editing an engine on the account is the manual reset
+    health.syncEngines([flash, turbo, glm]); // unchanged: nothing resets
+    expect(health.isCooling(flash, now + 1000)).toBe(true);
+    health.syncEngines([{ ...turbo, updatedAt: 2000 }]);
+    expect(health.incident(flash)).toBeNull();
+    expect(health.isCooling(flash, now + 1000)).toBe(false);
 
-    // Re-record incident
-    health.record(pool, 0, "provider-quota", { now: now2 });
-    expect(health.incident(pool.id, 0)).not.toBeNull();
+    // 4. wait hints clamp to [1 min, 60 min]
+    expect(health.record(glm, "provider-quota", { waitHintMs: 17_733_000, now }).cooldownUntil).toBe(now + MAX_COOLDOWN_MS);
+    expect(health.record(sonnet, "auth", { waitHintMs: 5_000, now }).cooldownUntil).toBe(now + MIN_HINT_COOLDOWN_MS);
+    expect(health.incidents().map((i) => i.account).sort()).toEqual(["claude:", "pi:zai"]);
 
-    // with a missing pool id drops
-    health.syncPools([]);
-    expect(health.incident(pool.id, 0)).toBeNull();
-
-    // 4. record with waitHintMs: 17_733_000 -> cooldownUntil === now + 60 min (capped)
-    const incCapped = health.record(pool, 0, "provider-quota", {
-      waitHintMs: 17_733_000,
-      now,
-    });
-    expect(incCapped.cooldownUntil).toBe(now + MAX_COOLDOWN_MS);
-
-    // with waitHintMs: 5_000 -> now + 60_000 (floored)
-    const incFloored = health.record(pool, 1, "provider-quota", {
-      waitHintMs: 5_000,
-      now,
-    });
-    expect(incFloored.cooldownUntil).toBe(now + MIN_HINT_COOLDOWN_MS);
-
-    // 5. poolSummaries -> {totalSlots, coolingSlots, lastCause} for enabled pools only
-    const disabledPool: WorkerPool = {
-      id: "pool-disabled",
-      name: "Disabled",
-      enabled: false,
-      roles: ["builder"],
-      slots: [{ model: "m" }],
-      updatedAt: 1000,
-    };
-    health.record(disabledPool, 0, "auth", { now });
-
-    const summaries = health.poolSummaries([pool, disabledPool], now);
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0]).toEqual({
-      poolId: pool.id,
-      poolName: pool.name,
-      totalSlots: 2,
-      coolingSlots: 2,
-      lastCause: "provider-quota",
-    });
+    // 5. summaries: enabled engines only, cooling stamp while the account cools
+    const summaries = health.summaries([glm, { ...flash, enabled: false }], now);
+    expect(summaries).toEqual([
+      { engineId: "glm", engineName: "GLM", account: "pi:zai", seats: 1, coolingUntil: now + MAX_COOLDOWN_MS, lastCause: "provider-quota" },
+    ]);
   });
 });

@@ -22,7 +22,7 @@ have been cut yet.
 
 From the main checkout (never a worktree):
 
-- `bun run check && bun test` — the git-gate pair, green.
+- `bun run check && bun run test` — the git-gate pair, green.
 - `./scripts/install.sh` — re-wires the CLI symlink, skills, and hooks on this
   machine; must run clean.
 - `kanban version` prints the new version.

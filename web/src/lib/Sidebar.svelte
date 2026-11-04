@@ -122,7 +122,7 @@
 
   const SECTIONS: { id: SettingsSection; label: string }[] = [
     { id: "agents", label: "Agents" },
-    { id: "pools", label: "Pools" },
+    { id: "engines", label: "Engines" },
     { id: "general", label: "Settings" },
   ];
 
@@ -391,7 +391,7 @@
     <button type="button" class="foot-btn" title={s.label} aria-label={s.label} onclick={() => agents.openWith(s.id)}>
       {#if s.id === "agents"}
         <Bot size={14} strokeWidth={1.8} />
-      {:else if s.id === "pools"}
+      {:else if s.id === "engines"}
         <Layers size={14} strokeWidth={1.8} />
       {:else}
         <Settings2 size={14} strokeWidth={1.8} />

@@ -12,8 +12,9 @@
  * workers off the loop-owned lanes' threads entirely.
  */
 import { DEFAULT_STALL_MS, deathReason, skillActivationPrompt, spawnPi, type SpawnPiInput, type SpawnResult } from "./autoreview";
-import { chatSkillPath } from "./chat";
-import type { AgentConfig, KanbanDb, LaneWorkerRun, LaneSnapshot } from "./db";
+import { chatSkillPath } from "./skill-activation";
+import type { AgentConfig, Engine, KanbanDb, LaneWorkerRun, LaneSnapshot } from "./db";
+import { builtinDefaultEngine, resolveLineup } from "./engines";
 import { registerShutdown } from "./shutdown";
 
 export const WORKER_AUTHOR_PREFIX = "pi-worker-";
@@ -146,22 +147,32 @@ export function formatSnapshot(snap: LaneSnapshot): string {
 }
 
 /**
+ * The engine a worker run spawns on: the first enabled pi engine in the
+ * worker's lineup (lane workers run pi only — a claude engine is skipped),
+ * else pi's own default.
+ */
+export function workerEngine(db: KanbanDb): Engine {
+  return resolveLineup(db, "worker").engines.find((e) => e.enabled && e.harness === "pi") ?? builtinDefaultEngine();
+}
+
+/**
  * pi flags for a worker: mirrors agentFlags minus the role-based thinking
- * default and minus env overrides — provider/model/thinking/skills/context/
- * tools/extraArgs come from the "worker" agent config only. Configured skills
+ * default — provider/model/thinking come from the worker's engine, skills/
+ * context/tools/extraArgs from the "worker" agent config. Configured skills
  * are activated by injecting their SKILL.md into the appended system prompt.
  */
-export function workerArgs(cfg: AgentConfig | null): string[] {
+export function workerArgs(cfg: AgentConfig | null, engine: Engine = builtinDefaultEngine()): string[] {
   const args: string[] = [];
-  if (cfg?.provider) args.push("--provider", cfg.provider);
-  if (cfg?.model) args.push("--model", cfg.model);
-  if (cfg?.thinking) args.push("--thinking", cfg.thinking);
+  if (engine.provider) args.push("--provider", engine.provider);
+  if (engine.model) args.push("--model", engine.model);
+  if (engine.thinking) args.push("--thinking", engine.thinking);
   for (const skill of cfg?.skills ?? []) args.push("--skill", skill);
   const activated = skillActivationPrompt(cfg?.skills ?? [], (message) => console.warn(`[workers] ${message}`));
   const appended = [cfg?.context, activated].filter(Boolean).join("\n\n");
   if (appended) args.push("--append-system-prompt", appended);
   if (cfg?.tools) args.push("--tools", cfg.tools);
   args.push(...(cfg?.extraArgs ?? []));
+  args.push(...engine.flags);
   return args;
 }
 
@@ -213,7 +224,8 @@ export function startWorkerRunner(opts: {
   const db = opts.db;
   const log = opts.log ?? ((message: string) => console.log(`[workers] ${message}`));
   const spawn = opts.spawnFn ?? spawnPi;
-  const timeoutMs = opts.timeoutMs ?? resolveWorkerTimeoutMs();
+  // explicit option > the worker config's timeout (read fresh per run) > env/default
+  const timeoutFor = (cfg: AgentConfig | null): number => opts.timeoutMs ?? cfg?.timeoutMs ?? resolveWorkerTimeoutMs();
   const maxConcurrent = opts.maxConcurrent ?? resolveWorkerMaxConcurrent();
   const stallMs = DEFAULT_STALL_MS;
 
@@ -254,6 +266,7 @@ export function startWorkerRunner(opts: {
     const startedAt = Date.now();
     const lines: string[] = [];
     let result: SpawnResult;
+    const cfg = db.agentConfig("worker");
     try {
       result = await spawn({
         cwd: opts.cwd,
@@ -263,8 +276,8 @@ export function startWorkerRunner(opts: {
           snapshot: formatSnapshot(db.laneSnapshot(run.laneId)),
           ...(run.focus ? { focus: run.focus } : {}),
         }),
-        args: workerArgs(db.agentConfig("worker")),
-        timeoutMs,
+        args: workerArgs(cfg, workerEngine(db)),
+        timeoutMs: timeoutFor(cfg),
         stallMs,
         log: (message) => log(`${run.laneId} run ${run.id}: ${message}`),
         emit: (line) => {

@@ -18,20 +18,19 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("agentConfig: null → set → roundtrip → replace; unknown role rejected", () => {
+test("agentConfig: null → set → roundtrip → replace; legacy model fields dropped; unknown role rejected", () => {
   expect(db.agentConfig("reviewer")).toBeNull();
+  db.setEngine("deep", { name: "Deep", harness: "pi", provider: "anthropic", model: "claude-opus-4-5", thinking: "max" });
   const saved = db.setAgentConfig("reviewer", {
-    provider: "anthropic",
-    model: " claude-opus-4-5 ",
-    thinking: "max",
+    runsOn: [" deep ", "deep"],
     skills: [" ~/.pi/skills/x ", "", "  "],
     context: "we value perf over features",
     timeoutMs: 1_200_000,
+    // pre-engines clients may still send model fields: they never store
+    ...({ provider: "anthropic", model: "x" } as object),
   });
   expect(saved).toEqual({
-    provider: "anthropic",
-    model: "claude-opus-4-5",
-    thinking: "max",
+    runsOn: ["deep"],
     skills: ["~/.pi/skills/x"],
     context: "we value perf over features",
     timeoutMs: 1_200_000,
@@ -40,107 +39,125 @@ test("agentConfig: null → set → roundtrip → replace; unknown role rejected
   expect(db.agentConfig("builder")).toBeNull();
 
   // set is a full replace — dropped fields disappear
-  expect(db.setAgentConfig("reviewer", { model: "other" })).toEqual({ model: "other" });
+  expect(db.setAgentConfig("reviewer", { context: "other" })).toEqual({ context: "other" });
 
+  // a lineup never dangles
+  expect(() => db.setAgentConfig("reviewer", { runsOn: ["ghost"] })).toThrow(new KanbanError("unknown engine 'ghost'", "invalid"));
   expect(() => db.setAgentConfig("chief", {})).toThrow(KanbanError);
 });
 
-test("pools: set → list → replace → delete; caps and field trimming", () => {
-  expect(db.pools()).toEqual([]);
+test("engines: set → list → replace → reorder → delete; coherence and caps", () => {
+  expect(db.engines()).toEqual([]);
+  const a = db.setEngine("glm", { name: " GLM ", harness: "pi", provider: " zai ", model: " glm-5.3 ", thinking: "max", seats: 2, flags: [" --no-mcp ", ""] });
+  expect(a).toMatchObject({ id: "glm", name: "GLM", harness: "pi", provider: "zai", model: "glm-5.3", thinking: "max", seats: 2, flags: ["--no-mcp"], enabled: true });
+  const b = db.setEngine("sonnet", { name: "Claude Sonnet", harness: "claude", model: "sonnet" });
+  expect(b).toMatchObject({ harness: "claude", model: "sonnet", seats: 1, flags: [] });
+  expect(b.provider).toBeUndefined();
+  expect(db.engines().map((e) => e.id)).toEqual(["glm", "sonnet"]);
 
-  const saved = db.setPool("heavy", {
-    name: " heavy ",
+  // an update keeps its position
+  db.setEngine("glm", { name: "GLM", harness: "pi", provider: "zai", model: "glm-5.3", enabled: false });
+  expect(db.engines().map((e) => e.id)).toEqual(["glm", "sonnet"]);
+  expect(db.engine("glm")).toMatchObject({ enabled: false, seats: 1 });
+  expect(db.engine("glm")?.thinking).toBeUndefined();
+
+  // claude engines are coherent by construction
+  expect(() => db.setEngine("bad", { name: "Bad", harness: "claude", provider: "anthropic" })).toThrow(KanbanError);
+  expect(() => db.setEngine("bad", { name: "Bad", harness: "claude", thinking: "minimal" })).toThrow(KanbanError);
+  expect(() => db.setEngine("bad", { name: "Bad", harness: "claude", thinking: "off" })).toThrow(KanbanError);
+  expect(db.setEngine("opus-max", { name: "Opus max", harness: "claude", model: "opus", thinking: "max" })).toMatchObject({ thinking: "max" });
+  db.deleteEngine("opus-max");
+  expect(() => db.setEngine("bad", { name: "Bad", harness: "pi", seats: 0 })).toThrow(KanbanError);
+  expect(() => db.setEngine("bad", { name: "Bad", harness: "pi", seats: 13 })).toThrow(KanbanError);
+  expect(() => db.setEngine("Bad Id", { name: "Bad", harness: "pi" })).toThrow(KanbanError);
+  expect(() => db.setEngine("dup", { name: "glm", harness: "pi" })).toThrow(new KanbanError("engine name 'glm' is taken", "invalid"));
+
+  expect(db.reorderEngines(["sonnet", "glm"]).map((e) => e.id)).toEqual(["sonnet", "glm"]);
+  expect(() => db.reorderEngines(["sonnet"])).toThrow(KanbanError);
+  expect(() => db.reorderEngines(["sonnet", "sonnet"])).toThrow(KanbanError);
+
+  // delete drops the engine from every lineup, override, and the board default
+  db.setAgentConfig("builder", { runsOn: ["glm", "sonnet"] });
+  db.setProjectAgentConfig("kanban", "builder", { runsOn: ["sonnet"] });
+  db.setDefaultEngine("sonnet");
+  expect(db.defaultEngineId()).toBe("sonnet");
+  db.deleteEngine("sonnet");
+  expect(db.agentConfig("builder")).toEqual({ runsOn: ["glm"] });
+  expect(db.laneContext("implement")?.actors[0]?.config).toEqual({ runsOn: ["glm"] });
+  expect(db.projectAgentConfig("kanban", "builder")).toEqual({});
+  expect(db.defaultEngineId()).toBeNull();
+  expect(() => db.deleteEngine("sonnet")).toThrow(new KanbanError("engine sonnet not found", "not-found"));
+  expect(() => db.setDefaultEngine("ghost")).toThrow(KanbanError);
+});
+
+test("engines fold: pools, role configs, and overrides become engines + lineups once; legacy fields stripped", () => {
+  const path = join(dir, "legacy.db");
+  // a pre-engines board shaped like the real one: an 8-slot builder pool that
+  // shadows the builder's own model, a 2-slot thinker pool, a worker config,
+  // a model-only project override, and a disabled pool that never ran
+  new KanbanDb(path).close();
+  const raw = new Database(path);
+  raw.run("DELETE FROM board_state WHERE key = 'engines_folded'");
+  raw.run("DELETE FROM engines");
+  const put = (role: string, cfg: object) =>
+    raw.run("INSERT OR REPLACE INTO agent_configs (role, config, updated_at) VALUES (?, ?, 1)", [role, JSON.stringify(cfg)]);
+  put("builder", { provider: "antigravity", model: "gemini-3.8-flash", thinking: "high", skills: ["~/s/caveman"], timeoutMs: 7_200_000 });
+  for (const r of ["planner", "reviewer", "plan-reviewer", "elaborator"]) put(r, { provider: "zai", model: "glm-5.3", thinking: "max" });
+  put("worker", { provider: "zai", model: "glm-5.3-flash", thinking: "high" });
+  put("manager", { timeoutMs: 7_200_000 });
+  const pool = (id: string, cfg: object) =>
+    raw.run("INSERT INTO worker_pools (id, config, updated_at) VALUES (?, ?, 1)", [id, JSON.stringify(cfg)]);
+  const flash = { provider: "zcode", model: "Start Plan/GLM-5.3-Flash", thinking: "max" };
+  pool("b", { name: "Builder pool", enabled: true, roles: ["builder"], slots: Array.from({ length: 8 }, () => flash) });
+  pool("t", {
+    name: "Thinker pool",
     enabled: true,
-    roles: ["builder", "builder"],
-    slots: [
-      { provider: " anthropic ", model: " claude-3-5-sonnet ", thinking: "max" },
-      { provider: "", model: " ", thinking: "" },
-    ],
+    roles: ["planner", "reviewer", "plan-reviewer", "elaborator"],
+    slots: [{ provider: "zai", model: "glm-5.3", thinking: "max" }, { provider: "deepseek", model: "deepseek-flash", thinking: "max" }],
   });
+  pool("off", { name: "Off", enabled: false, roles: ["builder"], slots: [{ model: "never" }] });
+  const implement = JSON.parse((raw.query("SELECT context FROM lanes WHERE id = 'implement'").get() as { context: string }).context);
+  implement.actors[0].config = { provider: "antigravity", model: "gemini-3.8-flash", thinking: "high", skills: ["~/s/caveman"] };
+  raw.run("UPDATE lanes SET context = ? WHERE id = 'implement'", [JSON.stringify(implement)]);
+  raw.run("INSERT INTO project_agent_configs (project, actor, config, updated_at) VALUES ('jlox', 'reviewer', ?, 1)", [
+    JSON.stringify({ model: "glm-5.2", context: "lox" }),
+  ]);
+  raw.close();
 
-  expect(saved).toEqual({
-    id: "heavy",
-    name: "heavy",
-    enabled: true,
-    roles: ["builder"],
-    slots: [{ provider: "anthropic", model: "claude-3-5-sonnet", thinking: "max" }, {}],
-    updatedAt: expect.any(Number),
+  const folded = new KanbanDb(path);
+  const engines = folded.engines();
+  const byModel = (m: string) => engines.find((e) => e.model === m)!;
+  expect(engines.map((e) => [e.provider, e.model, e.thinking, e.seats])).toEqual([
+    ["zcode", "Start Plan/GLM-5.3-Flash", "max", 8],
+    ["zai", "glm-5.3", "max", 1],
+    ["deepseek", "deepseek-flash", "max", 1],
+    ["zai", "glm-5.3-flash", "high", 1],
+    ["zai", "glm-5.2", undefined, 1],
+  ]);
+  expect(byModel("Start Plan/GLM-5.3-Flash").name).toBe("GLM-5.3-Flash · max");
+  // builder: its shadowed gemini never ran — the pool's engine is what it runs on
+  expect(folded.agentConfig("builder")).toEqual({ skills: ["~/s/caveman"], timeoutMs: 7_200_000, runsOn: [byModel("Start Plan/GLM-5.3-Flash").id] });
+  expect(folded.laneContext("implement")?.actors[0]?.config).toEqual({
+    skills: ["~/s/caveman"],
+    timeoutMs: 7_200_000,
+    runsOn: [byModel("Start Plan/GLM-5.3-Flash").id],
   });
+  // thinker roles keep the slot order as their fallback order
+  for (const r of ["planner", "reviewer", "plan-reviewer", "elaborator"]) {
+    expect(folded.agentConfig(r)?.runsOn).toEqual([byModel("glm-5.3").id, byModel("deepseek-flash").id]);
+  }
+  expect(folded.agentConfig("worker")).toEqual({ runsOn: [byModel("glm-5.3-flash").id] });
+  expect(folded.agentConfig("manager")).toEqual({ timeoutMs: 7_200_000 });
+  // a model-only override folded with the role's provider, behavior kept
+  expect(folded.projectAgentConfig("jlox", "reviewer")).toEqual({ context: "lox", runsOn: [byModel("glm-5.2").id] });
+  expect(byModel("glm-5.2").provider).toBe("zai");
+  expect(engines.some((e) => e.model === "never")).toBe(false);
+  folded.close();
 
-  expect(db.pools()).toEqual([saved]);
-
-  // replace updates fields
-  const replaced = db.setPool("heavy", {
-    name: "heavy-renamed",
-    enabled: false,
-    roles: ["builder", "reviewer"],
-    slots: [{ model: "claude-haiku" }],
-  });
-  expect(replaced.name).toBe("heavy-renamed");
-  expect(replaced.enabled).toBe(false);
-  expect(replaced.roles).toEqual(["builder", "reviewer"]);
-  expect(replaced.slots).toEqual([{ model: "claude-haiku" }]);
-  // disabled pools still list in pools()
-  expect(db.pools()).toEqual([replaced]);
-
-  // Validation: empty name
-  expect(() =>
-    db.setPool("p1", { name: "   ", roles: ["builder"], slots: [{ model: "m" }] }),
-  ).toThrow(new KanbanError("pool name must not be empty", "invalid"));
-
-  // Validation: unknown role
-  expect(() =>
-    db.setPool("p1", { name: "p1", roles: ["unknown" as any], slots: [{ model: "m" }] }),
-  ).toThrow(new KanbanError("pool 'p1' must serve 1-4 known roles", "invalid"));
-
-  // Validation: empty roles
-  expect(() =>
-    db.setPool("p1", { name: "p1", roles: [], slots: [{ model: "m" }] }),
-  ).toThrow(new KanbanError("pool 'p1' must serve 1-4 known roles", "invalid"));
-
-  // Fully-inherit slots are valid parallel lanes; only field values trim
-  const inheritOnly = db.setPool("p1", {
-    name: "p1",
-    roles: ["builder"],
-    slots: [{ provider: "", model: " ", thinking: "" }],
-  });
-  expect(inheritOnly.slots).toEqual([{}]);
-
-  // Validation: empty slots array
-  expect(() =>
-    db.setPool("p-empty", { name: "p-empty", roles: ["builder"], slots: [] }),
-  ).toThrow(new KanbanError("pool 'p-empty' must have 1-8 slots", "invalid"));
-
-  // Validation: 9 slots
-  const nineSlots = Array.from({ length: 9 }, (_, i) => ({ model: `m-${i}` }));
-  expect(() =>
-    db.setPool("p1", { name: "p1", roles: ["builder"], slots: nineSlots }),
-  ).toThrow(new KanbanError("pool 'p1' must have 1-8 slots", "invalid"));
-
-  // Caps: 13th enabled slot board-wide rejected, but disabled pools don't count
-  // First, create pool1 with 8 enabled slots
-  const eightSlots = Array.from({ length: 8 }, (_, i) => ({ model: `m-${i}` }));
-  db.setPool("p1", { name: "pool 1", enabled: true, roles: ["builder"], slots: eightSlots });
-
-  // Creating a disabled pool with 8 slots works (disabled doesn't count toward 12)
-  db.setPool("p-disabled", { name: "disabled pool", enabled: false, roles: ["planner"], slots: eightSlots });
-
-  // Creating an enabled pool with 5 slots would make total = 8 + 5 = 13 > 12 -> throws
-  const fiveSlots = Array.from({ length: 5 }, (_, i) => ({ model: `m2-${i}` }));
-  expect(() =>
-    db.setPool("p2", { name: "pool 2", enabled: true, roles: ["reviewer"], slots: fiveSlots }),
-  ).toThrow(new KanbanError("board-wide enabled slots would exceed 12", "invalid"));
-
-  // But 4 enabled slots makes total = 8 + 4 = 12 <= 12 -> succeeds
-  const fourSlots = Array.from({ length: 4 }, (_, i) => ({ model: `m2-${i}` }));
-  db.setPool("p2", { name: "pool 2", enabled: true, roles: ["reviewer"], slots: fourSlots });
-
-  // deletePool on missing id throws not-found
-  expect(() => db.deletePool("non-existent")).toThrow(new KanbanError("no pool 'non-existent'", "not-found"));
-
-  // deletePool removes the pool
-  db.deletePool("p1");
-  expect(db.pools().map((p) => p.id)).not.toContain("p1");
+  // the fold runs once: reopening changes nothing
+  const again = new KanbanDb(path);
+  expect(again.engines().length).toBe(5);
+  again.close();
 });
 
 test("board max workers: default 12, set/get round-trip, rejects out-of-range", () => {
@@ -158,41 +175,6 @@ test("board max workers: default 12, set/get round-trip, rejects out-of-range", 
   expect(() => db.setMaxWorkers(0)).toThrow(new KanbanError("max workers must be between 1 and 20", "invalid"));
   expect(() => db.setMaxWorkers(21)).toThrow(new KanbanError("max workers must be between 1 and 20", "invalid"));
   expect(() => db.setMaxWorkers(2.5)).toThrow(new KanbanError("max workers must be between 1 and 20", "invalid"));
-});
-
-test("pool maxWorkers: absent means slot count, validation clamps to slots", () => {
-  const threeSlots = [{ model: "m-0" }, { model: "m-1" }, { model: "m-2" }];
-
-  const savedWithCap = db.setPool("p1", {
-    name: "pool 1",
-    roles: ["builder"],
-    slots: threeSlots,
-    maxWorkers: 2,
-  });
-  expect(savedWithCap.maxWorkers).toBe(2);
-  expect(db.pools()[0].maxWorkers).toBe(2);
-  expect(db.pool("p1")?.maxWorkers).toBe(2);
-
-  const savedWithoutCap = db.setPool("p2", {
-    name: "pool 2",
-    roles: ["reviewer"],
-    slots: threeSlots,
-  });
-  expect("maxWorkers" in savedWithoutCap).toBe(false);
-  expect("maxWorkers" in db.pools()[1]).toBe(false);
-  expect("maxWorkers" in db.pool("p2")!).toBe(false);
-
-  expect(() =>
-    db.setPool("p1", { name: "pool 1", roles: ["builder"], slots: threeSlots, maxWorkers: 0 }),
-  ).toThrow(new KanbanError("pool 'p1' maxWorkers must be between 1 and 3 (its slot count)", "invalid"));
-
-  expect(() =>
-    db.setPool("p1", { name: "pool 1", roles: ["builder"], slots: threeSlots, maxWorkers: 4 }),
-  ).toThrow(new KanbanError("pool 'p1' maxWorkers must be between 1 and 3 (its slot count)", "invalid"));
-
-  expect(() =>
-    db.setPool("p1", { name: "pool 1", roles: ["builder"], slots: threeSlots, maxWorkers: 2.5 }),
-  ).toThrow(new KanbanError("pool 'p1' maxWorkers must be between 1 and 3 (its slot count)", "invalid"));
 });
 
 test("setCardSession/cardSession roundtrip; deleteTask clears pointer and request", () => {
@@ -2226,25 +2208,25 @@ test("projects: addProject registers route and refuses duplicate names or invali
 test("projects: per-actor overrides round-trip; present-key skills; lane actors; upsert", () => {
   // set {model:" claude-opus-4-5 ", thinking:"high", skills:[" ~/.pi/agent/skills/x ", ""]} on reviewer -> read back
   const set1 = db.setProjectAgentConfig("demo", "reviewer", {
-    model: " claude-opus-4-5 ",
-    thinking: "high",
+    context: " claude-opus-4-5 ",
+    tools: "high",
     skills: [" ~/.pi/agent/skills/x ", ""],
   });
   expect(set1).toEqual({
-    model: "claude-opus-4-5",
-    thinking: "high",
+    context: "claude-opus-4-5",
+    tools: "high",
     skills: ["~/.pi/agent/skills/x"],
   });
   expect(db.projectAgentConfig("demo", "reviewer")).toEqual({
-    model: "claude-opus-4-5",
-    thinking: "high",
+    context: "claude-opus-4-5",
+    tools: "high",
     skills: ["~/.pi/agent/skills/x"],
   });
 
   // set {model:"m3", skills:[]} -> read skills: [] (present key stored, not stripped)
-  const set2 = db.setProjectAgentConfig("demo", "reviewer", { model: "m3", skills: [] });
-  expect(set2).toEqual({ model: "m3", skills: [] });
-  expect(db.projectAgentConfig("demo", "reviewer")).toEqual({ model: "m3", skills: [] });
+  const set2 = db.setProjectAgentConfig("demo", "reviewer", { context: "m3", skills: [] });
+  expect(set2).toEqual({ context: "m3", skills: [] });
+  expect(db.projectAgentConfig("demo", "reviewer")).toEqual({ context: "m3", skills: [] });
 
   // setProjectAgentConfig("demo","reviewer",null) -> returns null, read null
   expect(db.setProjectAgentConfig("demo", "reviewer", null)).toBeNull();
@@ -2255,7 +2237,7 @@ test("projects: per-actor overrides round-trip; present-key skills; lane actors;
   expect(db.getProject("never-touched")).toBeNull();
 
   // unknown actor chief -> KanbanError message exactly
-  expect(() => db.setProjectAgentConfig("demo", "chief", { model: "m" })).toThrow(
+  expect(() => db.setProjectAgentConfig("demo", "chief", { context: "m" })).toThrow(
     new KanbanError(
       "unknown agent role 'chief' (reviewer | builder | planner | plan-reviewer | elaborator | manager | worker)",
       "invalid",
@@ -2271,11 +2253,11 @@ test("projects: per-actor overrides round-trip; present-key skills; lane actors;
     triggers: [{ kind: "on-enter" }],
     gate: { approveTarget: "plan" },
   });
-  expect(db.setProjectAgentConfig("demo", "designer", { model: "design-v1" })).toEqual({ model: "design-v1" });
-  expect(db.projectAgentConfig("demo", "designer")).toEqual({ model: "design-v1" });
+  expect(db.setProjectAgentConfig("demo", "designer", { context: "design-v1" })).toEqual({ context: "design-v1" });
+  expect(db.projectAgentConfig("demo", "designer")).toEqual({ context: "design-v1" });
 
   // set on un-registered tag fresh -> getProject("fresh") equals {name:"fresh", repoPath:null, testGate:true, testCmd:null}
-  db.setProjectAgentConfig("fresh", "reviewer", { model: "fresh-model" });
+  db.setProjectAgentConfig("fresh", "reviewer", { context: "fresh-model" });
   expect(db.getProject("fresh")).toEqual({
     name: "fresh",
     repoPath: null,
@@ -2284,7 +2266,7 @@ test("projects: per-actor overrides round-trip; present-key skills; lane actors;
   });
 
   // name "x".repeat(49) -> project name must be 1 to 48 characters with nothing written
-  expect(() => db.setProjectAgentConfig("x".repeat(49), "reviewer", { model: "m" })).toThrow(
+  expect(() => db.setProjectAgentConfig("x".repeat(49), "reviewer", { context: "m" })).toThrow(
     new KanbanError("project name must be 1 to 48 characters", "invalid"),
   );
   expect(db.getProject("x".repeat(49))).toBeNull();
@@ -2402,8 +2384,8 @@ test("projects: reopening a pre-v4 board adds test_cmd and project_agent_configs
     testGate: true,
     testCmd: "cargo test",
   });
-  expect(reopened.setProjectAgentConfig("alpha", "reviewer", { model: "m" })).toEqual({ model: "m" });
-  expect(reopened.projectAgentConfig("alpha", "reviewer")).toEqual({ model: "m" });
+  expect(reopened.setProjectAgentConfig("alpha", "reviewer", { context: "m" })).toEqual({ context: "m" });
+  expect(reopened.projectAgentConfig("alpha", "reviewer")).toEqual({ context: "m" });
   reopened.close();
 
   const second = new KanbanDb(path);
@@ -2413,7 +2395,7 @@ test("projects: reopening a pre-v4 board adds test_cmd and project_agent_configs
     testGate: true,
     testCmd: "cargo test",
   });
-  expect(second.projectAgentConfig("alpha", "reviewer")).toEqual({ model: "m" });
+  expect(second.projectAgentConfig("alpha", "reviewer")).toEqual({ context: "m" });
   second.close();
 });
 
@@ -2525,23 +2507,23 @@ test("setLaneContext: custom lane roundtrip, clear, and validation rejections", 
 
 test("setLaneContext and setAgentConfig keep agent_configs and lane actor configs in sync", () => {
   // loop roles fold into the seeded lane actors (both surfaces, one state)
-  db.setAgentConfig("planner", { model: "p-model", thinking: "max" });
-  expect(db.laneContext("plan")!.actors[0].config).toEqual({ model: "p-model", thinking: "max" });
-  expect(db.agentConfig("planner")).toEqual({ model: "p-model", thinking: "max" });
+  db.setAgentConfig("planner", { context: "p-model", tools: "max" });
+  expect(db.laneContext("plan")!.actors[0].config).toEqual({ context: "p-model", tools: "max" });
+  expect(db.agentConfig("planner")).toEqual({ context: "p-model", tools: "max" });
 
   // setLaneContext writes actor configs back to agent_configs
   const ctx = db.laneContext("plan")!;
-  ctx.actors[1]!.config = { model: "pr-model" };
+  ctx.actors[1]!.config = { context: "pr-model" };
   db.setLaneContext("plan", ctx);
-  expect(db.agentConfig("plan-reviewer")).toEqual({ model: "pr-model" });
-  expect(db.agentConfig("planner")).toEqual({ model: "p-model", thinking: "max" }); // untouched actors persist
+  expect(db.agentConfig("plan-reviewer")).toEqual({ context: "pr-model" });
+  expect(db.agentConfig("planner")).toEqual({ context: "p-model", tools: "max" }); // untouched actors persist
 
   // custom lane actors are valid agent-config roles
   const lane = db.createLane({ name: "Design" });
   db.setLaneContext(lane.id, { actors: [{ id: "designer", author: "pi-designer", instructions: "d" }], triggers: [{ kind: "on-enter" }] });
-  db.setAgentConfig("designer", { model: "d-model" });
-  expect(db.laneContext(lane.id)!.actors[0].config).toEqual({ model: "d-model" });
-  expect(db.agentConfig("designer")).toEqual({ model: "d-model" });
+  db.setAgentConfig("designer", { context: "d-model" });
+  expect(db.laneContext(lane.id)!.actors[0].config).toEqual({ context: "d-model" });
+  expect(db.agentConfig("designer")).toEqual({ context: "d-model" });
 
   // utility roles stay in agent_configs; truly unknown roles still refuse
   expect(db.agentConfig("manager")).toBeNull();
@@ -2592,11 +2574,11 @@ test("migrates a pre-context board: adds lanes.context, seeds defaults folding a
   const file = join(dir, "legacy.db");
   {
     const w = new KanbanDb(file);
-    w.setAgentConfig("planner", { model: "p-model", thinking: "max" });
-    w.setAgentConfig("plan-reviewer", { model: "pr-model" });
-    w.setAgentConfig("builder", { model: "b-model" });
-    w.setAgentConfig("reviewer", { model: "r-model" });
-    w.setAgentConfig("elaborator", { model: "e-model" });
+    w.setAgentConfig("planner", { context: "p-model", tools: "max" });
+    w.setAgentConfig("plan-reviewer", { context: "pr-model" });
+    w.setAgentConfig("builder", { context: "b-model" });
+    w.setAgentConfig("reviewer", { context: "r-model" });
+    w.setAgentConfig("elaborator", { context: "e-model" });
     w.close();
     // rewind to the pre-context shape: drop the column and the one-time guard
     const raw = new Database(file);
@@ -2607,11 +2589,11 @@ test("migrates a pre-context board: adds lanes.context, seeds defaults folding a
   const legacy = new KanbanDb(file);
   const plan = legacy.laneContext("plan")!;
   expect(plan.actors.map((a) => a.id)).toEqual(["planner", "plan-reviewer"]);
-  expect(plan.actors[0].config).toEqual({ model: "p-model", thinking: "max" });
-  expect(plan.actors[1].config).toEqual({ model: "pr-model" });
-  expect(legacy.laneContext("implement")!.actors[0].config).toEqual({ model: "b-model" });
-  expect(legacy.laneContext("review")!.actors[0].config).toEqual({ model: "r-model" });
-  expect(legacy.agentConfig("elaborator")).toEqual({ model: "e-model" });
+  expect(plan.actors[0].config).toEqual({ context: "p-model", tools: "max" });
+  expect(plan.actors[1].config).toEqual({ context: "pr-model" });
+  expect(legacy.laneContext("implement")!.actors[0].config).toEqual({ context: "b-model" });
+  expect(legacy.laneContext("review")!.actors[0].config).toEqual({ context: "r-model" });
+  expect(legacy.agentConfig("elaborator")).toEqual({ context: "e-model" });
   legacy.close();
 
   // the seeded flag makes later opens (even pure reads) write-free
