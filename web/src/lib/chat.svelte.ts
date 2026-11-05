@@ -4,7 +4,7 @@
  * resnapshot-on-disconnect recovery path (the SSE backlog terminator's other
  * half). All JSON via JSON.parse on server-projected events.
  */
-import { api, chatEventsUrl } from "../api";
+import { api, chatEventsUrl, chatPathParam } from "../api";
 import type { ChatMessage, ChatQueued, ChatState } from "../../../src/chat";
 import { capThinkingBlocks, INITIAL_STREAMING_STATE, normalizeStreamingBlocks, streamReducer, type StreamingState } from "./chatStream";
 
@@ -72,7 +72,7 @@ class ChatStore {
   async #snapshotAndConnect(cardId: string): Promise<void> {
     if (this.openCardId !== cardId) return;
     this.status = "connecting";
-    const state = await api.chat({ cardId }).get();
+    const state = await api.chat({ cardId: chatPathParam(cardId) }).get();
     if (this.openCardId !== cardId) return;
     if (!state.error) this.#applyState(state.data);
     this.#connect(cardId);
@@ -229,7 +229,7 @@ class ChatStore {
     const entryId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.messages.push({ role: "user", content: text, entryId }); // optimistic
     const streamingNow = this.status === "ready" && this.streaming.isStreaming;
-    const res = await api.chat({ cardId }).post(
+    const res = await api.chat({ cardId: chatPathParam(cardId) }).post(
       streamingNow ? { type: "prompt", message: text, streamingBehavior: "steer" } : { type: "prompt", message: text },
     );
     if (this.openCardId !== cardId) return;
@@ -243,7 +243,7 @@ class ChatStore {
   async stop(): Promise<void> {
     const cardId = this.openCardId;
     if (!cardId) return;
-    await api.chat({ cardId }).post({ type: "abort" });
+    await api.chat({ cardId: chatPathParam(cardId) }).post({ type: "abort" });
   }
 
   /** Switch the session's model. Boots the session lazily (like prompt); the
@@ -254,7 +254,7 @@ class ChatStore {
     if (!cardId || this.switching) return;
     this.switching = true;
     this.error = "";
-    const res = await api.chat({ cardId }).post({ type: "setModel", provider, modelId });
+    const res = await api.chat({ cardId: chatPathParam(cardId) }).post({ type: "setModel", provider, modelId });
     this.switching = false;
     if (this.openCardId !== cardId) return;
     if (res.error) this.error = errorText(res.error);
@@ -267,7 +267,7 @@ class ChatStore {
     if (!cardId || this.switching) return;
     this.switching = true;
     this.error = "";
-    const res = await api.chat({ cardId }).post({ type: "setThinkingLevel", level: level as "off" });
+    const res = await api.chat({ cardId: chatPathParam(cardId) }).post({ type: "setThinkingLevel", level: level as "off" });
     this.switching = false;
     if (this.openCardId !== cardId) return;
     if (res.error) this.error = errorText(res.error);

@@ -6118,6 +6118,46 @@ a.dep-chip.gh-link .gh-state {
   color: var(--text);
 }
 
+.manager-project {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.manager-new-wrap {
+  flex-shrink: 0;
+}
+
+.manager-new {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.manager-new:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* the picker menu hangs off the header button, not the full-width drawer */
+.manager-new-wrap .dropdown {
+  left: auto;
+  right: 0;
+  min-width: 220px;
+  max-width: 300px;
+}
+
 .manager-body {
   flex: 1;
   min-height: 0;

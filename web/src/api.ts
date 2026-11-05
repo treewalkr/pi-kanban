@@ -7,9 +7,19 @@ export const api = treaty<App>(import.meta.env.DEV ? "http://localhost:4600" : w
 // SSE change stream; EventSource is a browser streaming client, not a REST call
 export const eventsUrl = import.meta.env.DEV ? "http://localhost:4600/events" : "/events";
 
-// Card-chat SSE stream — same non-Treaty exception as eventsUrl (EventSource, not fetch)
+// Card-chat SSE stream — same non-Treaty exception as eventsUrl (EventSource, not fetch).
+// The handle is encoded: board handles carry free-form project names (`board:a/b c`).
 export const chatEventsUrl = (cardId: string) =>
-  import.meta.env.DEV ? `http://localhost:4600/chat/${cardId}/events` : `/chat/${cardId}/events`;
+  import.meta.env.DEV
+    ? `http://localhost:4600/chat/${chatPathParam(cardId)}/events`
+    : `/chat/${chatPathParam(cardId)}/events`;
+
+/**
+ * Encode a chat handle for a URL path segment. The ':' scope separator stays raw
+ * (path-safe, keeps `/chat/board:<p>` readable in logs/devtools); everything else
+ * is percent-encoded, so project names with '/', '?', '#', '%' or spaces survive.
+ */
+export const chatPathParam = (cardId: string): string => cardId.split(":").map(encodeURIComponent).join(":");
 
 // Raw file stream/download URL for resource tags (img src, anchor href)
 export const rawFilesUrl = import.meta.env.DEV ? "http://localhost:4600/files/raw" : "/files/raw";
