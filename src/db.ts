@@ -3807,6 +3807,28 @@ export class KanbanDb {
     return this.autoArchiveDays();
   }
 
+  /** The board chat drawer's last-used project scope; absent or empty reads as the whole board (null). */
+  managerChatProject(): string | null {
+    const row = this.q("SELECT value FROM board_state WHERE key = 'manager_chat_project'").get() as
+      | { value: string }
+      | undefined;
+    const value = row?.value.trim() ?? "";
+    return value === "" ? null : value;
+  }
+
+  /** Persist the drawer's project scope; null or "" clears it. Existence validation is the route's job. */
+  setManagerChatProject(project: string | null): string | null {
+    const clean = project?.trim() ?? "";
+    if (clean === "") {
+      this.q("DELETE FROM board_state WHERE key = 'manager_chat_project'").run();
+    } else {
+      this.q(
+        "INSERT INTO board_state (key, value) VALUES ('manager_chat_project', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ).run(clean);
+    }
+    return this.managerChatProject();
+  }
+
   /** Done cards whose latest done-entry (fallback updated_at) is at least autoArchiveDays() old; [] when disabled. */
   dueForAutoArchive(now: number = Date.now()): Task[] {
     const days = this.autoArchiveDays();
@@ -4314,6 +4336,46 @@ export class KanbanDb {
       ageDays: Math.max(0, Math.floor((now - r.entry_at) / 86_400_000)),
     }));
     const next = this.nextTask();
+    return {
+      lanes: lanes.map((l) => ({ id: l.id, name: l.name, count: counts.get(l.id) ?? 0, oldestDays: oldest.get(l.id) ?? 0 })),
+      waiting,
+      next: next.task ? { id: next.task.id, title: next.task.title } : null,
+      blocked: next.blocked,
+    };
+  }
+
+  /** The board manager's opening view scoped to one project: boardOverview's shape over that project's cards only. */
+  projectOverview(project: string, now = Date.now()): BoardOverview {
+    const lanes = this.lanes().filter((l) => l.id !== "archive");
+    const counts = new Map<string, number>();
+    const oldest = new Map<string, number>();
+    for (const lane of lanes) {
+      const row = this.q(
+        `SELECT COUNT(*) AS n,
+                MAX(COALESCE((SELECT MAX(le.created_at) FROM lane_events le
+                              WHERE le.task_id = t.id AND le.to_lane_id = t.lane_id), t.created_at)) AS oldest_entry
+         FROM tasks t WHERE t.lane_id = ? AND t.project = ?`,
+      ).get(lane.id, project) as { n: number; oldest_entry: number | null };
+      counts.set(lane.id, row.n);
+      oldest.set(
+        lane.id,
+        row.n > 0 && row.oldest_entry !== null ? Math.max(0, Math.floor((now - row.oldest_entry) / 86_400_000)) : 0,
+      );
+    }
+    const waiting = (
+      this.q(
+        `SELECT t.id, t.title,
+                COALESCE((SELECT MAX(le.created_at) FROM lane_events le
+                          WHERE le.task_id = t.id AND le.to_lane_id = t.lane_id), t.created_at) AS entry_at
+         FROM tasks t WHERE t.lane_id = 'waiting' AND t.project = ?
+         ORDER BY entry_at ASC, t.created_at ASC, t.id ASC LIMIT 10`,
+      ).all(project) as Array<{ id: string; title: string; entry_at: number }>
+    ).map((r) => ({
+      id: r.id,
+      title: r.title.length > 80 ? r.title.slice(0, 80) : r.title,
+      ageDays: Math.max(0, Math.floor((now - r.entry_at) / 86_400_000)),
+    }));
+    const next = this.nextTask(project);
     return {
       lanes: lanes.map((l) => ({ id: l.id, name: l.name, count: counts.get(l.id) ?? 0, oldestDays: oldest.get(l.id) ?? 0 })),
       waiting,
