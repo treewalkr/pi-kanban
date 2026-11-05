@@ -28,7 +28,7 @@ export { BUILDER_AUTHOR };
 export { PLAN_SECTIONS, PLAN_TEMPLATE };
 
 /**
- * Auto-agents loop, hosted by the serve process (`KANBAN_AUTO_REVIEW=1`).
+ * Auto-agents loop, hosted by the serve process (`KANBAN_AGENTS=1`).
  *
  * Agents over the lanes, all state derived from the board: a card in the
  * plan lane whose thread's last comment is not from the planner gets a
@@ -110,7 +110,7 @@ export interface AutoReviewOptions {
   maxPlanBlocks?: number;
   watchIntervalMs?: number;
   log?: (message: string) => void;
-  /** Pre-spawn test gate for reviewer jobs; null disables. Default: defaultGate, unless KANBAN_AUTOREVIEW_GATE=0. */
+  /** Pre-spawn test gate for reviewer jobs; null disables. Default: defaultGate, unless KANBAN_AGENTS_GATE=0 (deprecated alias KANBAN_AUTOREVIEW_GATE). */
   gate?: GateFn | null;
   gateTimeoutMs?: number;
   cooldownMs?: number;
@@ -764,7 +764,8 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
   const stallMs = opts.stallMs ?? DEFAULT_STALL_MS;
   const maxBlocks = opts.maxBlocks ?? DEFAULT_MAX_BLOCKS;
   const maxPlanBlocks = opts.maxPlanBlocks ?? DEFAULT_MAX_PLAN_BLOCKS;
-  const gate = opts.gate !== undefined ? opts.gate : process.env.KANBAN_AUTOREVIEW_GATE === "0" ? null : defaultGate;
+  const gateOff = (name: string) => process.env[name] === "0";
+  const gate = opts.gate !== undefined ? opts.gate : gateOff("KANBAN_AGENTS_GATE") || gateOff("KANBAN_AUTOREVIEW_GATE") ? null : defaultGate;
   const gateTimeoutMs = opts.gateTimeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
 
   const queue: Array<AgentJob & { enqueuedAt: number }> = [];

@@ -41,7 +41,7 @@ export function deletePoolShim(db: KanbanDb, id: string): void {
 
 
 /** Run with the agent env vars cleared, then set from `env`, restoring after. */
-export const AGENT_ENV_KEYS = ["KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING", "KANBAN_AUTOREVIEW_GATE"];
+export const AGENT_ENV_KEYS = ["KANBAN_AGENTS_GATE", "KANBAN_AUTOREVIEW_MODEL", "KANBAN_AUTOREVIEW_THINKING", "KANBAN_AUTOREVIEW_GATE"];
 export let savedAgentEnv: Record<string, string | undefined> = {};
 
 function saveAgentEnv(): void {

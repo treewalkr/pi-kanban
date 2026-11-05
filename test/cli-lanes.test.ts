@@ -161,32 +161,32 @@ test("check prints wip-over-limit, JSON carries it, exit stays 0", async () => {
   expect(violations).toContainEqual({ kind: "wip-over-limit", laneId: "implement", limit: 1, count: 2 });
 });
 
-test("serve: --agents and --auto-review both set KANBAN_AUTO_REVIEW=1", () => {
-  const orig = process.env.KANBAN_AUTO_REVIEW;
+test("serve: --agents and --auto-review both set KANBAN_AGENTS=1", () => {
+  const orig = process.env.KANBAN_AGENTS;
   const errs: string[] = [];
   const origError = console.error;
   console.error = (...args: unknown[]) => errs.push(args.join(" "));
   try {
     for (const flag of ["--agents", "--auto-review"]) {
-      delete process.env.KANBAN_AUTO_REVIEW;
+      delete process.env.KANBAN_AGENTS;
       const parsed = parse([flag]);
       applyServeEnv(parsed.flags);
-      const set = process.env.KANBAN_AUTO_REVIEW as string | undefined; // bun-types types unknown env reads as undefined-only
+      const set = process.env.KANBAN_AGENTS as string | undefined; // bun-types types unknown env reads as undefined-only
       expect(set).toBe("1");
     }
     expect(errs).toEqual([
       "kanban: --auto-review is deprecated — use --agents (identical behavior)",
     ]);
 
-    delete process.env.KANBAN_AUTO_REVIEW;
+    delete process.env.KANBAN_AGENTS;
     const parsedNone = parse([]);
     applyServeEnv(parsedNone.flags);
-    expect(process.env.KANBAN_AUTO_REVIEW).toBeUndefined();
+    expect(process.env.KANBAN_AGENTS).toBeUndefined();
     expect(errs).toHaveLength(1);
   } finally {
     console.error = origError;
-    if (orig !== undefined) process.env.KANBAN_AUTO_REVIEW = orig;
-    else delete process.env.KANBAN_AUTO_REVIEW;
+    if (orig !== undefined) process.env.KANBAN_AGENTS = orig;
+    else delete process.env.KANBAN_AGENTS;
   }
 });
 

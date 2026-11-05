@@ -46,9 +46,9 @@ done
 
 # sanitize: a repro must never inherit the production server's identity — no
 # shared port, no live share token, no agent loop, no production DB
-unset KANBAN_SHARE_PORT KANBAN_SHARE_TOKEN KANBAN_AUTO_REVIEW KANBAN_DB
+unset KANBAN_SHARE_PORT KANBAN_SHARE_TOKEN KANBAN_AGENTS KANBAN_AUTO_REVIEW KANBAN_DB
 EXTRA="KANBAN_DB=$DB"
-[ "$AGENTS" = "1" ] && EXTRA="KANBAN_AUTO_REVIEW=1 $EXTRA"
+[ "$AGENTS" = "1" ] && EXTRA="KANBAN_AGENTS=1 $EXTRA"
 
 # TTL watchdog (macOS has no GNU timeout(1)). Identity-checked: it only kills
 # the server it was spawned for, never a later repro that reused the pidfile.

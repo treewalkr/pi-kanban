@@ -34,7 +34,7 @@ describe("boot() occupied-port guard (seams per plan AC3)", () => {
   // the share path and silently bind; it also carries KANBAN_AUTO_REVIEW=1,
   // which would start a real agent loop against the production DB from inside
   // bun test — the 10/30 exit-143 session deaths)
-  const SCRUB_VARS = ["KANBAN_SHARE_PORT", "KANBAN_SHARE_TOKEN", "KANBAN_SHARE_FORCE", "KANBAN_AUTO_REVIEW"] as const;
+  const SCRUB_VARS = ["KANBAN_SHARE_PORT", "KANBAN_SHARE_TOKEN", "KANBAN_SHARE_FORCE", "KANBAN_AGENTS", "KANBAN_AUTO_REVIEW"] as const;
   // auto-archive defaults ON, so scrubbing is not enough: boot tests must force
   // KANBAN_AUTO_ARCHIVE=0 or an ungated sweep would open defaultDbPath() — the
   // production board — from inside bun test. Same story for the gh sync loop,
@@ -171,11 +171,13 @@ describe("gh sync loop hosted by boot (plan AC3 wiring)", () => {
       KANBAN_GH_SYNC_MS: process.env.KANBAN_GH_SYNC_MS,
       // the 4600 server's ambient env must never leak in: an agent loop or a
       // share flag here would spawn pi sessions / bind-share from bun test
+      KANBAN_AGENTS: process.env.KANBAN_AGENTS,
       KANBAN_AUTO_REVIEW: process.env.KANBAN_AUTO_REVIEW,
       KANBAN_SHARE_PORT: process.env.KANBAN_SHARE_PORT,
       KANBAN_SHARE_TOKEN: process.env.KANBAN_SHARE_TOKEN,
       KANBAN_SHARE_FORCE: process.env.KANBAN_SHARE_FORCE,
     };
+    delete process.env.KANBAN_AGENTS;
     delete process.env.KANBAN_AUTO_REVIEW;
     delete process.env.KANBAN_SHARE_PORT;
     delete process.env.KANBAN_SHARE_TOKEN;
@@ -240,13 +242,14 @@ describe("lane worker runner hosted by boot (KANBAN_WORKERS)", () => {
     dir = mkdtempSync(join(tmpdir(), "kanban-boot-workers-"));
     dbFile = join(dir, "t.db");
     saved = Object.fromEntries(
-      ["KANBAN_DB", "KANBAN_AUTO_REVIEW", "KANBAN_AUTO_ARCHIVE", "KANBAN_GH_SYNC_MS", "KANBAN_WORKERS"].map((k) => [
+      ["KANBAN_DB", "KANBAN_AGENTS", "KANBAN_AUTO_REVIEW", "KANBAN_AUTO_ARCHIVE", "KANBAN_GH_SYNC_MS", "KANBAN_WORKERS"].map((k) => [
         k,
         process.env[k],
       ]),
     );
     process.env.KANBAN_DB = dbFile;
-    process.env.KANBAN_AUTO_REVIEW = "1";
+    process.env.KANBAN_AGENTS = "1";
+    delete process.env.KANBAN_AUTO_REVIEW;
     process.env.KANBAN_AUTO_ARCHIVE = "0";
     process.env.KANBAN_GH_SYNC_MS = "0";
   });
@@ -304,6 +307,34 @@ describe("lane worker runner hosted by boot (KANBAN_WORKERS)", () => {
       handles.stopWorkers();
     } finally {
       console.log = orig;
+      app.stop();
+      rmSync(dist, { recursive: true, force: true });
+    }
+  });
+
+  test("deprecated KANBAN_AUTO_REVIEW=1 still arms the loop", async () => {
+    delete process.env.KANBAN_AGENTS;
+    process.env.KANBAN_AUTO_REVIEW = "1";
+    delete process.env.KANBAN_WORKERS;
+    seedStaleRun();
+    const logs: string[] = [];
+    const warns: string[] = [];
+    const orig = console.log;
+    const origWarn = console.warn;
+    console.log = (...parts: unknown[]) => logs.push(parts.join(" "));
+    console.warn = (...parts: unknown[]) => warns.push(parts.join(" "));
+    const dist = emptyDist();
+    try {
+      const handles = await boot({ port: 0, probePort: probeFree, checkHealth: health(null), dist });
+      console.log = orig;
+      console.warn = origWarn;
+      expect(logs.some((l) => l.includes("[workers]") && l.includes("reaped 1"))).toBe(true);
+      expect(warns.some((w) => w.includes("KANBAN_AUTO_REVIEW is deprecated"))).toBe(true);
+      handles.stopAutoReview();
+      handles.stopWorkers();
+    } finally {
+      console.log = orig;
+      console.warn = origWarn;
       app.stop();
       rmSync(dist, { recursive: true, force: true });
     }
