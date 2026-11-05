@@ -17,4 +17,11 @@ describe("session-log and chat stamps (card 2sm4x)", () => {
     expect(taskDetailSource).toContain('class="line-time"');
     expect(taskDetailSource).toContain('class="line-text"');
   });
+
+  test("chat panel wires the message times", () => {
+    const chatPanelSource = readFileSync(join(import.meta.dir, "..", "web", "src", "lib", "ChatPanel.svelte"), "utf-8");
+    expect(chatPanelSource).toContain('class="chat-msg-head"');
+    expect(chatPanelSource).toContain('class="chat-msg-time user"');
+    expect(chatPanelSource.split("stampTime(message.at, Date.now())").length - 1).toBe(2);
+  });
 });
