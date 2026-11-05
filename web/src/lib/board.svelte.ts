@@ -2,6 +2,7 @@ import { api } from "../api";
 import type { Attachment, BoardStatsPayload, CardWorkspace, GhLink, GhStatus, Lane, LaneContext, LanePatch, Task, TaskPatch, WaitingState } from "../../../src/db";
 import type { AgentSessionInfo, QueuedJobInfo } from "../../../src/autoreview";
 import { MAX_RESULTS, searchBoard } from "../../../src/search";
+import { nextPriority } from "./util";
 import { initialProject, parseProjectHash, projectHash } from "./viewhash";
 
 type EdenError = { value?: unknown };
@@ -497,7 +498,14 @@ class BoardStore {
   }
 
   async refresh(): Promise<void> {
-    const [boardRes, statsRes, ghRes] = await Promise.all([api.board.get(), api.stats.get(), api.gh.statuses.get()]);
+    // the stats payload follows the project chip, so the velocity view never
+    // reports another project's work under a filter
+    const statsQuery = { project: this.projectFilter || undefined };
+    const [boardRes, statsRes, ghRes] = await Promise.all([
+      api.board.get(),
+      api.stats.get({ query: statsQuery }),
+      api.gh.statuses.get(),
+    ]);
     if (boardRes.error) {
       this.fail(boardRes.error);
       this.#syncFailed = true;
@@ -579,6 +587,22 @@ class BoardStore {
     const { error } = await api.tasks({ id }).patch(patch);
     if (error) return this.fail(error);
     await this.#actionSync();
+  }
+
+  /** The priority chip's click: cycle high → normal → low, optimistic with
+   * revert-on-failure (hquwn) — the chip flips immediately, the PATCH follows. */
+  async cyclePriority(id: string): Promise<void> {
+    const task = this.tasks.find((t) => t.id === id);
+    if (!task) return;
+    const prev = task.priority;
+    const next = nextPriority(prev);
+    task.priority = next;
+    const { error } = await api.tasks({ id }).patch({ priority: next });
+    if (error) {
+      task.priority = prev;
+      return this.fail(error);
+    }
+    await this.refresh();
   }
 
   async addLink(id: string, target: string): Promise<boolean> {

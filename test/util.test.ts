@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { canPromoteToPlan, queuedChip, roleAuthor, roleVerb } from "../web/src/lib/util";
+import { canPromoteToPlan, nextPriority, queuedChip, roleAuthor, roleVerb } from "../web/src/lib/util";
 
 test("roleVerb maps each agent role to its chip verb", () => {
   expect(roleVerb("reviewer")).toBe("reviewing");
@@ -47,4 +47,10 @@ test("canPromoteToPlan is false when no plan lane exists", () => {
 test("roleVerb and roleAuthor fall back for custom lane actors", () => {
   expect(roleVerb("designer")).toBe("building");
   expect(roleAuthor("designer")).toBe("pi-designer");
+});
+
+test("nextPriority cycles high → normal → low → high", () => {
+  expect(nextPriority("high")).toBe("normal");
+  expect(nextPriority("normal")).toBe("low");
+  expect(nextPriority("low")).toBe("high"); // wraps
 });

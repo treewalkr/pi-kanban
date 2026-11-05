@@ -79,16 +79,59 @@ export type AgentRole = BuiltinAgentRole | (string & {});
 
 export type AgentThinking = "" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-/** Per-role pi agent settings for the auto-review loop; stored as one JSON blob per role. */
-export interface AgentConfig {
+/** Which headless harness an engine spawns: pi (`pi --mode json`) or Claude Code (`claude -p`). */
+export type HarnessId = "pi" | "claude";
+
+/** The `--effort` levels Claude Code accepts; a claude engine's `thinking` is one of these. */
+export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * A named, coherent run target — the only home of model config (card: engines).
+ * pi engines carry provider/model/thinking; claude engines carry a model alias
+ * and an optional effort level in `thinking` (CLAUDE_EFFORT_LEVELS, passed as
+ * `--effort`); claude resolves its own auth. `seats` caps concurrent
+ * sessions on this engine; `flags` are raw harness flags.
+ */
+export interface Engine {
+  id: string;
+  name: string;
+  harness: HarnessId;
   provider?: string;
   model?: string;
   thinking?: AgentThinking;
+  flags: string[];
+  seats: number;
+  enabled: boolean;
+  updatedAt: number;
+}
+
+export type EngineInput = Omit<Engine, "id" | "updatedAt" | "flags" | "seats" | "enabled"> & {
+  flags?: string[];
+  seats?: number;
+  enabled?: boolean;
+};
+
+export const MAX_ENGINE_SEATS = 12;
+
+/**
+ * Per-actor agent behavior for the auto-agent loop; stored as one JSON blob per role.
+ * Which model runs is never here: `runsOn` is the actor's engine lineup (first
+ * available engine wins, the rest are fallbacks; empty = board default engine).
+ */
+export interface AgentConfig {
+  runsOn?: string[]; // engine ids, in preference order
   skills?: string[]; // paths passed to pi as --skill
   context?: string; // passed as --append-system-prompt
   tools?: string;
-  extraArgs?: string[]; // raw pi flags
+  extraArgs?: string[]; // raw pi flags (pi engines only — claude engines carry their own flags)
   timeoutMs?: number;
+}
+
+/** Pre-engines model fields, read only by the one-time fold (migrateEngines). */
+interface LegacyModelFields {
+  provider?: string;
+  model?: string;
+  thinking?: AgentThinking;
 }
 
 /** One agent on a lane's workflow chain (card 3n96c): its author, prompt, and settings. */
@@ -106,7 +149,7 @@ export interface LaneActor {
   /** Optional label + hint for session-death comments. */
   deathLabel?: string;
   deathHint?: string;
-  /** Per-actor pi agent configuration (model, provider, thinking, skills, context, tools, extraArgs, timeoutMs). */
+  /** Per-actor agent configuration (engine lineup `runsOn`, skills, context, tools, extraArgs, timeoutMs). */
   config?: AgentConfig;
 }
 
@@ -183,22 +226,12 @@ export interface LaneContext {
   testGate?: boolean;
 }
 
-export interface PoolSlot {
-  provider?: string;
-  model?: string;
-  thinking?: AgentThinking;
-}
-
-export interface WorkerPool {
-  id: string;
-  name: string;
-  enabled: boolean;
-  /** Built-in loop roles only — pools serve the loop, not custom lane actors. */
-  roles: BuiltinAgentRole[];
-  slots: PoolSlot[];
-  /** Max concurrent sessions from this pool; absent = slots.length. */
+/** Pre-engines worker pool blob (worker_pools rows stay as an inert backup after the fold). */
+interface LegacyPool {
+  enabled?: boolean;
+  roles?: string[];
+  slots?: LegacyModelFields[];
   maxWorkers?: number;
-  updatedAt: number;
 }
 
 /** One dispatch of a lane worker — queued by CLI/manager, drained by the serve-process runner (lane-workers.ts). */
@@ -305,6 +338,7 @@ export type LaneEventCause =
   | "done"
   | "archive"
   | "auto-archive"
+  | "auto" // the epic container finishing itself (ceqfq)
   | "backfill"
   | "gh";
 
@@ -553,6 +587,12 @@ CREATE TABLE IF NOT EXISTS worker_pools (
   config TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS engines (
+  id TEXT PRIMARY KEY,
+  position INTEGER NOT NULL,
+  config TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS lane_workers (
   id TEXT PRIMARY KEY,
   lane_id TEXT NOT NULL,
@@ -618,6 +658,7 @@ CREATE TABLE IF NOT EXISTS project_agent_configs (
 export const DEFAULT_LANES: Array<Omit<Lane, "position" | "wipLimit">> = [
   { id: "waiting", name: "Waiting on you", description: "Parked for a human answer — replying returns the card", fixed: 1 },
   { id: "backlog", name: "Backlog", description: "Waiting work, nothing started", fixed: 1 },
+  { id: "epics", name: "Epics", description: "Approved epics supervising their children — never worked directly", fixed: 1 },
   { id: "plan", name: "Plan", description: "Scoping and design before code", fixed: 0 },
   { id: "implement", name: "Test + Implement", description: "Build it, test as you go", fixed: 0 },
   { id: "review", name: "Review", description: "Verify, polish, get sign-off", fixed: 0 },
@@ -683,6 +724,90 @@ Then record exactly one verdict (never move the card with mv/handoff, never run 
 Block only for checklist hits, never taste; up to 2 rounds happen automatically, then a human steps in. If you cannot evaluate the plan at all (files missing, repo unreadable), post kanban comment {id} "cannot evaluate the plan — <why>" --author pi-plan-reviewer and stop.
 Never move the card (no mv/handoff — the --pass verdict parks it in Waiting on you automatically) and never run kanban approve/reject — the human owns the gate.
 Your last line: a one-sentence verdict.`;
+
+/** The epic decomposition charter (ceqfq): what a planner writes for a card
+ *  WITH children. Same pipeline (attach, plan-review, human gate) as a build
+ *  plan, but the artifact decomposes instead of implements. */
+export const EPIC_PLAN_TEMPLATE = `
+## Goal
+
+What this epic delivers and why it is one unit of work.
+
+## Children & chain
+
+One line per child card — id, title, lane — plus the dependency chain as a
+--blocked-by graph (parallel bands explicit). Every child already exists as a
+card (create them: kanban add … --parent {id}).
+
+## Scope verdict
+
+For each child: earned now (build) or deferred (stays in Backlog, named here
+with its ripen-or-rot condition). Speculative work is deferred, never planned.
+
+## Boundary contracts
+
+Which files each child owns — disjoint sets, so parallel children cannot
+collide. One block per child: child id → files + the interface it exposes to
+siblings. No steps, no test plans: those belong to each child's own plan.
+
+## Out of scope
+
+What this epic deliberately does not touch.
+`;
+
+export const EPIC_PLANNER_INSTRUCTIONS = `You are pi-planner. Kanban card {id} "{title}" is an EPIC (it has child cards) in the Plan lane — write its decomposition charter, not an implementation plan. The epic plans work; it never builds.
+
+1. Run: kanban brief {id} and kanban show {id} — the note, thread, and current children. If the last comment is a rejection or plan-review block, address every point.
+2. Ground it in the repo: read AGENTS.md and the area the epic touches. Cite real paths. Check for existing children that already cover scope; search (rg, kanban search) before creating anything.
+3. Ensure the children exist and are chained: create missing child cards with --parent {id}, set the --blocked-by chain, park deferred children in Backlog. Children are small enough that each one's OWN plan (written when it reaches Plan) can be executable.
+4. Write the charter to {tmpFile} using the template below — every section filled or "N/A — reason". NO implementation steps, NO per-child test plans: if you are writing "Step 1", you are writing the wrong artifact — that content belongs to the child's plan.
+5. Attach: kanban attach {id} <plan-file>
+6. Hand off exactly: kanban comment {id} "plan v<N> attached — over to pi-plan-reviewer" --kind handoff --author pi-planner
+
+Never move the card (no mv/handoff) and never run kanban approve/reject — the human owns the gate. Children are never moved out of Backlog by you — releasing waves is the human's call.
+Questions only if an answer would change the decomposition; post them as one comment with recommended defaults, then stop.
+Your last line: one sentence on the epic's shape (children, chain, defers).`;
+
+export const EPIC_PLAN_REVIEWER_INSTRUCTIONS = `You are pi-plan-reviewer. Kanban card {id} "{title}" is an EPIC (it has child cards) with a fresh charter in the Plan lane — review the decomposition before the human gate.
+
+1. Run: kanban brief {id} and kanban show {id} — the charter, thread, and the actual children.
+2. Rubric — block on any hit:
+   - Every child named in the charter exists (--parent set) and every existing child is accounted for (built or explicitly deferred).
+   - The --blocked-by chain is complete, acyclic, and parallel bands are real (no false serializing).
+   - Every child is independently buildable: its scope fits one child plan; boundaries are disjoint (no file owned by two children).
+   - Scope verdict is honest: deferred items carry a ripen-or-rot condition.
+   - The charter contains NO implementation steps or per-child test plans — that detail belongs to child plans. Likewise, a child plan that re-draws the decomposition is out of scope for its own card.
+3. Verify cited paths exist; read AGENTS.md. GLOSSARY.md vocabulary applies.
+
+Verdict exactly as usual (never move the card, never approve/reject — the human owns the gate): pass parks it for the human; block carries --finding per rubric hit.
+Your last line: a one-sentence verdict on the decomposition.`;
+
+/** The context an epic plans under: any lane that hands out an artifact
+ *  template swaps it for the decomposition charter (ceqfq) — the seeded
+ *  planner/plan-reviewer instructions swap too when the lane uses those actor
+ *  ids, and everything else (custom actors, gates, exits) stays the lane's own.
+ *  Keyed on the template, not the 'plan' id, so custom plan-like lanes charter
+ *  their epics instead of handing them the build template. */
+export function epicPlanContextFor(ctx: LaneContext): LaneContext {
+  return {
+    ...ctx,
+    template: EPIC_PLAN_TEMPLATE.trim(),
+    actors: ctx.actors.map((a) =>
+      a.id === "planner"
+        ? { ...a, instructions: EPIC_PLANNER_INSTRUCTIONS }
+        : a.id === "plan-reviewer"
+          ? { ...a, instructions: EPIC_PLAN_REVIEWER_INSTRUCTIONS }
+          : a,
+    ),
+  };
+}
+
+/** The plan-lane context, chartered for epics: same actors, gates, and exits —
+ *  the planner and plan-reviewer swap to decomposition instructions and the
+ *  charter template replaces the build template (ceqfq). */
+export function epicPlanContext(): LaneContext {
+  return epicPlanContextFor(defaultLaneContext("plan")!);
+}
 
 export const BUILDER_PLAN_INSTRUCTIONS = `You are pi-builder. Kanban card {id} "{title}" had its plan approved; build it in this repo.
 
@@ -817,6 +942,20 @@ export function defaultLaneContext(laneId: string): LaneContext | null {
 /** Fixed first lane: HITL tickets parked for a human answer (never proposed by next). */
 export const WAITING_LANE_ID = "waiting" as const;
 
+/** Fixed container lane: approved epics supervising their children (card ceqfq).
+ *  Never scanned by the loop (context-free, like waiting) and never proposed by next. */
+export const EPICS_LANE_ID = "epics" as const;
+
+/** A parent epic auto-dones when no child sits in these lanes — Backlog children
+ *  are decided-not-pending ("ripen-or-rot" defers) and never block it. A child
+ *  epic supervising in Epics counts as in flight for its own parent (ceqfq). */
+const EPIC_BLOCKING_LANES = ["plan", "implement", "review", "waiting", "epics"] as const;
+
+/** A card here has finished its work. An epic ENTERING the Epics lane completes
+ *  only if at least one child settled — all-Backlog children mean the waves
+ *  were never released, and the epic must supervise, not insta-complete (ceqfq). */
+const SETTLED_LANES = ["done", "archive"] as const;
+
 /** Lane priority for "what's next": Review → Test + Implement → Plan → Backlog (skill contract). */
 export const NEXT_LANE_PRIORITY = ["review", "implement", "plan", "backlog"] as const;
 
@@ -846,6 +985,7 @@ export const UNBLOCKED_LANES = ["done", "archive"] as const;
 export type BoardViolation =
   | { kind: "done-parent-active-children"; cardId: string; childIds: string[] }
   | { kind: "child-behind-parent"; cardId: string; parentId: string; cardLaneId: string; parentLaneId: string }
+  | { kind: "epic-in-workflow-lane"; cardId: string; laneId: string }
   | { kind: "missing-plan"; cardId: string; laneId: string }
   | { kind: "wip-over-limit"; laneId: string; limit: number; count: number };
 
@@ -1194,10 +1334,12 @@ export class KanbanDb {
     if (!this.schemaIsCurrent()) this.db.exec(SCHEMA); // fresh/old boards only — see below
     this.seedLanes();
     this.ensureWaitingLane();
+    this.ensureEpicsLane();
     this.ensureArchiveLane();
     this.migratePlansTable();
     this.migrateProjectsSeed();
     this.migrateLaneContexts();
+    this.migrateEngines();
     this.backfillLaneEvents();
   }
 
@@ -1401,6 +1543,155 @@ export class KanbanDb {
     });
   }
 
+  /**
+   * One-time fold (card: engines): every distinct (provider, model, thinking)
+   * the old surfaces could spawn — pool slots, role configs, project overrides —
+   * becomes an engine, pool slot order becomes each covered role's lineup, and
+   * the legacy model fields are stripped. Exact preservation: a pool's slots
+   * become seats on its engines (only slots below the pool's maxWorkers ever
+   * ran); a role's own model shadowed by a pool is dropped, as it never ran.
+   * worker_pools rows stay as an inert backup. Guarded by a board_state flag.
+   */
+  private migrateEngines(): void {
+    const flagged = () =>
+      this.q("SELECT value FROM board_state WHERE key = 'engines_folded'").get() as { value: string } | undefined;
+    if (flagged()) return;
+    this.tx(() => {
+      if (flagged()) return;
+      const parse = <T>(raw: string): T | null => {
+        try {
+          return JSON.parse(raw) as T;
+        } catch {
+          return null;
+        }
+      };
+      const roleRows = this.q("SELECT role, config FROM agent_configs").all() as Array<{ role: string; config: string }>;
+      const legacy = new Map<string, AgentConfig & LegacyModelFields>();
+      for (const r of roleRows) {
+        const cfg = parse<AgentConfig & LegacyModelFields>(r.config);
+        if (cfg) legacy.set(r.role, cfg);
+      }
+      const engines: Array<{ id: string; name: string; combo: LegacyModelFields; seats: number }> = [];
+      const byKey = new Map<string, (typeof engines)[number]>();
+      const keyOf = (c: LegacyModelFields) => [c.provider ?? "", c.model ?? "", c.thinking ?? ""].join("\u0000");
+      const engineFor = (c: LegacyModelFields, addSeats: number) => {
+        const key = keyOf(c);
+        let e = byKey.get(key);
+        if (!e) {
+          e = { id: `eng-${engines.length + 1}`, name: "", combo: c, seats: 0 };
+          engines.push(e);
+          byKey.set(key, e);
+        }
+        e.seats += addSeats;
+        return e;
+      };
+      const combo = (...layers: Array<LegacyModelFields | undefined>): LegacyModelFields => {
+        const c: LegacyModelFields = {};
+        for (const l of layers) {
+          if (l?.provider?.trim()) c.provider = l.provider.trim();
+          if (l?.model?.trim()) c.model = l.model.trim();
+          if (l?.thinking) c.thinking = l.thinking;
+        }
+        return c;
+      };
+      const hasModel = (c: LegacyModelFields | undefined) => Boolean(c?.provider?.trim() || c?.model?.trim() || c?.thinking);
+      const lineups = new Map<string, string[]>();
+      const push = (role: string, id: string) => {
+        const l = lineups.get(role) ?? [];
+        if (!l.includes(id)) l.push(id);
+        lineups.set(role, l);
+      };
+      const pools = this.q("SELECT config FROM worker_pools ORDER BY rowid").all() as Array<{ config: string }>;
+      for (const row of pools) {
+        const pool = parse<LegacyPool>(row.config);
+        if (!pool?.enabled || !Array.isArray(pool.slots) || !Array.isArray(pool.roles)) continue;
+        const cap = Math.min(pool.maxWorkers ?? pool.slots.length, pool.slots.length);
+        for (let i = 0; i < cap; i++) {
+          const seen = new Set<string>(); // an inherit slot serving roles with different models seats each once
+          for (const role of pool.roles) {
+            const c = combo(legacy.get(role), pool.slots[i]);
+            const key = keyOf(c);
+            const e = engineFor(c, seen.has(key) ? 0 : 1);
+            seen.add(key);
+            push(role, e.id);
+          }
+        }
+      }
+      for (const [role, cfg] of legacy) {
+        if (lineups.has(role) || !hasModel(cfg)) continue;
+        push(role, engineFor(combo(cfg), 1).id);
+      }
+      const overrides = this.q("SELECT project, actor, config FROM project_agent_configs").all() as Array<{
+        project: string;
+        actor: string;
+        config: string;
+      }>;
+      const overrideLineups = new Map<string, string[]>();
+      for (const o of overrides) {
+        const cfg = parse<AgentConfig & LegacyModelFields>(o.config);
+        if (!cfg || !hasModel(cfg)) continue;
+        // a model-only override used to merge over the role's provider: fold the same pair
+        const base = legacy.get(o.actor);
+        const c = combo(cfg.model && !cfg.provider ? { provider: base?.provider } : undefined, cfg);
+        overrideLineups.set(`${o.project}\u0000${o.actor}`, [engineFor(c, 1).id]);
+      }
+      // names: model (last path segment) · thinking, provider-qualified on collision
+      const taken = new Set<string>();
+      for (const e of engines) {
+        const base = [e.combo.model?.split("/").pop() || "pi default", e.combo.thinking].filter(Boolean).join(" · ");
+        let name = base;
+        if (taken.has(name.toLowerCase()) && e.combo.provider) name = `${base} (${e.combo.provider})`;
+        for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base} #${n}`;
+        taken.add(name.toLowerCase());
+        e.name = name;
+      }
+      const now = Date.now();
+      engines.forEach((e, position) => {
+        const cfg: Record<string, unknown> = { name: e.name, harness: "pi", flags: [], seats: Math.min(MAX_ENGINE_SEATS, Math.max(1, e.seats)), enabled: true };
+        if (e.combo.provider) cfg.provider = e.combo.provider;
+        if (e.combo.model) cfg.model = e.combo.model;
+        if (e.combo.thinking) cfg.thinking = e.combo.thinking;
+        this.q("INSERT OR IGNORE INTO engines (id, position, config, updated_at) VALUES (?, ?, ?, ?)").run(e.id, position, JSON.stringify(cfg), now);
+      });
+      const strip = (cfg: AgentConfig & LegacyModelFields, runsOn: string[] | undefined): AgentConfig => {
+        const { provider: _p, model: _m, thinking: _t, ...rest } = cfg;
+        const out: AgentConfig = { ...rest };
+        if (runsOn && runsOn.length > 0) out.runsOn = runsOn;
+        else delete out.runsOn;
+        return out;
+      };
+      for (const [role, cfg] of legacy) {
+        this.q("UPDATE agent_configs SET config = ? WHERE role = ?").run(JSON.stringify(strip(cfg, lineups.get(role))), role);
+      }
+      const laneRows = this.q("SELECT id, context FROM lanes WHERE context IS NOT NULL").all() as Array<{ id: string; context: string }>;
+      for (const row of laneRows) {
+        const ctx = parse<LaneContext>(row.context);
+        if (!ctx || !Array.isArray(ctx.actors)) continue;
+        let changed = false;
+        for (const actor of ctx.actors) {
+          const runsOn = lineups.get(actor.id);
+          if (!actor.config && !runsOn) continue;
+          const next = strip({ ...(legacy.get(actor.id) ?? actor.config ?? {}) } as AgentConfig & LegacyModelFields, runsOn);
+          if (Object.keys(next).length > 0) actor.config = next;
+          else delete actor.config;
+          changed = true;
+        }
+        if (changed) this.q("UPDATE lanes SET context = ? WHERE id = ?").run(JSON.stringify(ctx), row.id);
+      }
+      for (const o of overrides) {
+        const cfg = parse<AgentConfig & LegacyModelFields>(o.config);
+        if (!cfg) continue;
+        const runsOn = overrideLineups.get(`${o.project}\u0000${o.actor}`);
+        this.q("UPDATE project_agent_configs SET config = ? WHERE project = ? AND actor = ?").run(
+          JSON.stringify(strip(cfg, runsOn ?? cfg.runsOn)),
+          o.project,
+          o.actor,
+        );
+      }
+      this.q("INSERT OR REPLACE INTO board_state (key, value) VALUES ('engines_folded', '1')").run();
+    });
+  }
+
   // boards created before the archive lane existed need it appended once
   private ensureArchiveLane(): void {
     const row = this.q("SELECT COUNT(*) AS n FROM lanes WHERE id = 'archive'").get() as { n: number };
@@ -1432,6 +1723,29 @@ export class KanbanDb {
       "Waiting on you",
       "Parked for a human answer — replying returns the card",
       (first.p ?? 0) / 2,
+    );
+  }
+
+  /** Same seed-adopt for the Epics container lane (ceqfq): adopt a custom lane
+   *  with our id, else insert between Backlog and the next lane so the board
+   *  order matches a fresh seed. */
+  private ensureEpicsLane(): void {
+    const row = this.q("SELECT COUNT(*) AS n FROM lanes WHERE id = 'epics'").get() as { n: number };
+    if (row.n > 0) {
+      const lane = this.q("SELECT fixed FROM lanes WHERE id = 'epics'").get() as { fixed: number };
+      if (lane.fixed !== 1) this.q("UPDATE lanes SET fixed = 1 WHERE id = 'epics'").run();
+      return;
+    }
+    const lanes = this.lanes();
+    const backlog = lanes.find((l) => l.id === "backlog");
+    if (!backlog) return; // defensive: backlog is fixed and always present
+    const after = lanes.find((l) => l.position > backlog.position);
+    const position = after ? (backlog.position + after.position) / 2 : backlog.position + GAP;
+    this.q("INSERT INTO lanes (id, name, description, position, fixed) VALUES (?, ?, ?, ?, 1)").run(
+      "epics",
+      "Epics",
+      "Approved epics supervising their children — never worked directly",
+      position,
     );
   }
 
@@ -1624,9 +1938,10 @@ export class KanbanDb {
   /** Strip empty strings from an override agent config; empty skills/extraArgs preserved if present. */
   private cleanProjectOverride(config: AgentConfig): AgentConfig {
     const clean: AgentConfig = {};
-    if (config.provider?.trim()) clean.provider = config.provider.trim();
-    if (config.model?.trim()) clean.model = config.model.trim();
-    if (config.thinking) clean.thinking = config.thinking;
+    if (config.runsOn !== undefined) {
+      const runsOn = this.cleanRunsOn(config.runsOn);
+      if (runsOn.length > 0) clean.runsOn = runsOn;
+    }
     if (config.skills !== undefined) {
       clean.skills = config.skills.map((s) => s.trim()).filter(Boolean);
     }
@@ -2122,10 +2437,23 @@ export class KanbanDb {
       beforeIndex = this.laneTasks(laneId).filter((t) => t.id !== task.id).findIndex((t) => t.id === anchor.id);
     }
     const hasIndex = patch.index !== undefined;
+    // An explicit priority change reorders the lane (hquwn): high rises to the
+    // top, low sinks to the bottom — visual order and `next` order stay aligned;
+    // normal leaves the position to drag. An explicit index/lane move wins.
+    const priorityReposition =
+      patch.priority !== undefined &&
+      patch.priority !== task.priority &&
+      !patch.lane &&
+      !hasIndex &&
+      beforeIndex === undefined;
     const position =
       patch.lane || hasIndex || beforeIndex !== undefined
         ? this.insertPosition(laneId, beforeIndex ?? patch.index, task.id)
-        : task.position;
+        : priorityReposition && patch.priority === "high"
+          ? this.insertPosition(laneId, 0, task.id)
+          : priorityReposition && patch.priority === "low"
+            ? this.insertPosition(laneId, undefined, task.id)
+            : task.position;
     const parentId =
       patch.parent === undefined ? task.parentId : (this.resolveParent(task.id, patch.parent)?.id ?? null);
 
@@ -2191,12 +2519,54 @@ export class KanbanDb {
     );
     if (laneId !== task.laneId) {
       this.recordLaneEvent(task.id, task.laneId, laneId, meta?.cause ?? "edit", meta?.actor ?? "user", now);
+      // a child's lane move can complete an ancestor epic (ceqfq) — checked
+      // after the move lands; walking parents is bounded by the depth-3 cap
+      this.autoDoneEpics(task.id);
     }
     this.renormalizeIfTight(laneId);
     if (patch.blockedBy !== undefined) {
       this.setBlockedBy(task.id, patch.blockedBy);
     }
     return this.resolveTask(task.id);
+  }
+
+  /** After a lane move (or child deletion): the starting container itself, then
+   *  every ancestor epic parked in the Epics lane with nothing left in flight
+   *  (EPIC_BLOCKING_LANES — Backlog defers never block, ceqfq decision 2) moves
+   *  itself to done, one comment recording why. Evaluating the start card covers
+   *  an epic that just ENTERED the Epics lane via approve or a hand mv with its
+   *  children already settled; deleteTask evaluates the deleted child's parent
+   *  for the same reason. An entry completes only if some child has settled
+   *  (done/archive): all-Backlog children mean the waves were never released —
+   *  such an epic must park and supervise, not insta-complete (approve/AC and
+   *  the supervising-child case pin this). Child events (any move, any delete)
+   *  keep the plain rule. Runs at every depth: a finished story can complete its
+   *  parent story, then the epic — moving to done re-enters updateTask, so the
+   *  walk continues upward naturally; depth is capped by the parent limit. */
+  private autoDoneEpics(startTaskId: string, viaChildEvent = false): void {
+    let cur = this.resolveTask(startTaskId);
+    let childEvent = viaChildEvent;
+    for (;;) {
+      if (cur.laneId === EPICS_LANE_ID) {
+        const children = this.childrenOf(cur.id);
+        const inFlight = children.filter((c) =>
+          (EPIC_BLOCKING_LANES as readonly string[]).includes(c.laneId),
+        );
+        const settled = childEvent || children.some((c) => (SETTLED_LANES as readonly string[]).includes(c.laneId));
+        if (inFlight.length === 0 && settled) {
+          this.updateTask(cur.id, { lane: "done" }, { cause: "auto", actor: "kanban" });
+          this.createComment(cur.id, {
+            author: "kanban",
+            kind: "comment",
+            body: "epic complete — no children in flight (Backlog defers stay parked)",
+          });
+        }
+        return; // an epic's completion (or non-completion) settles this chain
+      }
+      if (cur.parentId === null) return;
+      cur = this.resolveTask(cur.parentId);
+      childEvent = true; // every ancestor is evaluated because a child event happened
+    }
   }
 
   moveTask(prefix: string, laneRef: string, index?: number, meta?: { cause?: LaneEventCause; actor?: string }): Task {
@@ -2329,6 +2699,9 @@ export class KanbanDb {
       delElaborationRequests.run(id);
       delLaneEvents.run(id);
     }
+    // deleting a card is a child event for its container: an epic in Epics whose
+    // last in-flight (or last settled) child just vanished may complete now (ceqfq)
+    if (task.parentId !== null) this.autoDoneEpics(task.parentId, true);
     return task;
   }
 
@@ -2401,10 +2774,13 @@ export class KanbanDb {
     const laneIndex = new Map(lanes.map((l, i) => [l.id, i]));
     const violations: BoardViolation[] = [];
 
-    // (a) done parent with active children
+    // (a) done parent with children still in flight — same set the epic
+    // auto-done uses (ceqfq): Backlog children are defers and never count
     for (const task of tasks) {
       if (task.laneId === "done") {
-        const active = this.activeChildren(task.id);
+        const active = this.childrenOf(task.id).filter((c) =>
+          (EPIC_BLOCKING_LANES as readonly string[]).includes(c.laneId),
+        );
         if (active.length > 0) {
           violations.push({
             kind: "done-parent-active-children",
@@ -2415,11 +2791,12 @@ export class KanbanDb {
       }
     }
 
-    // (b) child in a lane behind its parent (active parent only)
+    // (b) child in a lane behind its parent (active parent only) — an epic in
+    // the Epics lane is exempt: its children sit in any lane by design (ceqfq)
     for (const task of tasks) {
       if (task.parentId !== null) {
         const parent = taskMap.get(task.parentId);
-        if (parent && !UNBLOCKED_LANES.includes(parent.laneId as any)) {
+        if (parent && !UNBLOCKED_LANES.includes(parent.laneId as any) && parent.laneId !== EPICS_LANE_ID) {
           const childIdx = laneIndex.get(task.laneId);
           const parentIdx = laneIndex.get(parent.laneId);
           if (childIdx !== undefined && parentIdx !== undefined && childIdx < parentIdx) {
@@ -2444,6 +2821,16 @@ export class KanbanDb {
             cardId: task.id,
             laneId: task.laneId,
           });
+        }
+      }
+    }
+
+    // (c2) an epic (has children) drifting in a build lane — it belongs in
+    // Epics once approved (ceqfq); Plan is legit, that is where it decomposes
+    for (const task of tasks) {
+      if (task.laneId === "implement" || task.laneId === "review") {
+        if (this.childrenOf(task.id).length > 0) {
+          violations.push({ kind: "epic-in-workflow-lane", cardId: task.id, laneId: task.laneId });
         }
       }
     }
@@ -2992,10 +3379,14 @@ export class KanbanDb {
     return computeCardStats(task, events, comments, attachments, boardLanes, now);
   }
 
-  boardStats(now: number = Date.now()): BoardStatsPayload {
+  boardStats(now: number = Date.now(), project: string | null = null): BoardStatsPayload {
     const allLanes = this.lanes();
     const allTasks = this.tasks();
     const allEvents = this.laneEvents();
+    // A project chip scopes the aggregates; card stats stay global so opening a
+    // card never loses its lane times.
+    const scopedTasks = project ? allTasks.filter((t) => t.project === project) : allTasks;
+    const scopedIds = project ? new Set(scopedTasks.map((t) => t.id)) : null;
     const allComments = (
       this.q("SELECT * FROM comments ORDER BY created_at, rowid").all() as CommentRow[]
     ).map(rowToComment);
@@ -3045,7 +3436,7 @@ export class KanbanDb {
       );
     }
 
-    const wip = allTasks.filter((t) => t.laneId !== "done" && t.laneId !== "archive").length;
+    const wip = scopedTasks.filter((t) => t.laneId !== "done" && t.laneId !== "archive").length;
 
     function startOfLocalWeek(ts: number): number {
       const d = new Date(ts);
@@ -3065,7 +3456,7 @@ export class KanbanDb {
 
     const doneCounts = new Array(8).fill(0);
     for (const e of allEvents) {
-      if (e.toLaneId === "done") {
+      if (e.toLaneId === "done" && (!scopedIds || scopedIds.has(e.taskId))) {
         const eWeek = startOfLocalWeek(e.createdAt);
         const idx = weekStarts.indexOf(eWeek);
         if (idx >= 0) {
@@ -3079,7 +3470,9 @@ export class KanbanDb {
     }));
 
     const laneVisitors = new Map<string, { totalMs: number; cards: number }>();
-    for (const stats of Object.values(cardStatsMap)) {
+    for (const task of scopedTasks) {
+      const stats = cardStatsMap[task.id];
+      if (!stats) continue;
       for (const lt of stats.laneTimes) {
         const curDwell = laneVisitors.get(lt.laneId) ?? { totalMs: 0, cards: 0 };
         curDwell.totalMs += lt.ms;
@@ -3098,7 +3491,7 @@ export class KanbanDb {
     }
 
     const projectMap = new Map<string, { total: number; active: number; done: number }>();
-    for (const task of allTasks) {
+    for (const task of scopedTasks) {
       const p = task.project;
       const curP = projectMap.get(p) ?? { total: 0, active: 0, done: 0 };
       curP.total += 1;
@@ -3114,7 +3507,9 @@ export class KanbanDb {
       .map(([project, counts]) => ({ project, ...counts }))
       .sort((a, b) => a.project.localeCompare(b.project));
 
-    const reachedDoneStats = Object.values(cardStatsMap).filter((s) => s.reachedDone);
+    const reachedDoneStats = scopedTasks
+      .map((t) => cardStatsMap[t.id])
+      .filter((s): s is CardStats => !!s && s.reachedDone);
     const cycleAvgMs =
       reachedDoneStats.length === 0
         ? null
@@ -3202,16 +3597,24 @@ export class KanbanDb {
       throw new KanbanError(`card '${task.id}' has no attached ${ctx.gate.requireArtifact} to approve`, "conflict");
     }
     const body =
-      input.message?.trim() || (artifact ? `${artifactName} v${artifact.version} approved — build it` : "approved — build it");
+      input.message?.trim() ||
+      (artifact
+        ? this.childrenOf(task.id).length > 0
+          ? `${artifactName} v${artifact.version} approved — decomposition locked, epic now supervising in Epics`
+          : `${artifactName} v${artifact.version} approved — build it`
+        : "approved — build it");
     return this.tx((): { task: Task; comment: Comment } => {
+      // An epic's approval parks it in the container lane, unarmed — the epic
+      // plans work, it never builds (ceqfq); a childless card arms as before.
+      const isEpic = this.childrenOf(task.id).length > 0;
       const moved = this.updateTask(
         task.id,
-        { lane: ctx.gate!.approveTarget },
+        { lane: isEpic ? EPICS_LANE_ID : ctx.gate!.approveTarget },
         { cause: "approve", actor: input.author?.trim() || "user" },
       );
       // after the lane change (whose exit rule clears stale owners), the gate
-      // arms its actor: approveOwner or none
-      const task2 = this.updateTask(task.id, { owner: ctx.gate!.approveOwner ?? null });
+      // arms its actor: approveOwner or none (an epic stays unarmed)
+      const task2 = this.updateTask(task.id, { owner: isEpic ? null : (ctx.gate!.approveOwner ?? null) });
       const comment = this.createComment(task.id, {
         author: input.author,
         kind: "approval",
@@ -3534,9 +3937,8 @@ export class KanbanDb {
   /** Strip empty strings/arrays from an agent config (the stored shape). */
   private cleanAgentConfig(config: AgentConfig): AgentConfig {
     const clean: AgentConfig = {};
-    if (config.provider?.trim()) clean.provider = config.provider.trim();
-    if (config.model?.trim()) clean.model = config.model.trim();
-    if (config.thinking) clean.thinking = config.thinking;
+    const runsOn = this.cleanRunsOn(config.runsOn ?? []);
+    if (runsOn.length > 0) clean.runsOn = runsOn;
     const skills = (config.skills ?? []).map((s) => s.trim()).filter(Boolean);
     if (skills.length > 0) clean.skills = skills;
     if (config.context?.trim()) clean.context = config.context.trim();
@@ -3555,137 +3957,200 @@ export class KanbanDb {
     ).run(role, JSON.stringify(clean), Date.now());
   }
 
-  // ---------- worker pools ----------
+  /** Trimmed, deduped engine ids; an id that names no engine throws (a lineup never dangles). */
+  private cleanRunsOn(runsOn: string[]): string[] {
+    const ids: string[] = [];
+    for (const raw of runsOn) {
+      const id = raw.trim();
+      if (!id || ids.includes(id)) continue;
+      if (!this.engine(id)) throw new KanbanError(`unknown engine '${id}'`, "invalid");
+      ids.push(id);
+    }
+    return ids;
+  }
 
-  pools(): WorkerPool[] {
-    const rows = this.q("SELECT id, config, updated_at FROM worker_pools ORDER BY rowid").all() as Array<{
+  // ---------- engines ----------
+
+  private engineFromRow(r: { id: string; config: string; updated_at: number }): Engine | null {
+    let parsed: Partial<Engine>;
+    try {
+      parsed = JSON.parse(r.config) as Partial<Engine>;
+    } catch {
+      return null; // a corrupt row reads as absent — one bad blob never stops the loop
+    }
+    const e: Engine = {
+      id: r.id,
+      name: parsed.name ?? r.id,
+      harness: parsed.harness === "claude" ? "claude" : "pi",
+      flags: Array.isArray(parsed.flags) ? parsed.flags : [],
+      seats: Number.isInteger(parsed.seats) ? parsed.seats! : 1,
+      enabled: parsed.enabled !== false,
+      updatedAt: r.updated_at,
+    };
+    if (parsed.provider) e.provider = parsed.provider;
+    if (parsed.model) e.model = parsed.model;
+    if (parsed.thinking) e.thinking = parsed.thinking;
+    return e;
+  }
+
+  /** Every engine, in registry order (position, then creation). */
+  engines(): Engine[] {
+    const rows = this.q("SELECT id, config, updated_at FROM engines ORDER BY position, rowid").all() as Array<{
       id: string;
       config: string;
       updated_at: number;
     }>;
-    return rows.map((r) => {
-      const parsed = JSON.parse(r.config);
-      const pool: WorkerPool = {
-        id: r.id,
-        name: parsed.name,
-        enabled: Boolean(parsed.enabled),
-        roles: parsed.roles,
-        slots: parsed.slots,
-        updatedAt: r.updated_at,
+    return rows.map((r) => this.engineFromRow(r)).filter((e): e is Engine => e !== null);
+  }
+
+  engine(id: string): Engine | null {
+    const row = this.q("SELECT id, config, updated_at FROM engines WHERE id = ?").get(id) as
+      | { id: string; config: string; updated_at: number }
+      | null;
+    return row ? this.engineFromRow(row) : null;
+  }
+
+  /**
+   * Create or fully replace an engine. Coherence is enforced here: a claude
+   * engine has no provider (claude resolves its own auth) and its thinking is
+   * a Claude Code effort level (CLAUDE_EFFORT_LEVELS); seats are
+   * 1–MAX_ENGINE_SEATS; names are unique (case-insensitive) so the CLI can
+   * address engines by name. An update keeps its registry position.
+   */
+  setEngine(id: string, input: EngineInput): Engine {
+    if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(id)) {
+      throw new KanbanError(`engine id '${id}' must be lowercase kebab, up to 48 chars`, "invalid");
+    }
+    const name = input.name?.trim() ?? "";
+    if (!name || name.length > 60) throw new KanbanError("engine name must be 1-60 characters", "invalid");
+    if (input.harness !== "pi" && input.harness !== "claude") {
+      throw new KanbanError("engine harness must be pi or claude", "invalid");
+    }
+    const provider = input.provider?.trim() ?? "";
+    const model = input.model?.trim() ?? "";
+    const thinking = input.thinking ?? "";
+    if (input.harness === "claude" && provider) {
+      throw new KanbanError("a claude engine takes no provider — claude resolves its own login", "invalid");
+    }
+    if (input.harness === "claude" && thinking && !(CLAUDE_EFFORT_LEVELS as readonly string[]).includes(thinking)) {
+      throw new KanbanError(`claude effort must be one of ${CLAUDE_EFFORT_LEVELS.join(", ")}`, "invalid");
+    }
+    if (thinking && !(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as string[]).includes(thinking)) {
+      throw new KanbanError(`unknown thinking level '${thinking}'`, "invalid");
+    }
+    const seats = input.seats ?? 1;
+    if (!Number.isInteger(seats) || seats < 1 || seats > MAX_ENGINE_SEATS) {
+      throw new KanbanError(`engine seats must be between 1 and ${MAX_ENGINE_SEATS}`, "invalid");
+    }
+    for (const other of this.engines()) {
+      if (other.id !== id && other.name.toLowerCase() === name.toLowerCase()) {
+        throw new KanbanError(`engine name '${name}' is taken`, "invalid");
+      }
+    }
+    const cfg: Record<string, unknown> = {
+      name,
+      harness: input.harness,
+      flags: (input.flags ?? []).map((f) => f.trim()).filter(Boolean),
+      seats,
+      enabled: input.enabled !== false,
+    };
+    if (provider) cfg.provider = provider;
+    if (model) cfg.model = model;
+    if (thinking) cfg.thinking = thinking;
+    const now = Date.now();
+    this.tx(() => {
+      const next = (this.q("SELECT COALESCE(MAX(position), -1) + 1 AS p FROM engines").get() as { p: number }).p;
+      this.q(
+        `INSERT INTO engines (id, position, config, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at`,
+      ).run(id, next, JSON.stringify(cfg), now);
+    });
+    return this.engine(id)!;
+  }
+
+  /** Delete an engine and drop it from every lineup, override, and the board default. */
+  deleteEngine(id: string): void {
+    if (!this.engine(id)) throw new KanbanError(`engine ${id} not found`, "not-found");
+    this.tx(() => {
+      this.q("DELETE FROM engines WHERE id = ?").run(id);
+      const drop = (cfg: AgentConfig): boolean => {
+        if (!cfg.runsOn?.includes(id)) return false;
+        cfg.runsOn = cfg.runsOn.filter((x) => x !== id);
+        if (cfg.runsOn.length === 0) delete cfg.runsOn;
+        return true;
       };
-      if (parsed.maxWorkers !== undefined) pool.maxWorkers = parsed.maxWorkers;
-      return pool;
+      for (const r of this.q("SELECT role, config FROM agent_configs").all() as Array<{ role: string; config: string }>) {
+        try {
+          const cfg = JSON.parse(r.config) as AgentConfig;
+          if (drop(cfg)) this.q("UPDATE agent_configs SET config = ? WHERE role = ?").run(JSON.stringify(cfg), r.role);
+        } catch {
+          /* corrupt row stays as is */
+        }
+      }
+      for (const r of this.q("SELECT id, context FROM lanes WHERE context IS NOT NULL").all() as Array<{ id: string; context: string }>) {
+        try {
+          const ctx = JSON.parse(r.context) as LaneContext;
+          let changed = false;
+          for (const a of ctx.actors) {
+            if (a.config && drop(a.config)) {
+              changed = true;
+              if (Object.keys(a.config).length === 0) delete a.config;
+            }
+          }
+          if (changed) this.q("UPDATE lanes SET context = ? WHERE id = ?").run(JSON.stringify(ctx), r.id);
+        } catch {
+          /* corrupt row stays as is */
+        }
+      }
+      for (const r of this.q("SELECT project, actor, config FROM project_agent_configs").all() as Array<{
+        project: string;
+        actor: string;
+        config: string;
+      }>) {
+        try {
+          const cfg = JSON.parse(r.config) as AgentConfig;
+          if (drop(cfg)) {
+            this.q("UPDATE project_agent_configs SET config = ? WHERE project = ? AND actor = ?").run(JSON.stringify(cfg), r.project, r.actor);
+          }
+        } catch {
+          /* corrupt row stays as is */
+        }
+      }
+      if (this.defaultEngineId() === null) {
+        this.q("DELETE FROM board_state WHERE key = 'default_engine' AND value = ?").run(id);
+      }
     });
   }
 
-  pool(id: string): WorkerPool | null {
-    const row = this.q("SELECT id, config, updated_at FROM worker_pools WHERE id = ?").get(id) as
-      | { id: string; config: string; updated_at: number }
-      | undefined;
-    if (!row) return null;
-    const parsed = JSON.parse(row.config);
-    const pool: WorkerPool = {
-      id: row.id,
-      name: parsed.name,
-      enabled: Boolean(parsed.enabled),
-      roles: parsed.roles,
-      slots: parsed.slots,
-      updatedAt: row.updated_at,
-    };
-    if (parsed.maxWorkers !== undefined) pool.maxWorkers = parsed.maxWorkers;
-    return pool;
+  /** Rewrite the registry order; ids must be exactly the existing set. */
+  reorderEngines(ids: string[]): Engine[] {
+    const current = this.engines().map((e) => e.id);
+    const unique = new Set(ids);
+    if (unique.size !== ids.length || ids.length !== current.length || current.some((id) => !unique.has(id))) {
+      throw new KanbanError("engine order must list every engine exactly once", "invalid");
+    }
+    this.tx(() => {
+      ids.forEach((id, i) => this.q("UPDATE engines SET position = ? WHERE id = ?").run(i, id));
+    });
+    return this.engines();
   }
 
-  setPool(
-    id: string,
-    input: { name: string; enabled?: boolean; roles: BuiltinAgentRole[]; slots: PoolSlot[]; maxWorkers?: number },
-  ): WorkerPool {
-    const name = input.name?.trim() ?? "";
-    if (!name) throw new KanbanError("pool name must not be empty", "invalid");
+  /** The engine an empty lineup runs on; null = the built-in "pi default" (pi's own settings, one seat). */
+  defaultEngineId(): string | null {
+    const row = this.q("SELECT value FROM board_state WHERE key = 'default_engine'").get() as { value: string } | undefined;
+    return row && this.engine(row.value) ? row.value : null;
+  }
 
-    const dedupedRoles: BuiltinAgentRole[] = [];
-    const seenRoles = new Set<string>();
-    let invalidRole = false;
-    for (const r of input.roles ?? []) {
-      if (!AGENT_ROLES.has(r)) {
-        invalidRole = true;
-        break;
-      }
-      if (!seenRoles.has(r)) {
-        seenRoles.add(r);
-        dedupedRoles.push(r as BuiltinAgentRole);
-      }
+  setDefaultEngine(id: string | null): string | null {
+    if (id === null) {
+      this.q("DELETE FROM board_state WHERE key = 'default_engine'").run();
+      return null;
     }
-    if (invalidRole || dedupedRoles.length === 0 || dedupedRoles.length > 4) {
-      throw new KanbanError(`pool '${id}' must serve 1-4 known roles`, "invalid");
-    }
-
-    const cleanSlots: PoolSlot[] = [];
-    for (const s of input.slots ?? []) {
-      const cleanSlot: PoolSlot = {};
-      if (s.provider?.trim()) cleanSlot.provider = s.provider.trim();
-      if (s.model?.trim()) cleanSlot.model = s.model.trim();
-      if (s.thinking) cleanSlot.thinking = s.thinking;
-      // fully-inherit slots are valid: they run as lanes on the role's own config
-      cleanSlots.push(cleanSlot);
-    }
-    if (cleanSlots.length === 0 || cleanSlots.length > 8) {
-      throw new KanbanError(`pool '${id}' must have 1-8 slots`, "invalid");
-    }
-
-    if (
-      input.maxWorkers !== undefined &&
-      (!Number.isInteger(input.maxWorkers) || input.maxWorkers < 1 || input.maxWorkers > cleanSlots.length)
-    ) {
-      throw new KanbanError(
-        `pool '${id}' maxWorkers must be between 1 and ${cleanSlots.length} (its slot count)`,
-        "invalid",
-      );
-    }
-
-    const enabled = Boolean(input.enabled);
-
-    let totalEnabledSlots = enabled ? cleanSlots.length : 0;
-    for (const p of this.pools()) {
-      if (p.id !== id && p.enabled) {
-        totalEnabledSlots += p.slots.length;
-      }
-    }
-    if (totalEnabledSlots > 12) {
-      throw new KanbanError("board-wide enabled slots would exceed 12", "invalid");
-    }
-
-    const now = Date.now();
-    const configBlob: Record<string, any> = {
-      name,
-      enabled,
-      roles: dedupedRoles,
-      slots: cleanSlots,
-    };
-    if (input.maxWorkers !== undefined) configBlob.maxWorkers = input.maxWorkers;
-
+    if (!this.engine(id)) throw new KanbanError(`unknown engine '${id}'`, "invalid");
     this.q(
-      `INSERT INTO worker_pools (id, config, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at`,
-    ).run(id, JSON.stringify(configBlob), now);
-
-    const pool: WorkerPool = {
-      id,
-      name,
-      enabled,
-      roles: dedupedRoles,
-      slots: cleanSlots,
-      updatedAt: now,
-    };
-    if (input.maxWorkers !== undefined) pool.maxWorkers = input.maxWorkers;
-    return pool;
-  }
-
-  deletePool(id: string): void {
-    const info = this.q("DELETE FROM worker_pools WHERE id = ?").run(id);
-    if (info.changes === 0) {
-      throw new KanbanError(`no pool '${id}'`, "not-found");
-    }
+      "INSERT INTO board_state (key, value) VALUES ('default_engine', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(id);
+    return id;
   }
 
   // ---------- lane workers ----------

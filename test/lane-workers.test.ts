@@ -18,6 +18,7 @@ import {
   startWorkerRunner,
   workerAuthor,
   workerArgs,
+  workerEngine,
   workerPrompt,
   workerRules,
   WORKER_AUTHOR_PREFIX,
@@ -149,27 +150,23 @@ describe("formatSnapshot", () => {
 });
 
 describe("workerArgs and env knobs", () => {
-  test("workerArgs: config only — no env overrides, no default thinking", () => {
+  test("workerArgs: engine supplies the model, config the behavior — no default thinking", () => {
     const skillDir = mkdtempSync(join(tmpdir(), "kanban-worker-skill-"));
     writeFileSync(join(skillDir, "SKILL.md"), "---\nname: demo\ndescription: test skill\n---\n\nBe careful.\n");
     skillDirs.push(skillDir);
     expect(workerArgs(null)).toEqual([]);
     expect(workerArgs({})).toEqual([]);
-    const args = workerArgs({
-      provider: "zai",
-      model: "glm-5.3",
-      thinking: "low",
-      skills: [skillDir],
-      context: "be careful",
-      tools: "read,write",
-      extraArgs: ["--no-session"],
-    });
-    expect(args).toContain("--provider");
-    expect(args).toContain("zai");
-    expect(args).toContain("--model");
-    expect(args).toContain("glm-5.3");
-    expect(args).toContain("--thinking");
-    expect(args).toContain("low");
+    const engine = { id: "w", name: "W", harness: "pi" as const, provider: "zai", model: "glm-5.3", thinking: "low" as const, flags: ["--no-mcp"], seats: 1, enabled: true, updatedAt: 0 };
+    const args = workerArgs(
+      {
+        skills: [skillDir],
+        context: "be careful",
+        tools: "read,write",
+        extraArgs: ["--no-session"],
+      },
+      engine,
+    );
+    expect(args.slice(0, 6)).toEqual(["--provider", "zai", "--model", "glm-5.3", "--thinking", "low"]);
     expect(args).toContain("--skill");
     expect(args).toContain(skillDir);
     expect(args).toContain("--append-system-prompt");
@@ -177,6 +174,18 @@ describe("workerArgs and env knobs", () => {
     expect(args.join("\n")).toContain("<skill name=");
     expect(args).toContain("--tools");
     expect(args).toContain("--no-session");
+    expect(args.at(-1)).toBe("--no-mcp");
+  });
+
+  test("workerEngine: the worker lineup's first enabled pi engine, else pi default", () => {
+    const db = new KanbanDb(join(mkdtempSync(join(tmpdir(), "kanban-worker-eng-")), "t.db"));
+    expect(workerEngine(db).id).toBe("default");
+    db.setEngine("sonnet", { name: "Sonnet", harness: "claude", model: "sonnet" });
+    db.setEngine("off", { name: "Off", harness: "pi", model: "x", enabled: false });
+    db.setEngine("flash", { name: "Flash", harness: "pi", provider: "zai", model: "glm-5.3-flash" });
+    db.setAgentConfig("worker", { runsOn: ["sonnet", "off", "flash"] });
+    expect(workerEngine(db).id).toBe("flash");
+    db.close();
   });
 
   test("env knobs: invalid → default + console.warn", () => {

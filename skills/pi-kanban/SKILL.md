@@ -41,11 +41,12 @@ Keep the board truthful as you work. Lanes and their meaning, in order:
 
 1. **Waiting on you** — HITL tickets parked for a human answer; replying returns them
 2. **Backlog** — captured but not started
-3. **Plan** — scoping/design before code
-4. **Test + Implement** — actively building (test as you go)
-5. **Review** — code done, verifying / awaiting user acceptance
-6. **Done** — finished
-7. **Archive** — kept for reference, out of the active board
+3. **Epics** — approved epics supervising their children (a card with children plans work, never builds; it auto-dones when nothing is in flight)
+4. **Plan** — scoping/design before code
+5. **Test + Implement** — actively building (test as you go)
+6. **Review** — code done, verifying / awaiting user acceptance
+7. **Done** — finished
+8. **Archive** — kept for reference, out of the active board
 
 The HITL rule: HITL tickets never resolve without the human — the agent never answers its own questions. When an agent needs human direction or a plan decision, it asks with `kanban comment <id> "<problem + recommended default>" --kind question` (each question with a recommended default). Posting a `question` comment atomically parks the card in **Waiting on you** (saving its home lane). A plan-review **pass** parks the card the same way (home lane: Plan). Any human comment (author not `pi-*`, kind not `question`) atomically returns the card to its home lane at the end. Agents never move parked cards. The plan gate (`approve`/`reject`) works directly on a card parked from Plan — no reply needed first.
 

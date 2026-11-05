@@ -9,7 +9,7 @@
   import { CircleSlash, GitBranch } from "@lucide/svelte";
   import { cycleChip, laneAgeChip } from "./statsview";
   import { ghChip } from "./ghview";
-  import { canPromoteToPlan, queuedChip, roleVerb, timeAgo } from "./util";
+  import { canPromoteToPlan, nextPriority, queuedChip, roleVerb, timeAgo } from "./util";
   import { waitingBadge } from "./waiting";
 
   let { task, child = false }: { task: Task; child?: boolean } = $props();
@@ -97,11 +97,18 @@
   {#if task.note}<div class="card-note md">{@html renderMarkdown(task.note)}</div>{/if}
   <div class="card-meta">
     <IdChip id={task.id} />
-    {#if task.priority === "high"}
-      <span class="chip prio-high">▲ high</span>
-    {:else if task.priority === "low"}
-      <span class="chip prio-low">▼ low</span>
-    {/if}
+    <button
+      class="chip prio-chip prio-{task.priority}"
+      aria-label={`priority ${task.id}: ${task.priority}`}
+      title={`priority ${task.priority} — click to set ${nextPriority(task.priority)}; high rises to the lane top, low sinks to the bottom`}
+      onclick={(e) => {
+        e.stopPropagation();
+        void board.cyclePriority(task.id);
+      }}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      {task.priority === "high" ? "▲" : task.priority === "low" ? "▼" : "·"}
+    </button>
     {#if board.isBlocked(task.id)}
       <span class="chip blocked"><CircleSlash size={11} strokeWidth={1.75} /> blocked</span>
     {/if}

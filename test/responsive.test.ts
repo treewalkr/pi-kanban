@@ -66,7 +66,8 @@ describe("board lane grid (app.css)", () => {
     const collapsedRule = innerRules.find((r) => r.selectorText === ".lane.collapsed");
     expect(collapsedRule).toBeDefined();
     expect(collapsedRule!.style.flexDirection).toBe("row");
-    expect(collapsedRule!.style.minHeight).toBe("36px");
+    // 28px: AC2's phone budget (swk5g) holds at 10 lanes only with compact strips (ceqfq)
+    expect(collapsedRule!.style.minHeight).toBe("28px");
     expect(collapsedRule!.style.width).toBe("auto");
 
     const nameRule = innerRules.find((r) => r.selectorText === ".lane.collapsed .collapsed-name");

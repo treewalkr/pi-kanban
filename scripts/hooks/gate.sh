@@ -22,15 +22,15 @@ name="$1"
 # temp repos) must resolve the repo from their own cwd. Strip them.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
 
-# Check first: type errors fail fast in ~7s before the ~51s suite.
+# Check first: type errors fail fast in ~7s before the suite.
 echo "$name: running check (svelte-check + tsc)"
 if ! bun run check; then
   echo "$hint" >&2
   exit 1
 fi
 
-echo "$name: running bun test"
-if ! bun test; then
+echo "$name: running bun test --parallel"
+if ! bun test --parallel; then
   echo "$hint" >&2
   exit 1
 fi

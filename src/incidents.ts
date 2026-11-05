@@ -1,5 +1,6 @@
 import type { SpawnResult } from "./autoreview";
-import type { WorkerPool } from "./db";
+import type { Engine } from "./db";
+import { accountKey } from "./engines";
 
 export type IncidentCause =
   | "provider-quota"
@@ -26,11 +27,17 @@ export const DEFAULT_COOLDOWN_MS = 15 * 60_000;
 export const MAX_COOLDOWN_MS = 60 * 60_000; // cap for provider wait hints
 export const MIN_HINT_COOLDOWN_MS = 60_000; // floor for provider wait hints
 
-/** One pool slot's incident record — what /activity and `kanban ps` render. */
-export interface SlotIncident {
-  poolId: string;
-  poolName: string;
-  slotIndex: number;
+/**
+ * One account's incident record — what /activity and `kanban ps` render.
+ * Provider-level incidents (quota, auth) exhaust the account, not one engine,
+ * so the record is keyed by harness + provider and every engine on it cools.
+ */
+export interface EngineIncident {
+  /** harness:provider — the cooling scope. */
+  account: string;
+  /** The engine whose spawn hit it (the others on the account cool with it). */
+  engineId: string;
+  engineName: string;
   cause: IncidentCause; // latest cause
   count: number; // incidents this process has seen
   firstSeenAt: number;
@@ -38,13 +45,15 @@ export interface SlotIncident {
   cooldownUntil: number; // cooling ⟺ now < cooldownUntil
 }
 
-/** Per-pool aggregate for /activity + `kanban check`. */
-export interface PoolHealthSummary {
-  poolId: string;
-  poolName: string;
-  totalSlots: number;
-  coolingSlots: number;
-  lastCause?: IncidentCause; // newest incident in the pool, if any
+/** Per-engine aggregate for /activity + `kanban check`. */
+export interface EngineHealthSummary {
+  engineId: string;
+  engineName: string;
+  account: string;
+  seats: number;
+  /** Set while the engine's account is cooling. */
+  coolingUntil?: number;
+  lastCause?: IncidentCause;
 }
 
 /** Classification result: the bucket plus the provider's own wait hint, if it carried one. */
@@ -116,120 +125,88 @@ export function classifySpawnFailure(
   return { cause: "other", waitHintMs };
 }
 
-/** In-memory slot-health registry (the loop owns one instance). */
-export class SlotHealth {
+/** In-memory engine-health registry (the loop owns one instance), keyed by account. */
+export class EngineHealth {
   private readonly cooldownMs: number;
-  private readonly incidentsMap = new Map<string, SlotIncident>();
-  private readonly knownPools = new Map<string, number>();
+  private readonly byAccount = new Map<string, EngineIncident>();
+  private readonly knownEngines = new Map<string, number>();
 
   constructor(cooldownMs: number = DEFAULT_COOLDOWN_MS) {
     this.cooldownMs = cooldownMs;
   }
 
-  /** Drop unknown pool ids; reset pools whose updatedAt changed */
-  syncPools(pools: WorkerPool[]): void {
-    const currentPoolIds = new Set(pools.map((p) => p.id));
-    for (const poolId of this.knownPools.keys()) {
-      if (!currentPoolIds.has(poolId)) {
-        this.knownPools.delete(poolId);
-        for (const key of this.incidentsMap.keys()) {
-          if (key.startsWith(`${poolId}:`)) {
-            this.incidentsMap.delete(key);
-          }
-        }
-      }
-    }
-    for (const pool of pools) {
-      const knownUpdatedAt = this.knownPools.get(pool.id);
-      if (knownUpdatedAt !== undefined && knownUpdatedAt !== pool.updatedAt) {
-        for (const key of this.incidentsMap.keys()) {
-          if (key.startsWith(`${pool.id}:`)) {
-            this.incidentsMap.delete(key);
-          }
-        }
-      }
-      this.knownPools.set(pool.id, pool.updatedAt);
+  /** An engine edit is the manual reset: changing an engine clears its account's cooldown. */
+  syncEngines(engines: Engine[]): void {
+    for (const e of engines) {
+      const known = this.knownEngines.get(e.id);
+      if (known !== undefined && known !== e.updatedAt) this.byAccount.delete(accountKey(e));
+      this.knownEngines.set(e.id, e.updatedAt);
     }
   }
 
-  record(
-    pool: WorkerPool,
-    slotIndex: number,
-    cause: IncidentCause,
-    opts?: { waitHintMs?: number; now?: number },
-  ): SlotIncident {
+  record(engine: Engine, cause: IncidentCause, opts?: { waitHintMs?: number; now?: number }): EngineIncident {
     const now = opts?.now ?? Date.now();
-    this.knownPools.set(pool.id, pool.updatedAt);
-
-    let cooldownUntil: number;
-    if (opts?.waitHintMs != null) {
-      const clamped = Math.max(
-        MIN_HINT_COOLDOWN_MS,
-        Math.min(MAX_COOLDOWN_MS, opts.waitHintMs),
-      );
-      cooldownUntil = now + clamped;
-    } else {
-      cooldownUntil = now + this.cooldownMs;
-    }
-
-    const key = `${pool.id}:${slotIndex}`;
-    const existing = this.incidentsMap.get(key);
-
-    const record: SlotIncident = {
-      poolId: pool.id,
-      poolName: pool.name,
-      slotIndex,
+    this.knownEngines.set(engine.id, engine.updatedAt);
+    const cooldownUntil =
+      opts?.waitHintMs != null
+        ? now + Math.max(MIN_HINT_COOLDOWN_MS, Math.min(MAX_COOLDOWN_MS, opts.waitHintMs))
+        : now + this.cooldownMs;
+    const account = accountKey(engine);
+    const existing = this.byAccount.get(account);
+    const record: EngineIncident = {
+      account,
+      engineId: engine.id,
+      engineName: engine.name,
       cause,
       count: existing ? existing.count + 1 : 1,
       firstSeenAt: existing ? existing.firstSeenAt : now,
       lastSeenAt: now,
       cooldownUntil,
     };
-
-    this.incidentsMap.set(key, record);
+    this.byAccount.set(account, record);
     return record;
   }
 
-  isCooling(poolId: string, slotIndex: number, now: number = Date.now()): boolean {
-    const inc = this.incident(poolId, slotIndex);
-    return inc ? now < inc.cooldownUntil : false;
+  /** Cooldown end for the engine's account, or null when it is healthy. */
+  coolingUntil(engine: Engine, now: number = Date.now()): number | null {
+    const inc = this.byAccount.get(accountKey(engine));
+    return inc && now < inc.cooldownUntil ? inc.cooldownUntil : null;
   }
 
-  incident(poolId: string, slotIndex: number): SlotIncident | null {
-    return this.incidentsMap.get(`${poolId}:${slotIndex}`) ?? null;
+  isCooling(engine: Engine, now: number = Date.now()): boolean {
+    return this.coolingUntil(engine, now) !== null;
   }
 
-  incidents(): SlotIncident[] {
-    return Array.from(this.incidentsMap.values()).sort(
-      (a, b) => b.lastSeenAt - a.lastSeenAt,
-    );
+  incident(engine: Engine): EngineIncident | null {
+    return this.byAccount.get(accountKey(engine)) ?? null;
   }
 
-  poolSummaries(pools: WorkerPool[], now: number = Date.now()): PoolHealthSummary[] {
-    return pools
-      .filter((p) => p.enabled)
-      .map((pool) => {
-        const totalSlots = pool.maxWorkers ?? pool.slots.length;
-        let coolingSlots = 0;
-        let newestIncident: SlotIncident | undefined;
-        for (let i = 0; i < totalSlots; i++) {
-          const inc = this.incident(pool.id, i);
-          if (inc && now < inc.cooldownUntil) {
-            coolingSlots++;
-          }
-          if (
-            inc &&
-            (!newestIncident || inc.lastSeenAt > newestIncident.lastSeenAt)
-          ) {
-            newestIncident = inc;
-          }
-        }
+  incidents(): EngineIncident[] {
+    return Array.from(this.byAccount.values()).sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  }
+
+  /** The earliest future cooldown end — the loop re-scans then (a cooled engine requalifies). */
+  nextExpiry(now: number = Date.now()): number | null {
+    let next: number | null = null;
+    for (const inc of this.byAccount.values()) {
+      if (inc.cooldownUntil > now && (next === null || inc.cooldownUntil < next)) next = inc.cooldownUntil;
+    }
+    return next;
+  }
+
+  summaries(engines: Engine[], now: number = Date.now()): EngineHealthSummary[] {
+    return engines
+      .filter((e) => e.enabled)
+      .map((e) => {
+        const inc = this.byAccount.get(accountKey(e));
+        const until = this.coolingUntil(e, now);
         return {
-          poolId: pool.id,
-          poolName: pool.name,
-          totalSlots,
-          coolingSlots,
-          ...(newestIncident ? { lastCause: newestIncident.cause } : {}),
+          engineId: e.id,
+          engineName: e.name,
+          account: accountKey(e),
+          seats: e.seats,
+          ...(until !== null ? { coolingUntil: until } : {}),
+          ...(inc ? { lastCause: inc.cause } : {}),
         };
       });
   }
