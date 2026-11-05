@@ -149,6 +149,57 @@ describe("touch affordances (app.css)", () => {
   });
 });
 
+describe("top bar chips row (48wdj)", () => {
+  test("phone header blocks are byte-identical to main", () => {
+    const fixture = readFileSync(join(import.meta.dir, "fixtures", "phone-header.css"), "utf-8");
+    expect(appCss.includes(fixture)).toBe(true);
+  });
+
+  test("phone header dissolves the .top-rest wrapper", () => {
+    const dom = getDom();
+    const mediaRules = findMediaRules(dom, "(max-width: 640px)");
+    const allInnerRules = mediaRules.flatMap((m) => Array.from(m.cssRules)) as CSSStyleRule[];
+
+    const restRule = allInnerRules.find((r) => r.selectorText === ".top-rest");
+    expect(restRule).toBeDefined();
+    expect(restRule!.style.display).toBe("contents");
+
+    const searchRule = allInnerRules.filter((r) => r.selectorText === ".top .search-box");
+    expect(searchRule.some((r) => r.style.maxWidth === "none")).toBe(true);
+
+    // `safe flex-end` isn't a value JSDOM's cssstyle parses — assert on the source text
+    expect(appCss).toContain("justify-content: safe flex-end;");
+  });
+
+  test("chips row never wraps and scrolls instead", () => {
+    const dom = getDom();
+    const rules = Array.from(dom.window.document.styleSheets[0].cssRules) as CSSStyleRule[];
+
+    const topRule = rules.find((r) => r.selectorText === ".top");
+    expect(topRule).toBeDefined();
+    expect(topRule!.style.flexWrap).toBe("wrap");
+
+    const restRule = rules.find((r) => r.selectorText === ".top-rest");
+    expect(restRule).toBeDefined();
+    expect(restRule!.style.display).toBe("flex");
+
+    const restChildRule = rules.find((r) => r.selectorText === ".top-rest > :not(.chips)");
+    expect(restChildRule).toBeDefined();
+    // cssstyle expands the flex shorthand: `flex: none` → 0 0 auto
+    expect(restChildRule!.style.flexGrow).toBe("0");
+    expect(restChildRule!.style.flexShrink).toBe("0");
+
+    const chipsRule = rules.find((r) => r.selectorText === ".chips");
+    expect(chipsRule).toBeDefined();
+    expect(chipsRule!.style.flexWrap).toBe("");
+    expect(chipsRule!.style.overflowX).toBe("auto");
+
+    const chipsChildRule = rules.find((r) => r.selectorText === ".chips > *");
+    expect(chipsChildRule).toBeDefined();
+    expect(chipsChildRule!.style.flexShrink).toBe("0");
+  });
+});
+
 describe("small-screen dialogs and inputs (app.css)", () => {
   test("form controls render 16px below 640px", () => {
     const dom = getDom();

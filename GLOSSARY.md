@@ -37,6 +37,12 @@ serve launch dir. _Avoid_: repo mapping, project binding, workspace.
 The sidebar dropdown (`Sidebar.svelte`, `.picker-wrap`) that switches the board's project focus between `all projects` and one **Project**, carrying the per-project running/waiting badges.
 _Avoid_: project switcher, workspace picker, project menu
 
+**Top bar**:
+The board's header strip (`header.top` in `App.svelte`): sidebar toggle, view tabs, board-chat toggle, search, then the **Filter chips** with the trailing actions (stale chip, task count, settings, theme). Above 640px it is one row until it runs out of room, then the chips + trailing actions drop to a second row together; at ≤640px the fixed phone rows apply. _Avoid_: header bar, toolbar, nav.
+
+**Filter chips**:
+The single-line row of board-view filter toggles in the **Top bar** (`.chips`: ▲ high, blocked, ☉ waiting, empty-lanes eye, tags, live agents); it never wraps — overflow scrolls sideways, and its tag/agents popovers open fixed below their chip. _Avoid_: filter bar, chip column, pills.
+
 **Board handle**:
 The manager chat's route identity under `/chat/<handle>`: plain `board` is the
 whole-board session on the serve cwd, while `board:<project>` runs the same

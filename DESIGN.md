@@ -174,7 +174,7 @@ A fixed left sidebar (resizable, default 260px, collapsible) and a horizontal la
 
 Modals overlay centered (min(720px, 90vw) for the card editor and the card detail; min(960px, 94vw) for the file preview; 520px × min(620px, 100dvh − 16px) for the directory picker, a direct pi-web `DirectoryPicker` port). Drawers slide from the right (chat) or bottom. The chrome z-ladder is fixed: content < sticky headers < modals (40) < palettes/confirm (45) < expanded chat (55); any persistent chrome above 40 hides while a modal is open.
 
-Breakpoints: 640px (sidebar becomes a slide-in overlay, touch targets grow to 44px), 450px (header folds to two rows, search first), 420px (three rows). Spacing rhythm is 6/8/10/12px; card interiors pad 8px 10px; row gaps 6–8px. Density beats air: the board is meant to be scanned, not admired.
+Breakpoints: 640px (sidebar becomes a slide-in overlay, touch targets grow to 44px), 450px (header folds to two rows, search first), 420px (three rows). Above 640px the header wraps as a unit: when the row runs out of room the filter chips and trailing actions drop to a second row; the chips row itself never wraps — it scrolls. Spacing rhythm is 6/8/10/12px; card interiors pad 8px 10px; row gaps 6–8px. Density beats air: the board is meant to be scanned, not admired.
 
 ## Elevation & Depth
 
