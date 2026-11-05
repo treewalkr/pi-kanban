@@ -16,7 +16,7 @@ test.describe("settings: projects section", () => {
     await page.goto("/");
     await page.waitForSelector("main.board");
     await page.click("button[aria-label='settings']");
-    await page.locator("nav.settings-tabs button", { hasText: "Projects" }).click();
+    await page.getByRole("tab", { name: "Projects" }).click();
 
     // un-routed tag: empty repo input with the fallback hint
     const input = page.locator("input[aria-label='repo path e2e-proj']");
@@ -39,7 +39,7 @@ test.describe("settings: projects section", () => {
     await page.reload();
     await page.waitForSelector("main.board");
     await page.click("button[aria-label='settings']");
-    await page.locator("nav.settings-tabs button", { hasText: "Projects" }).click();
+    await page.getByRole("tab", { name: "Projects" }).click();
     await expect(page.locator("input[aria-label='repo path e2e-proj']")).toHaveValue("/tmp");
     await expect(page.locator("input[aria-label='test gate e2e-proj']")).not.toBeChecked();
 
@@ -59,7 +59,7 @@ test.describe("settings: projects section", () => {
       await page.goto("/");
       await page.waitForSelector("main.board");
       await page.click("button[aria-label='settings']");
-      await page.locator("nav.settings-tabs button", { hasText: "Projects" }).click();
+      await page.getByRole("tab", { name: "Projects" }).click();
 
       await page.click("button[aria-label='add project']");
 
@@ -83,7 +83,7 @@ test.describe("settings: projects section", () => {
       await page.reload();
       await page.waitForSelector("main.board");
       await page.click("button[aria-label='settings']");
-      await page.locator("nav.settings-tabs button", { hasText: "Projects" }).click();
+      await page.getByRole("tab", { name: "Projects" }).click();
       await expect(page.locator("input[aria-label='repo path picked-repo']")).toHaveValue(repoDir);
     } finally {
       rmSync(rootDir, { recursive: true, force: true });

@@ -20,10 +20,11 @@
 
 <svelte:window
   onkeydown={(e) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      oncancel();
-    }
+    // Escape cancels. stopPropagation cannot keep other window listeners from
+    // running — same-node listeners all fire — so a parent that must ignore
+    // Escape while a confirm is open guards on [role="alertdialog"] instead
+    // (SettingsPanel.onKeydown) or on its own confirming state (TaskEditor).
+    if (e.key === "Escape") oncancel();
   }}
 />
 

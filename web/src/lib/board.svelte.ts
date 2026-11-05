@@ -143,6 +143,9 @@ class BoardStore {
   error = $state("");
   search = $state("");
 
+  // the last refresh failed — its recovery is the only thing that may clear `error`
+  #syncFailed = false;
+
   #projectFilter = $state(loadProjectFilter());
 
   /** Active project chip; persists to localStorage (kanban-project, same idea as kanban-theme) so a reload keeps the focus. */
@@ -486,6 +489,14 @@ class BoardStore {
     this.error = value?.error ?? "request failed";
   }
 
+  /** The sync after a landed user action: any stale error from an earlier
+   *  failed action is obsolete, so clear it. Background syncs (plain
+   *  refresh()) never get this power — see the refresh() note. */
+  async #actionSync(): Promise<void> {
+    this.error = "";
+    await this.refresh();
+  }
+
   async refresh(): Promise<void> {
     // the stats payload follows the project chip, so the velocity view never
     // reports another project's work under a filter
@@ -497,6 +508,7 @@ class BoardStore {
     ]);
     if (boardRes.error) {
       this.fail(boardRes.error);
+      this.#syncFailed = true;
       return;
     }
     if (!statsRes.error && statsRes.data) {
@@ -507,7 +519,15 @@ class BoardStore {
       for (const s of ghRes.data.statuses) statuses[s.url] = s;
       this.ghStatuses = statuses;
     }
-    this.error = "";
+    // SSE bursts resolve mid-flight around action failures — an unrelated
+    // background refresh says nothing about a failed action and must not
+    // erase it (the error-bar would never paint). The bar clears when the
+    // failing sync recovers, when a user action lands (#actionSync), or by
+    // an explicit dismiss — never on a mere background refresh.
+    if (this.#syncFailed) {
+      this.#syncFailed = false;
+      this.error = "";
+    }
     this.lanes = boardRes.data.lanes;
     this.tasks = boardRes.data.tasks;
     this.plans = boardRes.data.plans;
@@ -559,14 +579,14 @@ class BoardStore {
       this.fail(error);
       return null;
     }
-    await this.refresh();
+    await this.#actionSync();
     return (data as Task) ?? null;
   }
 
   async updateTask(id: string, patch: TaskPatch): Promise<void> {
     const { error } = await api.tasks({ id }).patch(patch);
     if (error) return this.fail(error);
-    await this.refresh();
+    await this.#actionSync();
   }
 
   /** The priority chip's click: cycle high → normal → low, optimistic with
@@ -591,14 +611,14 @@ class BoardStore {
       this.fail(error);
       return false;
     }
-    await this.refresh();
+    await this.#actionSync();
     return true;
   }
 
   async removeLink(id: string, targetId: string): Promise<void> {
     const { error } = await api.tasks({ id }).links({ targetId }).delete();
     if (error) return this.fail(error);
-    await this.refresh();
+    await this.#actionSync();
   }
 
   /** Attach a GitHub pr/issue ref to a card; false carries the toast. */
@@ -608,14 +628,14 @@ class BoardStore {
       this.fail(error);
       return false;
     }
-    await this.refresh();
+    await this.#actionSync();
     return true;
   }
 
   async removeGhLink(id: string, linkId: string): Promise<void> {
     const { error } = await api.tasks({ id }).gh({ linkId }).delete();
     if (error) return this.fail(error);
-    await this.refresh();
+    await this.#actionSync();
   }
 
   /** Append one blocker (full-set replace PATCH). Returns null on success, the
@@ -629,7 +649,7 @@ class BoardStore {
       const value = error.value as { error?: string } | undefined;
       return value?.error ?? "request failed";
     }
-    await this.refresh();
+    await this.#actionSync();
     return null;
   }
 
@@ -644,7 +664,7 @@ class BoardStore {
       const value = error.value as { error?: string } | undefined;
       return value?.error ?? "request failed";
     }
-    await this.refresh();
+    await this.#actionSync();
     return null;
   }
 
@@ -660,21 +680,21 @@ class BoardStore {
     const { error } = await api.tasks({ id }).delete(null, { query: force ? { force: "true" } : undefined });
     if (error) return this.fail(error);
     this.closeCard();
-    await this.refresh();
+    await this.#actionSync();
   }
 
   async resumeSession(id: string): Promise<void> {
     const { error } = await api.tasks({ id }).resume.post({});
     if (error) return this.fail(error);
     await this.pollActivity();
-    await this.refresh();
+    await this.#actionSync();
   }
 
   async elaborate(id: string): Promise<void> {
     const { error } = await api.tasks({ id }).elaborate.post({});
     if (error) return this.fail(error);
     await this.pollActivity();
-    await this.refresh();
+    await this.#actionSync();
   }
 
   async addLane(name: string): Promise<boolean> {
@@ -683,14 +703,14 @@ class BoardStore {
       this.fail(error);
       return false;
     }
-    await this.refresh();
+    await this.#actionSync();
     return true;
   }
 
   async updateLane(id: string, patch: LanePatch): Promise<void> {
     const { error } = await api.lanes({ id }).patch(patch);
     if (error) return this.fail(error);
-    await this.refresh();
+    await this.#actionSync();
   }
 
   async renameLane(id: string, name: string): Promise<void> {
@@ -709,13 +729,13 @@ class BoardStore {
   async moveLaneBefore(id: string, before: string | null): Promise<void> {
     const { error } = await api.lanes({ id }).patch({ before });
     if (error) return this.fail(error);
-    await this.refresh();
+    await this.#actionSync();
   }
 
   async removeLane(id: string): Promise<void> {
     const { error } = await api.lanes({ id }).delete();
     if (error) return this.fail(error);
-    await this.refresh();
+    await this.#actionSync();
   }
 }
 
