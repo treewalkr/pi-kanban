@@ -2,7 +2,7 @@
   import type { ProjectRoute } from "../../../src/db";
   import type { DirListing } from "../../../src/files";
   import { projectNameFromPath } from "./projectPicker";
-  import { projects } from "./projects.svelte";
+  import { normCmd, projects } from "./projects.svelte";
 
   let saving = $state<Record<string, boolean>>({});
   let pickerOpen = $state(false);
@@ -16,8 +16,10 @@
     saving[route.name] = true;
     try {
       const repoPath = route.repoPath && route.repoPath.trim() !== "" ? route.repoPath.trim() : null;
-      if (await projects.save({ name: route.name, repoPath, testGate: route.testGate })) {
+      const testCmd = normCmd(route.testCmd);
+      if (await projects.save({ name: route.name, repoPath, testGate: route.testGate, testCmd })) {
         route.repoPath = repoPath; // the server normalized the draft — reflect it
+        route.testCmd = testCmd;
       }
     } finally {
       saving[route.name] = false;
@@ -73,7 +75,7 @@
       <button type="button" class="ghost" aria-label="add project" onclick={openPicker}>Add project</button>
     </div>
     <p class="settings-general-description">
-      Route each project tag to the repo its cards' agents work in. An empty repo path falls back to the directory the board is served from. The test gate runs <code>bun test</code> in the routed repo before a card is reviewed.
+      Route each project tag to the repo its cards' agents work in. An empty repo path falls back to the directory the board is served from. The test gate runs the project's test command (default <code>bun test</code>) in the routed repo before a card is reviewed.
     </p>
 
     {#if pickerOpen}
@@ -150,6 +152,16 @@
           {#if !route.repoPath}
             <span class="fallback-hint">fallback</span>
           {/if}
+        </label>
+        <label class="project-cmd">
+          test command
+          <input
+            aria-label={`test command ${route.name}`}
+            bind:value={route.testCmd}
+            placeholder="bun test --timeout 30000"
+            maxlength={500}
+            title={route.testCmd ?? ""}
+          />
         </label>
         <label class="project-gate">
           <input type="checkbox" aria-label={`test gate ${route.name}`} bind:checked={route.testGate} />
@@ -277,7 +289,7 @@
      class made this a centered column (flex-direction:column inherited). */
   .project-row {
     display: grid;
-    grid-template-columns: minmax(96px, 150px) minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(96px, 150px) minmax(0, 1fr) minmax(0, 1fr) auto auto;
     align-items: end;
     gap: 10px;
     padding: 8px 0;
@@ -303,20 +315,32 @@
     font-size: 11px;
     font-weight: 600;
   }
-  .project-repo input {
+  .project-repo input,
+  .project-cmd input {
     width: 100%;
     padding: 5px 8px;
     border: 1px solid var(--border);
     border-radius: var(--radius-small);
     background: var(--bg);
     color: var(--text);
-    font-family: var(--font-mono); /* paths keep the mono voice (Mono-Meta) */
+    font-family: var(--font-mono); /* paths and commands keep the mono voice (Mono-Meta) */
     font-size: 11px;
   }
-  .project-repo input:focus {
+  .project-repo input:focus,
+  .project-cmd input:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  .project-cmd {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 5px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
   }
   .fallback-hint {
     color: var(--text-muted);

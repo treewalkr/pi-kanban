@@ -7,6 +7,10 @@ type EdenError = { value?: unknown };
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
+/** The server's normalization: null/blank/whitespace → null, otherwise trimmed. */
+export const normCmd = (v: string | null | undefined): string | null =>
+  v == null || v.trim() === "" ? null : v.trim();
+
 /** Project routes for the settings dialog's Projects section; loads lazily on first view. */
 class ProjectsStore {
   loaded = $state(false);
@@ -25,7 +29,11 @@ class ProjectsStore {
   isDirty(route: ProjectRoute): boolean {
     const saved = this.saved.find((p) => p.name === route.name);
     if (!saved) return false;
-    return saved.repoPath !== (route.repoPath ?? null) || saved.testGate !== route.testGate;
+    return (
+      saved.repoPath !== (route.repoPath ?? null) ||
+      saved.testGate !== route.testGate ||
+      (saved.testCmd ?? null) !== normCmd(route.testCmd)
+    );
   }
 
   /** Drop unsaved edits (close guard → discard). */
@@ -74,10 +82,17 @@ class ProjectsStore {
     return data as { path: string };
   }
 
-  async save(route: { name: string; repoPath: string | null; testGate: boolean }): Promise<boolean> {
+  async save(route: {
+    name: string;
+    repoPath: string | null;
+    testGate: boolean;
+    testCmd?: string | null;
+  }): Promise<boolean> {
     const { data, error } = await api.projects({ name: route.name }).put({
       repoPath: route.repoPath,
       testGate: route.testGate,
+      // sent only when the caller passes it — the picker's create flow must not touch an existing command
+      ...(route.testCmd !== undefined ? { testCmd: route.testCmd } : {}),
     });
     if (error) {
       this.fail(error);
