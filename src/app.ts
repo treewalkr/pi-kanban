@@ -12,7 +12,7 @@ import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
 import { contentTypeFor, createDir, listDirs, listFiles, rawFilePath, readFile, searchFiles, type DirListing, type FileEntry } from "./files";
-import { BOARD_CHAT_ID, ChatManager, PROMPT_MAX_CHARS, THINKING_LEVELS, type ChatState, type ChatSessionFactory } from "./chat";
+import { ChatManager, isBoardHandle, PROMPT_MAX_CHARS, THINKING_LEVELS, type ChatState, type ChatSessionFactory } from "./chat";
 import { createChatEventStream, type ChatStreamSession } from "./chat-events";
 import { VERSION, serveGit } from "./version";
 
@@ -671,12 +671,32 @@ export const createApp = (
       },
       { params: t.Object({ id: t.String() }) },
     )
+    .get("/chat-board", (): { project: string | null } => ({ project: db.managerChatProject() }))
+    .put(
+      "/chat-board",
+      ({ body, status }): { project: string | null } | unknown => {
+        try {
+          if (body.project !== null && !db.listProjects().some((p) => p.name === body.project)) {
+            throw new KanbanError(`unknown project '${body.project}'`, "not-found");
+          }
+          return { project: db.setManagerChatProject(body.project) };
+        } catch (e) {
+          return fail(e, status);
+        }
+      },
+      {
+        body: t.Object({
+          project: t.Union([t.Null(), t.String({ minLength: 1, maxLength: 48 })]),
+        }),
+      },
+    )
     .get(
       "/chat/:cardId",
       ({ params, status }): ChatState => {
         try {
-          // the manager chat is not a card — "board" never resolves, so branch first
-          if (params.cardId !== BOARD_CHAT_ID) db.resolveTask(params.cardId);
+          // the manager chat is not a card — board handles resolve their project scope, never resolveTask
+          if (isBoardHandle(params.cardId)) chatManager.resolveBoardHandle(params.cardId);
+          else db.resolveTask(params.cardId);
           const live = chatManager.peek(params.cardId);
           if (live) return live.state();
           const disk = chatManager.historyFromDisk(params.cardId);
@@ -747,7 +767,9 @@ export const createApp = (
       "/chat/:cardId/events",
       ({ params, request, status }) => {
         try {
-          if (params.cardId !== BOARD_CHAT_ID) db.resolveTask(params.cardId); // 404 before the transport opens
+          // validate before the transport opens: an unknown scoped project answers 404 JSON, never an in-stream error
+          if (isBoardHandle(params.cardId)) chatManager.resolveBoardHandle(params.cardId);
+          else db.resolveTask(params.cardId);
           const stream = createChatEventStream(
             request,
             chatManager.get(params.cardId).then((handle) => asChatStreamSession(handle)),

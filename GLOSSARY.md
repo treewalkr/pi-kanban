@@ -37,6 +37,14 @@ serve launch dir. _Avoid_: repo mapping, project binding, workspace.
 The sidebar dropdown (`Sidebar.svelte`, `.picker-wrap`) that switches the board's project focus between `all projects` and one **Project**, carrying the per-project running/waiting badges.
 _Avoid_: project switcher, workspace picker, project menu
 
+**Board handle**:
+The manager chat's route identity under `/chat/<handle>`: plain `board` is the
+whole-board session on the serve cwd, while `board:<project>` runs the same
+`kanban-manager` session id in that project's routed repo with a
+project-filtered snapshot. Picked from the board chat drawer's `+ new session`
+menu — not the sidebar **Project picker**, which filters the board view.
+_Avoid_: board scope, manager handle, project chat, scoped session.
+
 **Directory picker**:
 The modal that browses directories under `$HOME` (`GET /fs/dirs`, `POST /fs/mkdir`) and registers the chosen folder as a **Project** with a **Project route**; opened from the **Project picker**'s `add project…` row, distinct from the settings Projects tab's inline browser.
 _Avoid_: folder browser, path chooser, add-project dialog
@@ -210,7 +218,10 @@ The agent role that evaluates completed work in the `Review` lane against the pl
 _Avoid_: QA, verifier, auditor
 
 **Board manager** (`pi-manager`):
-The resident chat agent behind the web UI's board chat: one session with a board-wide view (lane counts, aging, what's parked, what's next) that proposes lane sweeps on request and relays their summaries.
+The resident chat agent behind the web UI's board chat: one session per
+**Board handle** (whole-board by default, or scoped to one project's repo),
+carrying that scope's overview (lane counts, aging, what's parked, what's
+next), proposing lane sweeps on request and relaying their summaries.
 _Avoid_: Orchestrator, supervisor, main agent
 
 **Lane worker** (`pi-worker-<lane>`):

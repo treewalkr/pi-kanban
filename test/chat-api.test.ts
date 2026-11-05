@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { treaty } from "@elysiajs/eden";
@@ -221,6 +221,115 @@ test("/restart counts chat sessions in the in-flight guard", async () => {
   const refused = await client.restart.post();
   expect(refused.status).toBe(409);
   expect(errorValue(refused.error)).toMatchObject({ code: "sessions-in-flight", sessions: 1 });
+});
+
+test("GET/PUT /chat-board round-trips the scope; unknown project 404s", async () => {
+  const alphaDir = join(dir, "alpha-repo");
+  mkdirSync(alphaDir);
+  db.addProject("alpha", alphaDir);
+  const client = treaty(appWithChat());
+
+  const fresh = await client["chat-board"].get();
+  expect(fresh.error).toBeNull();
+  expect(fresh.data).toEqual({ project: null });
+
+  const set = await client["chat-board"].put({ project: "alpha" });
+  expect(set.error).toBeNull();
+  expect(set.data).toEqual({ project: "alpha" });
+  expect((await client["chat-board"].get()).data).toEqual({ project: "alpha" });
+
+  const unknown = await client["chat-board"].put({ project: "nope" });
+  expect(unknown.status).toBe(404);
+  expect(errorValue(unknown.error)).toEqual({ error: "unknown project 'nope'", code: "not-found" });
+
+  const cleared = await client["chat-board"].put({ project: null });
+  expect(cleared.error).toBeNull();
+  expect(cleared.data).toEqual({ project: null });
+  expect(db.managerChatProject()).toBeNull();
+});
+
+test("scoped handle over HTTP: cold GET, prompt boots in the project repo, unknown 404s", async () => {
+  const alphaDir = join(dir, "alpha-repo");
+  mkdirSync(alphaDir);
+  db.addProject("alpha", alphaDir);
+  const sessions: unknown[] = [];
+  const client = treaty(appWithChat(sessions));
+
+  // cold: no alpha session yet, the scoped handle is not a card
+  const cold = await client.chat({ cardId: "board:alpha" }).get();
+  expect(cold.error).toBeNull();
+  expect(cold.data).toMatchObject({ running: false, sessionId: null, messages: [], messagesTruncated: false });
+
+  // the session boots in the project's repo — exactly what a 'pwd' probe observes
+  const post = await client.chat({ cardId: "board:alpha" }).post({ type: "prompt", message: "pwd" });
+  expect(post.error).toBeNull();
+  expect(post.data).toMatchObject({ accepted: true });
+  const capture = sessions[0] as { cwd: string; appendSystemPrompt: string };
+  expect(capture.cwd).toBe(alphaDir);
+  expect(capture.appendSystemPrompt).toContain("scoped to project `alpha`");
+
+  const unknown = await client.chat({ cardId: "board:nope" }).get();
+  expect(unknown.status).toBe(404);
+  expect(errorValue(unknown.error)).toEqual({ error: "unknown project 'nope'", code: "not-found" });
+});
+
+test("scoped events route: unknown project 404s before the transport; scoped handle boots in the project repo", async () => {
+  const alphaDir = join(dir, "alpha-repo");
+  mkdirSync(alphaDir);
+  db.addProject("alpha", alphaDir);
+  const sessions: unknown[] = [];
+  const app = appWithChat(sessions);
+
+  // validation happens before the SSE transport opens: a JSON 404/400, never a stream
+  const unknown = await app.handle(new Request("http://localhost/chat/board:nope/events"));
+  expect(unknown.status).toBe(404);
+  expect(unknown.headers.get("content-type")).not.toContain("text/event-stream");
+  expect(await unknown.json()).toEqual({ error: "unknown project 'nope'", code: "not-found" });
+
+  const blank = await app.handle(new Request("http://localhost/chat/board:/events"));
+  expect(blank.status).toBe(400);
+  expect(blank.headers.get("content-type")).not.toContain("text/event-stream");
+  expect(await blank.json()).toEqual({
+    error: "scoped board handle needs a project after ':' — use 'board' for the whole board",
+    code: "invalid",
+  });
+
+  const ok = await app.handle(new Request("http://localhost/chat/board:alpha/events"));
+  expect(ok.status).toBe(200);
+  expect(ok.headers.get("content-type")).toBe("text/event-stream");
+  const reader = ok.body!.getReader();
+  const decoder = new TextDecoder();
+  expect(decoder.decode((await reader.read()).value)).toBe(":\n\n");
+  const connected = JSON.parse(decoder.decode((await reader.read()).value).replace(/^data: /, ""));
+  expect(connected).toEqual({ type: "connected", isStreaming: false });
+  expect((sessions[0] as { cwd: string }).cwd).toBe(alphaDir);
+  await reader.cancel();
+
+  // plain unknown card still 404s as before
+  expect((await app.handle(new Request("http://localhost/chat/zzzzz/events"))).status).toBe(404);
+});
+
+test("scoped handle names with URL-special characters survive percent-encoding", async () => {
+  const weird = join(dir, "repo a");
+  mkdirSync(weird);
+  db.addProject("a/b c", weird); // free-form tag: slash and space are legal
+  const sessions: unknown[] = [];
+  const app = appWithChat(sessions);
+  const handle = "board:a/b c";
+
+  // Eden joins path params verbatim, so clients percent-encode the handle; the route decodes it
+  const cold = await app.handle(new Request(`http://localhost/chat/${encodeURIComponent(handle)}`));
+  expect(cold.status).toBe(200);
+  expect(await cold.json()).toMatchObject({ running: false, sessionId: null, messages: [] });
+
+  const events = await app.handle(new Request(`http://localhost/chat/${encodeURIComponent(handle)}/events`));
+  expect(events.status).toBe(200);
+  expect(events.headers.get("content-type")).toBe("text/event-stream");
+  expect((sessions[0] as { cwd: string }).cwd).toBe(weird);
+  await events.body?.cancel();
+
+  // an unencoded slash is a different path, not a different project
+  expect((await app.handle(new Request(`http://localhost/chat/${handle}/events`))).status).toBe(404);
 });
 
 test("GET/POST /chat/board: cold history-from-disk then prompt round-trip", async () => {

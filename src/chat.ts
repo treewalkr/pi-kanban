@@ -30,6 +30,11 @@ export const BOARD_CHAT_ID = "board";
 export const MANAGER_SESSION_ID = "kanban-manager";
 export const MANAGER_AUTHOR = "pi-manager";
 
+/** True for the plain board handle and its project-scoped form `board:<project>`. Pure shape check, no db access. */
+export function isBoardHandle(cardId: string): boolean {
+  return cardId === BOARD_CHAT_ID || cardId.startsWith(BOARD_CHAT_ID + ":");
+}
+
 /** Env knob: 0 disables idle expiry, invalid → default + console.warn. */
 export function resolveChatIdleTimeoutMs(env: string | undefined = process.env.KANBAN_CHAT_IDLE_TIMEOUT_MS): number {
   if (env === undefined || env === "") return DEFAULT_CHAT_IDLE_TIMEOUT_MS;
@@ -119,15 +124,21 @@ export function chatSeed(task: Task, laneName: string): string {
   ].join("\n");
 }
 
-/** The board manager's system append: identity, the skill, its view/dispatch/autonomy rules, gate discipline. */
-export function managerSystemAppend(): string {
+/** The board manager's system append: identity, the skill, its view/dispatch/autonomy rules, gate discipline. Scoped to one project when given. */
+export function managerSystemAppend(project?: string | null): string {
   const skill = skillActivationPrompt([chatSkillPath], (message) => console.warn(`[chat] ${message}`));
+  const identity = project
+    ? `You are the board manager (\`${MANAGER_AUTHOR}\`) for this kanban board, scoped to project \`${project}\`. The human is talking to you in the kanban UI; this repo is project \`${project}\`'s repo.`
+    : `You are the board manager (\`${MANAGER_AUTHOR}\`) for this kanban board. The human is talking to you in the kanban UI; this repo is the board's serving repo.`;
+  const view = project
+    ? `- Your first prompt carries a snapshot of project \`${project}\`'s cards — lane counts, oldest card age per lane, what's parked in Waiting on you, the next proposal. It is a snapshot from when this session started; refresh with \`kanban ls --project ${project}\`, \`kanban next --project ${project}\`, \`kanban stats\` before drawing conclusions.`
+    : "- Your first prompt carries a board overview — lane counts, oldest card age per lane, what's parked in Waiting on you, the next proposal. It is a snapshot from when this session started; refresh with `kanban stats`, `kanban ls <lane>`, `kanban next`, `kanban check` before drawing conclusions.";
   return [
-    `You are the board manager (\`${MANAGER_AUTHOR}\`) for this kanban board. The human is talking to you in the kanban UI; this repo is the board's serving repo.`,
+    identity,
     "",
     skill,
     "View:",
-    "- Your first prompt carries a board overview — lane counts, oldest card age per lane, what's parked in Waiting on you, the next proposal. It is a snapshot from when this session started; refresh with `kanban stats`, `kanban ls <lane>`, `kanban next`, `kanban check` before drawing conclusions.",
+    view,
     "Dispatch:",
     '- Lane workers are short-lived headless agents with a charter over one lane: `kanban worker run <lane> --focus "<what to look at>"` — backlog grooms (the only writable charter); waiting, plan, implement, review are report-only sweeps. Check results with `kanban worker ls` and relay the summaries; don\'t paste raw logs.',
     "Autonomy:",
@@ -153,14 +164,18 @@ export function formatBoardOverview(o: BoardOverview): string {
   return lines.join("\n");
 }
 
-/** The manager's first prompt: identity plus the board snapshot taken as the session starts. */
-export function managerSeed(overview: string): string {
+/** The manager's first prompt: identity plus the board snapshot taken as the session starts (project-scoped when given). */
+export function managerSeed(overview: string, project?: string | null): string {
   return [
-    `You are the board manager (\`${MANAGER_AUTHOR}\`). Snapshot of the board as this session starts:`,
+    project
+      ? `You are the board manager (\`${MANAGER_AUTHOR}\`), scoped to project \`${project}\`. Snapshot of the project's cards as this session starts:`
+      : `You are the board manager (\`${MANAGER_AUTHOR}\`). Snapshot of the board as this session starts:`,
     "",
     overview,
     "",
-    "Refresh with `kanban stats` / `kanban ls` / `kanban next`. Ask what needs attention, or propose a worker sweep (`kanban worker run <lane>`).",
+    project
+      ? `Refresh with \`kanban ls --project ${project}\` / \`kanban next --project ${project}\`. Ask what needs attention, or propose a worker sweep (\`kanban worker run <lane>\`).`
+      : "Refresh with `kanban stats` / `kanban ls` / `kanban next`. Ask what needs attention, or propose a worker sweep (`kanban worker run <lane>`).",
   ].join("\n");
 }
 
@@ -550,24 +565,50 @@ export class ChatManager {
     this.now = opts.now ?? (() => Date.now());
   }
 
-  /** Where a card's chat session lives: the project route's repo if routed, else the serve cwd. The board manager always uses the fallback. */
+  /**
+   * Where a card's chat session lives: the project route's repo if routed, else
+   * the serve cwd. Board handles resolve their project scope the same way —
+   * plain `board` on the fallback, `board:<project>` on that project's repo.
+   */
   private cwdFor(cardId: string): string {
-    if (cardId === BOARD_CHAT_ID) return this.cwd;
+    if (isBoardHandle(cardId)) return this.resolveBoardHandle(cardId).cwd;
     const task = this.db.resolveTask(cardId);
     return this.db.projectCwd(task.project) ?? this.cwd;
   }
 
-  private async buildHandle(cardId: string, sessionId: string, appendSystemPrompt: string, firstSeed: () => string, cwd: string): Promise<ChatHandleImpl> {
+  /**
+   * The one board-handle scope resolver: `board` → { project: null, cwd: serve cwd };
+   * `board:<project>` → that project's cwd (fallback: serve cwd). A blank scope is
+   * invalid, an unknown project is not-found, and a non-board handle is a
+   * programmer error. `get`, `peek`, `historyFromDisk`, and both GET chat routes
+   * share it so a typo'd project never masquerades as an empty cold session.
+   */
+  resolveBoardHandle(cardId: string): { project: string | null; cwd: string } {
+    if (cardId === BOARD_CHAT_ID) return { project: null, cwd: this.cwd };
+    if (!cardId.startsWith(BOARD_CHAT_ID + ":")) {
+      throw new KanbanError(`not a board chat handle: '${cardId}'`, "invalid");
+    }
+    const project = cardId.slice(BOARD_CHAT_ID.length + 1).trim();
+    if (project === "") {
+      throw new KanbanError("scoped board handle needs a project after ':' — use 'board' for the whole board", "invalid");
+    }
+    if (!this.db.listProjects().some((p) => p.name === project)) {
+      throw new KanbanError(`unknown project '${project}'`, "not-found");
+    }
+    return { project, cwd: this.db.projectCwd(project) ?? this.cwd };
+  }
+
+  private async buildHandle(key: string, label: string, sessionId: string, appendSystemPrompt: string, firstSeed: () => string, cwd: string): Promise<ChatHandleImpl> {
     const existingPath = SessionManager.findById(cwd, sessionId, this.sessionDir);
     const sessionManager = existingPath
       ? SessionManager.open(existingPath, this.sessionDir, cwd)
       : SessionManager.create(cwd, this.sessionDir, { id: sessionId });
-    this.log(`${cardId} ${existingPath ? "resumed" : "created"}`);
+    this.log(`${label} ${existingPath ? "resumed" : "created"}`);
     const session = await this.createSession({ cwd, sessionManager, appendSystemPrompt });
-    if (!existingPath) await this.seedEngine(cardId, session);
+    if (!existingPath) await this.seedEngine(label, session);
     return new ChatHandleImpl({
       cwd,
-      cardId,
+      cardId: label, // the log/display label; live-map identity is `key` (cwd for board handles)
       sessionId,
       session,
       sessionManager,
@@ -577,7 +618,7 @@ export class ChatManager {
       now: this.now,
       log: this.log,
       onDisposed: (handle) => {
-        if (this.handles.get(cardId) === handle) this.handles.delete(cardId);
+        if (this.handles.get(key) === handle) this.handles.delete(key);
       },
     });
   }
@@ -605,17 +646,22 @@ export class ChatManager {
     }
   }
 
-  /** Resolve task → get-or-create one alive handle per card (concurrent gets share one creation). */
+  /** Resolve task → get-or-create one alive handle per card (concurrent gets share one creation). Board handles memoize by resolved cwd. */
   async get(cardId: string): Promise<ChatHandle> {
-    if (cardId === BOARD_CHAT_ID) {
-      return this.getOrCreate(BOARD_CHAT_ID, this.cwd, () => ({
+    if (isBoardHandle(cardId)) {
+      const { project, cwd } = this.resolveBoardHandle(cardId);
+      return this.getOrCreate(cwd, cardId, cwd, () => ({
         sessionId: MANAGER_SESSION_ID,
-        appendSystemPrompt: managerSystemAppend(),
-        firstSeed: () => managerSeed(formatBoardOverview(this.db.boardOverview())),
+        appendSystemPrompt: managerSystemAppend(project),
+        firstSeed: () =>
+          managerSeed(
+            formatBoardOverview(project ? this.db.projectOverview(project) : this.db.boardOverview()),
+            project,
+          ),
       }));
     }
     const task = this.db.resolveTask(cardId); // 404 for unknown/ambiguous ids, before any map lookup
-    return this.getOrCreate(task.id, this.cwdFor(task.id), () => {
+    return this.getOrCreate(task.id, task.id, this.cwdFor(task.id), () => {
       const laneName = this.db.lanes().find((l) => l.id === task.laneId)?.name ?? task.laneId;
       return {
         sessionId: CHAT_SESSION_ID_PREFIX + task.id,
@@ -625,14 +671,14 @@ export class ChatManager {
     });
   }
 
-  /** Get-or-create one alive handle per key (concurrent gets share one creation). */
-  private async getOrCreate(key: string, cwd: string, spec: () => { sessionId: string; appendSystemPrompt: string; firstSeed: () => string }): Promise<ChatHandle> {
+  /** Get-or-create one alive handle per `key` (concurrent gets share one creation); `label` is the log/handle display id. */
+  private async getOrCreate(key: string, label: string, cwd: string, spec: () => { sessionId: string; appendSystemPrompt: string; firstSeed: () => string }): Promise<ChatHandle> {
     const alive = this.handles.get(key);
     if (alive) return alive;
     const pending = this.inflight.get(key);
     if (pending) return pending;
     const { sessionId, appendSystemPrompt, firstSeed } = spec();
-    const creation = this.buildHandle(key, sessionId, appendSystemPrompt, firstSeed, cwd).then((handle) => {
+    const creation = this.buildHandle(key, label, sessionId, appendSystemPrompt, firstSeed, cwd).then((handle) => {
       this.handles.set(key, handle);
       if (!this.shutdownRegistered) {
         this.shutdownRegistered = true;
@@ -645,8 +691,13 @@ export class ChatManager {
     return creation;
   }
 
-  /** Never creates. `cardId` must be the resolved id (peek does not resolve prefixes). */
+  /**
+   * Never creates. Board handles resolve their project scope first (same
+   * invalid/not-found errors as `get`) because the live map is keyed by cwd;
+   * card handles get a plain lookup and must already be the resolved id.
+   */
   peek(cardId: string): ChatHandle | null {
+    if (isBoardHandle(cardId)) return this.handles.get(this.resolveBoardHandle(cardId).cwd) ?? null;
     return this.handles.get(cardId) ?? null;
   }
 
@@ -658,7 +709,7 @@ export class ChatManager {
   /** Disk-backed history without touching the live map (the GET route's not-running path). */
   historyFromDisk(cardId: string): { sessionId: string | null; messages: ChatState["messages"]; messagesTruncated: boolean } {
     const cwd = this.cwdFor(cardId); // same key the live handle would use
-    const sessionId = cardId === BOARD_CHAT_ID ? MANAGER_SESSION_ID : CHAT_SESSION_ID_PREFIX + this.db.resolveTask(cardId).id;
+    const sessionId = isBoardHandle(cardId) ? MANAGER_SESSION_ID : CHAT_SESSION_ID_PREFIX + this.db.resolveTask(cardId).id;
     const path = SessionManager.findById(cwd, sessionId, this.sessionDir);
     if (!path) return { sessionId: null, messages: [], messagesTruncated: false };
     const { messages, truncated } = projectSessionEntries(SessionManager.open(path, this.sessionDir, cwd));

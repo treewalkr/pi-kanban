@@ -2094,6 +2094,54 @@ test("boardOverview: lane counts, oldest age, waiting ages, next proposal, block
   expect(overview2.waiting[0]!.ageDays).toBe(12);
 });
 
+test("projectOverview mirrors boardOverview shape scoped to one project", () => {
+  const day = 86_400_000;
+  const future = Date.now() + 3.5 * day; // every entry is 3 days old at this clock
+
+  const alphaBacklog = db.createTask({ title: "alpha backlog", lane: "backlog", project: "alpha" });
+  const alphaWaiting = db.createTask({ title: "alpha waiting", lane: "waiting", project: "alpha" });
+  const alphaImplement = db.createTask({ title: "alpha implement", lane: "implement", project: "alpha" });
+  const alphaBlocked = db.createTask({ title: "alpha blocked", lane: "implement", project: "alpha", blockedBy: [alphaImplement.id] });
+  db.createTask({ title: "beta waiting", lane: "waiting", project: "beta" });
+  db.createTask({ title: "beta backlog", lane: "backlog", project: "beta", priority: "high" });
+
+  const overview = db.projectOverview("alpha", future);
+  // same shape as boardOverview: every non-archive lane, zeros included
+  expect(Object.keys(overview).sort()).toEqual(Object.keys(db.boardOverview(future)).sort());
+  expect(overview.lanes.map((l) => l.id)).toEqual(db.boardOverview(future).lanes.map((l) => l.id));
+  const byLane = new Map(overview.lanes.map((l) => [l.id, l]));
+  expect(byLane.get("waiting")).toMatchObject({ id: "waiting", name: "Waiting on you", count: 1, oldestDays: 3 });
+  expect(byLane.get("backlog")).toMatchObject({ count: 1, oldestDays: 3 });
+  expect(byLane.get("implement")).toMatchObject({ count: 2, oldestDays: 3 });
+  expect(byLane.get("review")).toMatchObject({ count: 0, oldestDays: 0 });
+  expect(overview.waiting).toHaveLength(1);
+  expect(overview.waiting[0]).toMatchObject({ id: alphaWaiting.id, title: "alpha waiting", ageDays: 3 });
+  expect(overview.next).toMatchObject({ id: alphaImplement.id, title: "alpha implement" });
+  expect(overview.next!.id).not.toBe(alphaBacklog.id);
+  // next/blocked agree with nextTask("alpha")
+  expect(overview.next).toEqual({ id: db.nextTask("alpha").task!.id, title: db.nextTask("alpha").task!.title });
+  expect(overview.blocked).toBe(db.nextTask("alpha").blocked);
+  expect(overview.blocked).toBe(1); // alphaBlocked skipped, never beta's cards
+
+  // empty project → zero counts, no waiting, no next
+  const empty = db.projectOverview("nope", future);
+  expect(empty.lanes.every((l) => l.count === 0 && l.oldestDays === 0)).toBe(true);
+  expect(empty.waiting).toEqual([]);
+  expect(empty.next).toBeNull();
+  expect(empty.blocked).toBe(0);
+});
+
+test("manager chat scope kv: absent→null, set/get round-trip, null clears", () => {
+  expect(db.managerChatProject()).toBeNull();
+  expect(db.setManagerChatProject("alpha")).toBe("alpha");
+  expect(db.managerChatProject()).toBe("alpha");
+  expect(db.setManagerChatProject("  beta  ")).toBe("beta");
+  expect(db.managerChatProject()).toBe("beta");
+  expect(db.setManagerChatProject(null)).toBeNull();
+  expect(db.managerChatProject()).toBeNull();
+  expect(db.setManagerChatProject("")).toBeNull();
+});
+
 test("projects: accessor round-trip — set repo, flip gate, clear repo", () => {
   expect(db.listProjects()).toEqual([]);
   expect(db.getProject("alpha")).toBeNull();

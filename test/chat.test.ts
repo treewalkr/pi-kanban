@@ -10,6 +10,10 @@ import {
   chatSystemAppend,
   DEFAULT_CHAT_IDLE_TIMEOUT_MS,
   defaultChatSessionFactory,
+  formatBoardOverview,
+  isBoardHandle,
+  managerSeed,
+  managerSystemAppend,
   projectEntries,
   THINKING_BLOCK_CAP,
   type ChatHandle,
@@ -502,4 +506,167 @@ test("per-card chat cwd: routed card spawns in its project repo; board manager o
   expect(manager.historyFromDisk(fallback.id).sessionId).toBeNull();
 
   await manager.disposeAll();
+});
+
+// ---------- project-scoped board handles (card czrcb) ----------
+
+test("scoped board handle: cwd from the project route; fallback when un-routed; id stays kanban-manager", async () => {
+  const alphaDir = join(dir, "alpha-repo");
+  mkdirSync(alphaDir);
+  db.addProject("alpha", alphaDir); // registered + routed
+  db.setProjectGate("ghost", true); // registered but un-routed → fallback cwd
+  const sessions: unknown[] = [];
+  const { factory, count } = factorySpy(sessions);
+  const sessionDir = join(dir, "sessions");
+  const manager = new ChatManager({ cwd: dir, db, sessionDir, createSession: factory });
+
+  expect(isBoardHandle("board")).toBe(true);
+  expect(isBoardHandle("board:alpha")).toBe(true);
+  expect(isBoardHandle("boardish")).toBe(false);
+
+  const alpha = await manager.get("board:alpha");
+  expect(alpha.sessionId).toBe(MANAGER_SESSION_ID);
+  expect((sessions[0] as { cwd: string }).cwd).toBe(alphaDir);
+  expect(manager.resolveBoardHandle("board:alpha")).toEqual({ project: "alpha", cwd: alphaDir });
+
+  const ghost = await manager.get("board:ghost");
+  expect(ghost.sessionId).toBe(MANAGER_SESSION_ID);
+  expect((sessions[1] as { cwd: string }).cwd).toBe(dir); // un-routed → serve cwd
+  expect(manager.resolveBoardHandle("board")).toEqual({ project: null, cwd: dir });
+  expect(count()).toBe(2);
+
+  // disk history is keyed by the resolved cwd: a scoped session file written in
+  // the project repo is found there, and the serve cwd does not see it
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const scoped = SessionManager.create(alphaDir, sessionDir, { id: MANAGER_SESSION_ID });
+  scoped.appendMessage({ role: "user", content: "hello from the project repo", timestamp: 1 });
+  expect(manager.historyFromDisk("board:alpha").sessionId).toBe(MANAGER_SESSION_ID);
+  expect(manager.historyFromDisk("board:alpha").messages.some((m) => m.role === "user" && m.content === "hello from the project repo")).toBe(true);
+  await manager.disposeAll();
+  expect(manager.historyFromDisk("board:ghost").sessionId).toBeNull(); // no file in the serve cwd
+});
+
+test("board handles memoize by cwd: board and board:<unrouted> share one live handle", async () => {
+  const alphaDir = join(dir, "alpha-repo");
+  mkdirSync(alphaDir);
+  db.addProject("alpha", alphaDir);
+  db.setProjectGate("ghost", true);
+  const sessions: unknown[] = [];
+  const { factory, count } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+
+  const board = await manager.get("board");
+  const ghost = await manager.get("board:ghost"); // same (cwd, kanban-manager) → same live handle
+  expect(ghost).toBe(board);
+  expect(count()).toBe(1);
+  expect(manager.peek("board:ghost")).toBe(board);
+  expect(manager.peek("board")).toBe(board);
+
+  const alpha = await manager.get("board:alpha");
+  expect(alpha).not.toBe(board);
+  expect(manager.peek("board:alpha")).toBe(alpha);
+  expect(count()).toBe(2);
+  await manager.disposeAll();
+});
+
+test("scoped handle errors: unknown project 404s, empty scope 400s, plain board unchanged", async () => {
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+
+  const thrown = async (fn: () => unknown): Promise<KanbanError> => {
+    try {
+      await fn();
+    } catch (e) {
+      return e as KanbanError;
+    }
+    throw new Error("expected a KanbanError");
+  };
+
+  for (const bad of ["board:nope", "board:", "board:  "]) {
+    const unknown = await thrown(() => manager.get(bad));
+    expect(unknown).toBeInstanceOf(KanbanError);
+    expect(unknown.code).toBe(bad === "board:nope" ? "not-found" : "invalid");
+    if (bad === "board:nope") expect(unknown.message).toBe("unknown project 'nope'");
+    expect(() => manager.peek(bad)).toThrow(KanbanError);
+    expect(() => manager.historyFromDisk(bad)).toThrow(KanbanError);
+  }
+  expect(() => manager.resolveBoardHandle("zzzzz")).toThrow("not a board chat handle: 'zzzzz'");
+
+  // plain board still returns today's unscoped prompts byte-for-byte
+  const plain = await manager.get("board");
+  const capture = sessions[0] as { appendSystemPrompt: string; session: Record<string, unknown> };
+  expect(capture.appendSystemPrompt).toBe(managerSystemAppend());
+  expect(capture.appendSystemPrompt).not.toContain("scoped to project");
+  expect(plain.sessionId).toBe(MANAGER_SESSION_ID);
+  await manager.disposeAll();
+});
+
+test("scoped manager prompt: append and seed name the project, filter hints use --project", () => {
+  const append = managerSystemAppend("alpha");
+  expect(append).toContain("scoped to project `alpha`");
+  expect(append).toContain("this repo is project `alpha`'s repo");
+  expect(append).toContain("kanban ls --project alpha");
+  expect(append).toContain("kanban next --project alpha");
+  expect(append).not.toContain("this repo is the board's serving repo");
+
+  const seed = managerSeed("lanes: Backlog 1", "alpha");
+  expect(seed).toContain("scoped to project `alpha`");
+  expect(seed).toContain("Snapshot of the project's cards as this session starts:");
+  expect(seed).toContain("kanban ls --project alpha");
+  expect(seed).toContain("kanban next --project alpha");
+
+  // no project (absent or null) reproduces the unscoped fixtures exactly
+  const plainAppend = managerSystemAppend();
+  expect(plainAppend).toBe(managerSystemAppend(null));
+  expect(plainAppend.split("\n")[0]).toBe(
+    "You are the board manager (`pi-manager`) for this kanban board. The human is talking to you in the kanban UI; this repo is the board's serving repo.",
+  );
+  expect(plainAppend).toContain("`kanban ls <lane>`");
+  expect(plainAppend).not.toContain("scoped to project");
+
+  const plainSeed = managerSeed("lanes: Backlog 1");
+  expect(plainSeed).toBe(managerSeed("lanes: Backlog 1", null));
+  expect(plainSeed.split("\n")[0]).toBe("You are the board manager (`pi-manager`). Snapshot of the board as this session starts:");
+  expect(plainSeed).toContain("Refresh with `kanban stats` / `kanban ls` / `kanban next`.");
+  expect(plainSeed).not.toContain("--project");
+});
+
+test("scoped session's first seed lists only the project's cards", async () => {
+  db.createTask({ title: "alpha task", lane: "backlog", project: "alpha" });
+  db.createTask({ title: "beta task", lane: "implement", project: "beta" });
+  const sessions: unknown[] = [];
+  const { factory } = factorySpy(sessions);
+  const manager = new ChatManager({ cwd: dir, db, createSession: factory });
+
+  type Capture = {
+    session: Record<string, unknown>;
+    sessionManager: { appendMessage(m: unknown): string };
+  };
+  const promptsFor = async (handle: ChatHandle, capture: Capture): Promise<string[]> => {
+    const prompts: string[] = [];
+    capture.session.prompt = async (text: string) => {
+      prompts.push(text);
+      capture.sessionManager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+    };
+    await handle.send({ type: "prompt", message: "what needs attention?" });
+    return prompts;
+  };
+
+  const scopedPrompts = await promptsFor(await manager.get("board:alpha"), sessions[0] as Capture);
+  expect(scopedPrompts[0]).toContain("Snapshot of the project's cards as this session starts:");
+  expect(scopedPrompts[0]).toContain("alpha task");
+  expect(scopedPrompts[0]).toContain("Backlog 1");
+  expect(scopedPrompts[0]).not.toContain("beta task");
+  await manager.disposeAll();
+
+  // the unscoped handle still sees both projects (fresh session dir: the scoped run wrote its own file)
+  const manager2 = new ChatManager({ cwd: dir, db, sessionDir: join(dir, "sessions2"), createSession: factory });
+  const plainPrompts = await promptsFor(await manager2.get("board"), sessions[1] as Capture);
+  expect(plainPrompts[0]).toContain("Snapshot of the board as this session starts:");
+  expect(plainPrompts[0]).toContain("beta task");
+  expect(plainPrompts[0]).toContain("Backlog 1");
+  expect(plainPrompts[0]).toContain("Test + Implement 1");
+  expect(formatBoardOverview(db.projectOverview("alpha"))).not.toContain("beta task");
+  await manager2.disposeAll();
 });
