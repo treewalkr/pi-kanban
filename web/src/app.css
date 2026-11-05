@@ -3799,6 +3799,23 @@ a.dep-chip.gh-link .gh-state {
   gap: 2px;
 }
 
+.activity-log.stamped .line {
+  display: flex;
+  gap: 8px;
+}
+
+.activity-log .line-time {
+  flex: none;
+  min-width: 8ch;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-log .line-text {
+  flex: 1;
+  min-width: 0;
+}
+
 .session-log {
   margin-top: 6px;
 }

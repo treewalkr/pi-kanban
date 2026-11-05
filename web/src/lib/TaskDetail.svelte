@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Attachment, Comment, Task } from "../../../src/db";
   import { isAgentChatter, latestStateIndex } from "../../../src/thread";
+  import { liveSessionRows, savedSessionRows } from "../../../src/session-log";
   import { GitBranch, Sparkles, Square } from "@lucide/svelte";
   import { api } from "../api";
   import { board } from "./board.svelte";
@@ -72,6 +73,7 @@
 
   // live agent session on this card (badge's big sibling: the streamed log)
   let live = $derived(board.activity[me.id]);
+  let liveLog = $derived(live ? liveSessionRows(live.log, live.logAt, Date.now()) : null);
   let queuedJob = $derived(board.queued[me.id]);
   let inFlightCount = $derived(Object.keys(board.activity).length);
   let logEl = $state<HTMLElement | null>(null);
@@ -637,9 +639,9 @@
               title="kill this session — the death is recorded and a resume offer takes its place"
               onclick={() => (confirmStop = true)}><Square size={11} strokeWidth={2} /> stop</button>
           </div>
-          <div class="activity-log" bind:this={logEl}>
-            {#each live.log as line, i (i)}
-              <div class="line">{line}</div>
+          <div class="activity-log" class:stamped={liveLog?.stamped} bind:this={logEl}>
+            {#each liveLog?.rows ?? [] as row, i (i)}
+              <div class="line">{#if liveLog?.stamped}<span class="line-time" title={row.at === null ? undefined : new Date(row.at).toLocaleString()}>{row.stamp}</span>{/if}<span class="line-text">{row.text}</span></div>
             {/each}
           </div>
         </div>
@@ -672,13 +674,14 @@
             <span class="plan-meta">transcripts kept on the card</span>
           </summary>
           {#each sessionLogs as log, i (log.id)}
+            {@const saved = savedSessionRows(log.content)}
             <details class="session-log" open={i === sessionLogs.length - 1}>
               <summary>
-                <span class="plan-meta">{log.content.split("\n")[0]}</span>
+                <span class="plan-meta">{saved.header}</span>
               </summary>
-              <div class="activity-log">
-                {#each log.content.split("\n").slice(1) as line, j (j)}
-                  <div class="line">{line}</div>
+              <div class="activity-log" class:stamped={saved.stamped}>
+                {#each saved.rows as row, j (j)}
+                  <div class="line">{#if saved.stamped}<span class="line-time">{row.stamp}</span>{/if}<span class="line-text">{row.text}</span></div>
                 {/each}
               </div>
             </details>
