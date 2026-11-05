@@ -331,7 +331,21 @@ describe("pre-spawn gate", () => {
     calls[0]!.finish({ code: 0 });
   });
 
-  test("KANBAN_AUTOREVIEW_GATE=0 disables the gate when no gate option is passed", async () => {
+  test("KANBAN_AGENTS_GATE=0 disables the gate when no gate option is passed", async () => {
+    const { dbFile, writer: w } = setup();
+    cardInReview(w);
+    const { calls, spawnFn } = fakeSpawn();
+    withAgentEnv({ KANBAN_AGENTS_GATE: "0" }, () => {
+      start(spawnFn, dbFile, { gate: undefined });
+    });
+    await sleep(100);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.job.role).toBe("reviewer");
+    calls[0]!.finish({ code: 0 });
+  });
+
+  test("deprecated KANBAN_AUTOREVIEW_GATE=0 also disables the gate", async () => {
     const { dbFile, writer: w } = setup();
     cardInReview(w);
     const { calls, spawnFn } = fakeSpawn();

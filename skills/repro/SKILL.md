@@ -27,8 +27,9 @@ REPRO_AGENTS=1 scripts/repro.sh  # also run the agent loop
 - **DB**: a fresh `mktemp` SQLite file — no shared state with any real board.
 - **TTL watchdog**: dies after 30 minutes by default (`REPRO_TTL` seconds).
 - **Identity strip**: unsets `KANBAN_SHARE_PORT`, `KANBAN_SHARE_TOKEN`,
-  `KANBAN_AUTO_REVIEW`, and `KANBAN_DB`, so a repro never inherits production
-  identity from your shell (the same ghost-board incident).
+  `KANBAN_AGENTS` (and its deprecated alias `KANBAN_AUTO_REVIEW`), and
+  `KANBAN_DB`, so a repro never inherits production identity from your shell
+  (the same ghost-board incident).
 
 ## Relationship to the e2e suite
 

@@ -96,6 +96,16 @@ function envMs(name: string): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
+/** KANBAN_AGENTS=1 arms the agent loop; KANBAN_AUTO_REVIEW is its deprecated spelling, still honored. */
+function agentsEnvOn(): boolean {
+  if (process.env.KANBAN_AGENTS === "1") return true;
+  if (process.env.KANBAN_AUTO_REVIEW === "1") {
+    console.warn("[boot] KANBAN_AUTO_REVIEW is deprecated — use KANBAN_AGENTS (same effect)");
+    return true;
+  }
+  return false;
+}
+
 export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: () => void; stopWorkers: () => void; stopAutoArchive: () => void; stopGhSync: () => void }> {
   const port = opts.port ?? Number(process.env.PORT ?? 4600);
 
@@ -158,11 +168,11 @@ export async function boot(opts: BootOptions = {}): Promise<{ stopAutoReview: ()
 
   let stopAutoReview: () => void = () => {};
   let stopWorkers: () => void = () => {};
-  if (opts.autoReview ?? process.env.KANBAN_AUTO_REVIEW === "1") {
+  if (opts.autoReview ?? agentsEnvOn()) {
     // own connection, like the CLI — the reviewer/builder children talk to the
     // board through the kanban CLI, never through this process
-    const timeoutMs = envMs("KANBAN_AUTOREVIEW_TIMEOUT_MS");
-    const stallMs = envMs("KANBAN_AUTOREVIEW_STALL_MS");
+    const timeoutMs = envMs("KANBAN_AGENTS_TIMEOUT_MS") ?? envMs("KANBAN_AUTOREVIEW_TIMEOUT_MS");
+    const stallMs = envMs("KANBAN_AGENTS_STALL_MS") ?? envMs("KANBAN_AUTOREVIEW_STALL_MS");
     const handle = startAutoReview({
       db: new KanbanDb(defaultDbPath()),
       cwd: process.cwd(),

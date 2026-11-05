@@ -8,7 +8,7 @@ description: Use when the user asks for work to continue overnight or while they
 
 `kanban serve --agents` runs the agent loop: planner, reviewer, and builder
 sessions dispatched to cards as they become eligible (`src/autoreview.ts`,
-`KANBAN_AUTO_REVIEW=1`). It backgrounds itself; `kanban ps` and `kanban stop`
+`KANBAN_AGENTS=1`). It backgrounds itself; `kanban ps` and `kanban stop`
 manage it. Well-scoped cards staged before leaving are what it drains.
 
 PENDING on branch `autopilot-runner` (unmerged at the time of writing — known
