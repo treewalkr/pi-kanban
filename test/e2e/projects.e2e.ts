@@ -126,16 +126,18 @@ test.describe("settings: projects section", () => {
       await expect(group).toBeVisible();
 
       // one optgroup per workflow lane with actors (SSE-fresh board.laneContexts), board group last.
-      // Subset match: other specs on the shared e2e board may add workflow lanes.
+      // Subset match, no order pin: earlier specs on the shared e2e board may add lanes or leave a
+      // failed lane-drag spec's reorder unrestored, so relative lane order is not stable here.
       const select = page.locator("select[aria-label='override actor ov-list']");
       const labels = await select
         .locator("optgroup")
         .evaluateAll((els) => els.map((e) => (e as HTMLOptGroupElement).label));
-      const pinned = ["Plan", "Test + Implement", "Review"].map((l) => labels.indexOf(l));
-      expect(pinned.every((i) => i !== -1)).toBe(true);
-      expect([...pinned].sort((a, b) => a - b)).toEqual(pinned); // relative order preserved
+      for (const lane of ["Plan", "Test + Implement", "Review"]) expect(labels).toContain(lane);
       expect(labels).not.toContain("Backlog"); // no context → no group
       expect(labels).not.toContain("Epics");
+      expect(labels).not.toContain("Waiting on you");
+      expect(labels).not.toContain("Done");
+      expect(labels).not.toContain("Archive");
       expect(labels[labels.length - 1]).toBe("board");
 
       const planActors = await select
