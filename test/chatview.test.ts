@@ -179,8 +179,44 @@ test("message_end normalizes legacy toolCall blocks, caps thinking, and appends 
     toolCallId: "c1",
     toolName: "bash",
     isError: true,
+    at: expect.any(Number),
     entryId: expect.any(String),
   });
+});
+
+test("message_end and send stamp chat messages with at", async () => {
+  (globalThis as any).fetch = mockChatFetch({ get: { t1: stateWith(HISTORY) } });
+  await chat.open("t1");
+  const source = FakeEventSource.instances[0];
+  const before = Date.now();
+
+  // assistant message_end carries the pi message timestamp verbatim
+  source.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 1234 } });
+  const stamped = chat.messages.at(-1)!;
+  if (stamped.role !== "assistant") throw new Error("expected assistant");
+  expect(stamped.at).toBe(1234);
+
+  // no timestamp → arrival time
+  source.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "ho" }] } });
+  const unstamped = chat.messages.at(-1)!;
+  if (unstamped.role !== "assistant") throw new Error("expected assistant");
+  expect(typeof unstamped.at).toBe("number");
+  expect(unstamped.at!).toBeGreaterThanOrEqual(before);
+  expect(unstamped.at!).toBeLessThanOrEqual(Date.now());
+
+  // toolResult with timestamp 99
+  source.emit({ type: "message_end", message: { role: "toolResult", toolCallId: "c9", toolName: "bash", isError: false, timestamp: 99 } });
+  const tool = chat.messages.at(-1)!;
+  if (tool.role !== "toolResult") throw new Error("expected toolResult");
+  expect(tool.at).toBe(99);
+
+  // optimistic user send
+  await chat.send("x");
+  const user = chat.messages.at(-1)!;
+  if (user.role !== "user") throw new Error("expected user");
+  expect(typeof user.at).toBe("number");
+  expect(user.at!).toBeGreaterThanOrEqual(before);
+  expect(user.at!).toBeLessThanOrEqual(Date.now());
 });
 
 test("tools map is reactive: start/update/end re-run effects (copy-on-write, not in-place mutation)", async () => {
@@ -220,7 +256,7 @@ test("send posts via the api, appends the user message optimistically; stop post
   await chat.send("do the thing");
   const post = fetchCalls.slice(before).find((c) => c.method === "POST");
   expect(post).toMatchObject({ path: "/chat/t1", body: { type: "prompt", message: "do the thing" } });
-  expect(chat.messages.at(-1)).toEqual({ role: "user", content: "do the thing", entryId: expect.any(String) });
+  expect(chat.messages.at(-1)).toEqual({ role: "user", content: "do the thing", at: expect.any(Number), entryId: expect.any(String) });
 
   const stopBefore = fetchCalls.length;
   await chat.stop();

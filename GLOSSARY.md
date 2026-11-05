@@ -53,6 +53,10 @@ _Avoid_: folder browser, path chooser, add-project dialog
 The chronological conversation on a card where humans and agents record questions, handoffs, reviews, and gate verdicts.
 _Avoid_: Activity log, comment feed, discussion, chat history
 
+**Session log**:
+The formatted line stream of one agent session, each line stamped with its arrival time — live on `/activity` (`AgentSessionInfo.log` + `logAt`) while the session runs, saved on the card as a `session` attachment (header + `HH:MM:SS`-stamped lines) when it ends. Distinct from the harness transcript a resume continues.
+_Avoid_: Activity log (that's the Thread), transcript, agent output
+
 **Comment kind**:
 The workflow role of a thread entry: `comment` (general note), `question` (agent question that parks the card in `Waiting on you` for a human reply), `handoff` (baton pass when changing actors or lanes), `review` (plan or code review verdict), `approval` (human gate pass), or `rejection` (human gate refusal with feedback).
 _Avoid_: Message type, event type, note type

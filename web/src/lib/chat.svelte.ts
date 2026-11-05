@@ -123,7 +123,7 @@ class ChatStore {
         // The wire forwards SDK blocks verbatim (signatures stripped): legacy toolCall
         // spellings normalize here exactly like the history projection, thinking gets
         // the same display cap, and toolResult ends append their ✓/✗ row.
-        const message = event.message as { role?: string; content?: unknown; toolCallId?: unknown; toolName?: unknown; isError?: unknown; model?: string; provider?: string; stopReason?: string; errorMessage?: string } | undefined;
+        const message = event.message as { role?: string; content?: unknown; timestamp?: unknown; toolCallId?: unknown; toolName?: unknown; isError?: unknown; model?: string; provider?: string; stopReason?: string; errorMessage?: string } | undefined;
         const entryId = `live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         if (message?.role === "assistant") {
           this.messages.push({
@@ -133,6 +133,7 @@ class ChatStore {
             provider: typeof message.provider === "string" ? message.provider : undefined,
             stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined,
             errorMessage: typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+            at: typeof message.timestamp === "number" && Number.isFinite(message.timestamp) ? message.timestamp : Date.now(),
             entryId,
           });
           this.streaming = INITIAL_STREAMING_STATE;
@@ -145,6 +146,7 @@ class ChatStore {
             toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : "",
             toolName: typeof message.toolName === "string" ? message.toolName : undefined,
             isError: message.isError === true,
+            at: typeof message.timestamp === "number" && Number.isFinite(message.timestamp) ? message.timestamp : Date.now(),
             entryId,
           });
         }
@@ -227,7 +229,7 @@ class ChatStore {
     if (!cardId || !text) return;
     this.error = "";
     const entryId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    this.messages.push({ role: "user", content: text, entryId }); // optimistic
+    this.messages.push({ role: "user", content: text, at: Date.now(), entryId }); // optimistic
     const streamingNow = this.status === "ready" && this.streaming.isStreaming;
     const res = await api.chat({ cardId: chatPathParam(cardId) }).post(
       streamingNow ? { type: "prompt", message: text, streamingBehavior: "steer" } : { type: "prompt", message: text },

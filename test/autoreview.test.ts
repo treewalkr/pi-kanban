@@ -1,3 +1,4 @@
+import { stampSessionLog } from "../src/session-log";
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1587,7 +1588,7 @@ describe("auto-review", () => {
     expect(logs.length).toBe(1);
     const lines = logs[0]!.content.split("\n");
     expect(lines[0]).toStartWith("pi-reviewer · anthropic · claude-x · high · ");
-    expect(lines[1]).toBe("model: anthropic · claude-x · high");
+    expect(lines[1]).toMatch(/^\d{2}:\d{2}:\d{2} model: anthropic · claude-x · high$/);
   });
 
   test("silent sessions still record their header and model config", async () => {
@@ -1602,7 +1603,7 @@ describe("auto-review", () => {
     expect(logs.length).toBe(1);
     const lines = logs[0]!.content.split("\n");
     expect(lines[0]).toStartWith("pi-builder · default model · ");
-    expect(lines[1]).toBe("model: default model");
+    expect(lines[1]).toMatch(/^\d{2}:\d{2}:\d{2} model: default model$/);
   });
 
   test("activity registry: session lists with emitted lines, clears when the job ends", async () => {
@@ -1630,6 +1631,89 @@ describe("auto-review", () => {
     finish({ code: 0 });
     await sleep(20);
     expect(activitySnapshot().sessions.some((s) => s.taskId === card.id)).toBe(false);
+  });
+
+  test("activity registry: each log line carries its arrival time in logAt", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    let ctx!: SpawnContext;
+    let finish!: (result: SpawnResult) => void;
+    const spawnFn: SpawnFn = (_job, context) => {
+      ctx = context;
+      return new Promise<SpawnResult>((resolve) => (finish = resolve));
+    };
+    start(spawnFn, dbFile);
+    await sleep(20);
+    ctx.emit("session started");
+    await sleep(5);
+    ctx.emit("→ bash: bun test");
+    const snap = activitySnapshot().sessions[0]!;
+    expect(snap.log).toEqual(["model: default model · max", "session started", "→ bash: bun test"]);
+    expect(snap.logAt.length).toBe(3);
+    expect(snap.logAt.every((t, i) => i === 0 || t >= snap.logAt[i - 1]!)).toBe(true);
+    expect(snap.logAt[0]).toBeGreaterThanOrEqual(snap.startedAt);
+    expect(snap.logAt[2]).toBeLessThanOrEqual(snap.lastActivityAt); // touch() bumps lastActivityAt without an emit
+    expect(snap.logAt[2]).toBeLessThanOrEqual(Date.now());
+    finish({ code: 0 });
+    await sleep(20);
+  });
+
+  test("activity registry: logAt trims in lockstep with log at the line cap", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    let ctx!: SpawnContext;
+    let finish!: (result: SpawnResult) => void;
+    const spawnFn: SpawnFn = (_job, context) => {
+      ctx = context;
+      return new Promise<SpawnResult>((resolve) => (finish = resolve));
+    };
+    start(spawnFn, dbFile);
+    await sleep(20);
+    for (let i = 0; i < 160; i++) ctx.emit(`line ${i}`);
+    const snap = activitySnapshot().sessions[0]!;
+    expect(snap.log.length).toBe(150);
+    expect(snap.logAt.length).toBe(150);
+    expect(snap.log[149]).toBe("line 159");
+    finish({ code: 0 });
+    await sleep(20);
+  });
+
+  test("saved session log stamps each entry and keeps the header", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    let ctx!: SpawnContext;
+    let finish!: (result: SpawnResult) => void;
+    const spawnFn: SpawnFn = (_job, context) => {
+      ctx = context;
+      return new Promise<SpawnResult>((resolve) => (finish = resolve));
+    };
+    start(spawnFn, dbFile);
+    await sleep(20);
+    ctx.emit("session started");
+    const snap = activitySnapshot().sessions[0]!;
+    finish({ code: 0 });
+    await sleep(20);
+    const logs = db!.attachments(card.id, "session");
+    expect(logs.length).toBe(1);
+    const content = logs[0]!.content;
+    expect(content.split("\n")[0]).toMatch(/^pi-reviewer · default model · max · .* · \d+s$/);
+    const body = content.slice(content.indexOf("\n") + 1);
+    expect(body).toBe(stampSessionLog(snap.log, snap.logAt));
+    expect(content.split("\n")[1]).toMatch(/^\d{2}:\d{2}:\d{2} model: default model · max$/);
+  });
+
+  test("card stats still sum a stamped session log's duration", async () => {
+    const { dbFile, writer: w } = setup();
+    const card = cardInReview(w);
+    const spawnFn: SpawnFn = (_job, context) => {
+      context.emit("session started");
+      return Promise.resolve({ code: 0 });
+    };
+    start(spawnFn, dbFile);
+    await sleep(40);
+    const stats = db!.cardStats(card.id);
+    expect(stats.sessions.count).toBe(1);
+    expect(stats.sessions.totalMs).toBeGreaterThanOrEqual(1000);
   });
 
   test("activity registry: raw child output counts as activity even when the formatter drops it", async () => {

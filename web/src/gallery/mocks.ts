@@ -291,6 +291,7 @@ const ACTIVITY: Record<string, AgentSessionInfo> = {
       "posting review comment",
       "writing findings to the thread…",
     ],
+    logAt: [now() - 170_000, now() - 120_000, now() - 40_000, now() - 8_000],
   },
 };
 
@@ -437,7 +438,7 @@ export function seed(): void {
   board.plans = { [epic.id]: { ...PLAN } };
   board.waiting = { [plain.id]: "gate", [waitingQuestion.id]: "question", [parkedCard.id]: "question", [waitingRerun.id]: "rerun", [waitingCapped.id]: "capped" };
   board.blockedBy = { [edgeDependent.id]: [edgeBlocker.id], [edgeDoneDep.id]: [docsChild.id] };
-  board.activity = Object.fromEntries(Object.entries(ACTIVITY).map(([k, v]) => [k, { ...v, log: [...v.log] }]));
+  board.activity = Object.fromEntries(Object.entries(ACTIVITY).map(([k, v]) => [k, { ...v, log: [...v.log], logAt: [...v.logAt] }]));
   board.loading = false;
   board.error = "";
   board.search = "";

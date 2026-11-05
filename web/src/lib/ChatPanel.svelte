@@ -2,6 +2,7 @@
   import { ArrowRight, Check, ChevronDown, Lightbulb, Maximize2, Minimize2, Square, X } from "@lucide/svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { chat } from "./chat.svelte";
+  import { stampTime } from "../../../src/thread";
   import ChatSelectors from "./ChatSelectors.svelte";
   import { renderMarkdown } from "./markdown";
   import type { ChatBlock } from "../../../src/chat";
@@ -72,10 +73,16 @@
     {/if}
     {#each chat.messages as message (message.entryId)}
       {#if message.role === "user"}
+        {#if message.at !== undefined}<time class="chat-msg-time user" datetime={new Date(message.at).toISOString()} title={new Date(message.at).toLocaleString()}>{stampTime(message.at, Date.now())}</time>{/if}
         <div class="chat-msg user">{message.content}</div>
       {:else if message.role === "assistant"}
         <div class="chat-msg assistant">
-          {#if message.model}<span class="chat-msg-model">{message.provider ? `${message.provider}/` : ""}{message.model}</span>{/if}
+          {#if message.model || message.at !== undefined}
+            <div class="chat-msg-head">
+              {#if message.at !== undefined}<time class="chat-msg-time" datetime={new Date(message.at).toISOString()} title={new Date(message.at).toLocaleString()}>{stampTime(message.at, Date.now())}</time>{/if}
+              {#if message.model}<span class="chat-msg-model">{message.provider ? `${message.provider}/` : ""}{message.model}</span>{/if}
+            </div>
+          {/if}
           {#each message.blocks as block, i (i)}
             {@const key = `${message.entryId}:${i}`}
             {#if block.type === "text"}

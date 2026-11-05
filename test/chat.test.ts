@@ -317,6 +317,41 @@ test("history projection caps thinking blocks and the message tail", () => {
   expect(messages.some((m) => m.role === "user" && m.content === "hidden")).toBe(false); // system skipped
 });
 
+test("history projection carries per-message times from the session entries", () => {
+  const entries = [
+    {
+      type: "message",
+      id: "u1",
+      timestamp: "2026-11-05T08:00:02.000Z",
+      message: { role: "user", content: "go", timestamp: 1000 }, // message timestamp wins
+    },
+    {
+      type: "message",
+      id: "a1",
+      timestamp: "2026-11-05T08:00:05.000Z",
+      message: { role: "assistant", content: [{ type: "text", text: "hi" }] }, // entry ISO fallback
+    },
+    {
+      type: "message",
+      id: "t1",
+      message: { role: "toolResult", toolCallId: "c1" }, // neither — key omitted
+    },
+    {
+      type: "message",
+      id: "u2",
+      timestamp: "nope",
+      message: { role: "user", content: "legacy" }, // garbage ISO — key omitted
+    },
+  ];
+  const { messages } = projectEntries(entries);
+  expect(messages[0]).toMatchObject({ role: "user", at: 1000 });
+  expect(messages[1]).toMatchObject({ role: "assistant", at: Date.parse("2026-11-05T08:00:05.000Z") });
+  expect(messages[2]).toMatchObject({ role: "toolResult" });
+  expect("at" in messages[2]).toBe(false);
+  expect(messages[3]).toMatchObject({ role: "user" });
+  expect("at" in messages[3]).toBe(false);
+});
+
 test("active tool events replay to new listeners; end and agent_end clear them", async () => {
   const tools = db.createTask({ title: "tools" });
   let sessionListener: ((event: unknown) => void) | undefined;

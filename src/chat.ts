@@ -70,9 +70,9 @@ export type ChatBlock =
   | { type: "toolCall"; toolCallId: string; toolName: string; input: Record<string, unknown> };
 
 export type ChatMessage =
-  | { role: "user"; content: string; entryId: string }
-  | { role: "assistant"; blocks: ChatBlock[]; model?: string; provider?: string; stopReason?: string; errorMessage?: string; entryId: string }
-  | { role: "toolResult"; toolCallId: string; toolName?: string; isError?: boolean; entryId: string };
+  | { role: "user"; content: string; at?: number; entryId: string }
+  | { role: "assistant"; blocks: ChatBlock[]; model?: string; provider?: string; stopReason?: string; errorMessage?: string; at?: number; entryId: string }
+  | { role: "toolResult"; toolCallId: string; toolName?: string; isError?: boolean; at?: number; entryId: string };
 
 export interface ChatState {
   running: boolean; // an alive manager-held session exists
@@ -215,16 +215,24 @@ function userText(content: unknown): string {
   return "";
 }
 
+const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+/** Per-message time (epoch ms): the pi message's own `timestamp`, else the session entry's ISO `timestamp`, else undefined (key omitted). */
+function messageAt(message: Record<string, unknown>, entryTimestamp?: string): number | undefined {
+  return numOrUndef(message.timestamp) ?? (typeof entryTimestamp === "string" && Number.isFinite(Date.parse(entryTimestamp)) ? Date.parse(entryTimestamp) : undefined);
+}
+
 /** Session entries → bounded display projection (oldest first, tail-capped). */
-export function projectEntries(entries: Iterable<{ type: string; id: string; message?: unknown }>): { messages: ChatMessage[]; truncated: boolean } {
+export function projectEntries(entries: Iterable<{ type: string; id: string; timestamp?: string; message?: unknown }>): { messages: ChatMessage[]; truncated: boolean } {
   const messages: ChatMessage[] = [];
   for (const entry of entries) {
     if (entry.type !== "message") continue;
     const message = entry.message;
     if (!isObject(message)) continue;
+    const at = messageAt(message, entry.timestamp);
     const role = message.role;
     if (role === "user") {
-      messages.push({ role: "user", content: userText(message.content), entryId: entry.id });
+      messages.push({ role: "user", content: userText(message.content), ...(at !== undefined ? { at } : {}), entryId: entry.id });
     } else if (role === "assistant") {
       const blocks: ChatBlock[] = [];
       if (Array.isArray(message.content)) {
@@ -251,6 +259,7 @@ export function projectEntries(entries: Iterable<{ type: string; id: string; mes
         provider: typeof message.provider === "string" ? message.provider : undefined,
         stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined,
         errorMessage: typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+        ...(at !== undefined ? { at } : {}),
         entryId: entry.id,
       });
     } else if (role === "toolResult") {
@@ -259,6 +268,7 @@ export function projectEntries(entries: Iterable<{ type: string; id: string; mes
         toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : "",
         toolName: typeof message.toolName === "string" ? message.toolName : undefined,
         isError: message.isError === true,
+        ...(at !== undefined ? { at } : {}),
         entryId: entry.id,
       });
     }

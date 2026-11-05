@@ -24,6 +24,25 @@ export function clockTime(ts: number): string {
   return `${hh}:${mm}`;
 }
 
+/** `HH:MM:SS`, zero-padded 24h local time — the session-log line stamp. */
+export function clockTimeSec(ts: number): string {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+/** Line/message stamp: < 1h old → `HH:MM:SS`; same local day → `HH:MM`; older → `${shortDate(ts, now)} ${clockTime(ts)}`. Future ts (clock skew) counts as < 1h. */
+export function stampTime(ts: number, now: number = Date.now()): string {
+  if (now - ts < 3_600_000) return clockTimeSec(ts);
+  const d = new Date(ts);
+  const n = new Date(now);
+  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+  if (sameDay) return clockTime(ts);
+  return `${shortDate(ts, now)} ${clockTime(ts)}`;
+}
+
 export function formatDuration(ms: number): string {
   if (ms < 10_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
   if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
