@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   clockTime,
+  clockTimeSec,
   formatDuration,
   isAgentChatter,
   isStateKind,
@@ -8,10 +9,22 @@ import {
   latestStateIndex,
   relTime,
   shortDate,
+  stampTime,
   wrapText,
 } from "../src/thread";
 
 describe("thread presentation helpers", () => {
+  test("stampTime: seconds under an hour, HH:MM today, date before today", () => {
+    const now = new Date(2026, 9, 25, 12, 0, 0).getTime(); // Oct 25 2026 12:00:00
+    expect(clockTimeSec(new Date(2026, 9, 25, 8, 5, 9).getTime())).toBe("08:05:09");
+    expect(stampTime(now - (59 * 60 + 59) * 1000, now)).toBe("11:00:01");
+    expect(stampTime(now - 3_600_000, now)).toBe("11:00");
+    expect(stampTime(new Date(2026, 9, 25, 0, 0, 0).getTime(), now)).toBe("00:00");
+    expect(stampTime(new Date(2026, 9, 24, 23, 59).getTime(), now)).toBe("Oct 24 23:59");
+    // Future ts (clock skew) counts as < 1h
+    expect(stampTime(now + 30_000, now)).toBe("12:00:30");
+  });
+
   test("KIND_TAG_COLORS matches the expected color palette", () => {
     expect(KIND_TAG_COLORS).toEqual({
       review: "#d29922",
