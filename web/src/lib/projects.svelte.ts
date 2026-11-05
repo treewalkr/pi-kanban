@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { ProjectRoute } from "../../../src/db";
+import type { AgentConfig, ProjectRoute } from "../../../src/db";
 import type { DirListing } from "../../../src/files";
 import { board } from "./board.svelte";
 
@@ -17,6 +17,8 @@ class ProjectsStore {
   /** True when the last GET /projects failed — the panel distinguishes this from loading. */
   loadFailed = $state(false);
   projects = $state<ProjectRoute[]>([]);
+  /** Stored actor overrides per project (GET /projects/:name/agents); an absent project key = not loaded. */
+  overrides = $state<Record<string, Record<string, AgentConfig>>>({});
   /** Last server-confirmed routes: the close guard's baseline. */
   private saved = $state<ProjectRoute[]>([]);
 
@@ -105,6 +107,43 @@ class ProjectsStore {
       this.projects = [...this.projects, saved].sort((a, b) => a.name.localeCompare(b.name));
     }
     this.snapshot();
+    return true;
+  }
+
+  /** GET /projects/:name/agents into `overrides[name]`; the editor refetches on every open. */
+  async loadAgents(name: string): Promise<boolean> {
+    const { data, error } = await api.projects({ name }).agents.get();
+    if (error) {
+      this.fail(error);
+      return false;
+    }
+    const agents = (data as { agents: Array<{ actor: string; config: AgentConfig }> }).agents;
+    this.overrides[name] = Object.fromEntries(agents.map((a) => [a.actor, a.config]));
+    return true;
+  }
+
+  /** PUT /projects/:name/agents/:actor — the server full-replaces the stored override. */
+  async saveActor(name: string, actor: string, config: AgentConfig): Promise<boolean> {
+    const { data, error } = await api.projects({ name }).agents({ actor }).put(config);
+    if (error) {
+      this.fail(error);
+      return false;
+    }
+    const agent = (data as { agent: AgentConfig | null }).agent ?? {}; // null = everything cleaned away → inherits
+    this.overrides[name] = { ...(this.overrides[name] ?? {}), [actor]: agent };
+    return true;
+  }
+
+  /** DELETE /projects/:name/agents/:actor. */
+  async clearActor(name: string, actor: string): Promise<boolean> {
+    const { error } = await api.projects({ name }).agents({ actor }).delete();
+    if (error) {
+      this.fail(error);
+      return false;
+    }
+    const next = { ...(this.overrides[name] ?? {}) };
+    delete next[actor];
+    this.overrides[name] = next;
     return true;
   }
 }

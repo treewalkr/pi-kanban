@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Request as PWRequest } from "@playwright/test";
 import { mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -106,6 +106,175 @@ test.describe("settings: projects section", () => {
       expect(gateRow).toMatchObject({ testGate: false, testCmd: "make check" });
     } finally {
       await request.put("/projects/e2e-tc", { data: { testCmd: null, repoPath: null } });
+      await request.delete(`/tasks/${id}?force=true`);
+    }
+  });
+
+  test("v4: override editor lists lane and board actors", async ({ page, request }) => {
+    const res = await request.post("/tasks", { data: { title: "projects-e2e ovlist card", project: "ov-list" } });
+    const { id } = (await res.json()) as { id: string };
+    try {
+      await page.goto("/");
+      await page.waitForSelector("main.board");
+      await page.click("button[aria-label='settings']");
+      await page.getByRole("tab", { name: "Projects" }).click();
+
+      await page.click("button[aria-label='agent overrides ov-list']");
+      const toggle = page.locator("button[aria-label='agent overrides ov-list']");
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      const group = page.locator("div[role='group'][aria-label='override editor ov-list']");
+      await expect(group).toBeVisible();
+
+      // one optgroup per workflow lane with actors (SSE-fresh board.laneContexts), board group last.
+      // Subset match: other specs on the shared e2e board may add workflow lanes.
+      const select = page.locator("select[aria-label='override actor ov-list']");
+      const labels = await select
+        .locator("optgroup")
+        .evaluateAll((els) => els.map((e) => (e as HTMLOptGroupElement).label));
+      const pinned = ["Plan", "Test + Implement", "Review"].map((l) => labels.indexOf(l));
+      expect(pinned.every((i) => i !== -1)).toBe(true);
+      expect([...pinned].sort((a, b) => a - b)).toEqual(pinned); // relative order preserved
+      expect(labels).not.toContain("Backlog"); // no context → no group
+      expect(labels).not.toContain("Epics");
+      expect(labels[labels.length - 1]).toBe("board");
+
+      const planActors = await select
+        .locator("optgroup[label='Plan'] option")
+        .evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+      expect(planActors).toEqual(["planner", "plan-reviewer"]);
+      const boardActors = await select
+        .locator("optgroup[label='board'] option")
+        .evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+      expect(boardActors).toEqual(["elaborator", "manager", "worker"]);
+
+      await page.click("button[aria-label='agent overrides ov-list']");
+      await expect(page.locator("div[role='group'][aria-label='override editor ov-list']")).toHaveCount(0);
+    } finally {
+      await request.delete(`/tasks/${id}?force=true`);
+    }
+  });
+
+  test("v4: per-actor override editor round-trips present-key skills", async ({ page, request }) => {
+    expect((await request.put("/engines/e2e-ov-eng", { data: { name: "e2e ov engine", harness: "pi" } })).ok()).toBe(true);
+    const seeded = await request.post("/tasks", { data: { title: "projects-e2e ovproj card", project: "ov-proj" } });
+    const { id } = (await seeded.json()) as { id: string };
+    let agentPuts = 0;
+    const countPut = (r: PWRequest) => {
+      if (r.method() === "PUT" && r.url().includes("/projects/ov-proj/agents")) agentPuts++;
+    };
+    try {
+      await page.goto("/");
+      await page.waitForSelector("main.board");
+      await page.click("button[aria-label='settings']");
+      await page.getByRole("tab", { name: "Projects" }).click();
+      await page.click("button[aria-label='agent overrides ov-proj']");
+      const group = page.locator("div[role='group'][aria-label='override editor ov-proj']");
+      await expect(group).toBeVisible();
+
+      const select = page.locator("select[aria-label='override actor ov-proj']");
+      await select.selectOption("reviewer");
+      await page.locator("select[aria-label='override add engine ov-proj']").selectOption("e2e-ov-eng");
+
+      // lineup-only save on a fresh override: PUT body sends runsOn, no skills key (inherits)
+      page.on("request", countPut);
+      const saveRes = page.waitForResponse((r) => r.request().method() === "PUT" && r.url().includes("/projects/ov-proj/agents/reviewer"));
+      await page.locator("button[aria-label='save override ov-proj']").click();
+      const body = (await saveRes).request().postDataJSON() as { runsOn?: string[]; skills?: string[] };
+      expect(body.runsOn).toEqual(["e2e-ov-eng"]);
+      expect("skills" in body).toBe(false);
+
+      const agentsRes = await request.get("/projects/ov-proj/agents");
+      const agents = (await agentsRes.json()) as { agents: Array<{ actor: string; config: { runsOn?: string[]; skills?: string[]; timeoutMs?: number } }> };
+      expect(agents.agents).toEqual([{ actor: "reviewer", config: { runsOn: ["e2e-ov-eng"] } }]);
+      await expect(page.locator("select[aria-label='override actor ov-proj'] optgroup[label='Review'] option[value='reviewer']")).toHaveText("reviewer · override");
+
+      // timeout minutes → timeoutMs
+      await page.locator("input[aria-label='override timeout ov-proj']").fill("30");
+      const timeoutRes = page.waitForResponse((r) => r.request().method() === "PUT" && r.url().includes("/projects/ov-proj/agents/reviewer"));
+      await page.locator("button[aria-label='save override ov-proj']").click();
+      await timeoutRes;
+      const timed = (await (await request.get("/projects/ov-proj/agents")).json()) as typeof agents;
+      expect(timed.agents[0]?.config.timeoutMs).toBe(1_800_000);
+
+      // invalid timeout: the client refuses before any request
+      const putsBefore = agentPuts;
+      await page.locator("input[aria-label='override timeout ov-proj']").fill("0");
+      await page.locator("button[aria-label='save override ov-proj']").click();
+      await expect(page.locator(".error-bar")).toContainText("timeout must be 1 to 1440 minutes");
+      await page.waitForTimeout(400);
+      expect(agentPuts).toBe(putsBefore);
+
+      // a stored skills list survives a timeout-only edit (present key resent)
+      expect((await request.put("/projects/ov-proj/agents/reviewer", { data: { runsOn: ["e2e-ov-eng"], skills: ["/tmp/e2e-skill"] } })).ok()).toBe(true);
+      await page.reload();
+      await page.waitForSelector("main.board");
+      await page.click("button[aria-label='settings']");
+      await page.getByRole("tab", { name: "Projects" }).click();
+      await page.click("button[aria-label='agent overrides ov-proj']");
+      await page.locator("select[aria-label='override actor ov-proj']").selectOption("reviewer");
+      const removeSkill = group.locator("button[aria-label='remove /tmp/e2e-skill']");
+      await expect(removeSkill).toBeVisible();
+
+      const skillsRes = page.waitForResponse((r) => r.request().method() === "PUT" && r.url().includes("/projects/ov-proj/agents/reviewer"));
+      await page.locator("input[aria-label='override timeout ov-proj']").fill("45");
+      await page.locator("button[aria-label='save override ov-proj']").click();
+      const skillsBody = (await skillsRes).request().postDataJSON() as { runsOn?: string[]; skills?: string[]; timeoutMs?: number };
+      expect(skillsBody.skills).toEqual(["/tmp/e2e-skill"]); // stored list survives an edit to another field
+      expect(skillsBody.runsOn).toEqual(["e2e-ov-eng"]);
+      expect(skillsBody.timeoutMs).toBe(2_700_000);
+
+      // deliberate clear-all sends skills: []
+      await removeSkill.click();
+      await expect(group.locator("button[aria-label='remove /tmp/e2e-skill']")).toHaveCount(0);
+      const clearRes = page.waitForResponse((r) => r.request().method() === "PUT" && r.url().includes("/projects/ov-proj/agents/reviewer"));
+      await page.locator("button[aria-label='save override ov-proj']").click();
+      const clearBody = (await clearRes).request().postDataJSON() as { skills?: string[] };
+      expect(clearBody.skills).toEqual([]);
+      const emptied = (await (await request.get("/projects/ov-proj/agents")).json()) as typeof agents;
+      expect(emptied.agents[0]?.config.skills).toEqual([]);
+
+      // clear: DELETE lands, the group returns to inheriting
+      const delRes = page.waitForResponse((r) => r.request().method() === "DELETE" && r.url().includes("/projects/ov-proj/agents/reviewer"));
+      await page.locator("button[aria-label='clear override ov-proj']").click();
+      await delRes;
+      const gone = (await (await request.get("/projects/ov-proj/agents")).json()) as { agents: unknown[] };
+      expect(gone.agents).toEqual([]);
+      await expect(group).toContainText("inherits the actor's lineup");
+      await expect(page.locator("select[aria-label='override actor ov-proj'] optgroup[label='Review'] option[value='reviewer']")).toHaveText("reviewer");
+    } finally {
+      page.off("request", countPut);
+      await request.delete("/engines/e2e-ov-eng");
+      await request.put("/projects/ov-proj", { data: { repoPath: null } });
+      await request.delete(`/tasks/${id}?force=true`);
+    }
+  });
+
+  test("v4: manager and worker overrides show the inert note", async ({ page, request }) => {
+    const res = await request.post("/tasks", { data: { title: "projects-e2e ovinert card", project: "ov-inert" } });
+    const { id } = (await res.json()) as { id: string };
+    try {
+      await page.goto("/");
+      await page.waitForSelector("main.board");
+      await page.click("button[aria-label='settings']");
+      await page.getByRole("tab", { name: "Projects" }).click();
+      await page.click("button[aria-label='agent overrides ov-inert']");
+      const group = page.locator("div[role='group'][aria-label='override editor ov-inert']");
+      await expect(group).toBeVisible();
+
+      const select = page.locator("select[aria-label='override actor ov-inert']");
+      await select.selectOption("reviewer");
+      await expect(group.locator("p.override-inert")).toHaveCount(0);
+      await select.selectOption("manager");
+      await expect(group.locator("p.override-inert")).toHaveText(
+        "manager and worker overrides are stored but not applied yet — board chat and lane workers run on board-level settings.",
+      );
+      await select.selectOption("worker");
+      await expect(group.locator("p.override-inert")).toHaveText(
+        "manager and worker overrides are stored but not applied yet — board chat and lane workers run on board-level settings.",
+      );
+      await select.selectOption("elaborator");
+      await expect(group.locator("p.override-inert")).toHaveCount(0);
+    } finally {
       await request.delete(`/tasks/${id}?force=true`);
     }
   });
