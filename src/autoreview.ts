@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { durationFor, runAgentChild } from "./agent-child";
+import { stampSessionLog } from "./session-log";
 import { MAX_SKILL_CHARS, skillActivationPrompt } from "./skill-activation";
 import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, defaultLaneContext, epicPlanContext, epicPlanContextFor, PLAN_SECTIONS, PLAN_TEMPLATE, type AgentConfig, type AgentRole, type AgentThinking, type BuiltinAgentRole, type LaneActor, type LaneCapRule, type LaneContext, type Engine, type LeaseOwner, type Task } from "./db";
 import { claudeFlags, isClaudeSessionId, spawnClaude } from "./claude";
@@ -172,6 +173,8 @@ export interface AgentSessionInfo {
   /** Last child output (raw bytes or a formatted line) — separates a working session from a wedged one; starts at startedAt. */
   lastActivityAt: number;
   log: string[];
+  /** Arrival time (epoch ms) of each `log` entry — same length, trimmed in lockstep. */
+  logAt: number[];
   model?: string;
   modelLabel?: string;
   /** Name of the engine the session runs on. */
@@ -1047,6 +1050,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         startedAt,
         lastActivityAt: startedAt,
         log: [],
+        logAt: [],
         modelLabel: label,
         ...(mc.model ? { model: mc.model } : {}),
         engine: engine.name,
@@ -1058,9 +1062,14 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
       const stopBeat = track(() => clearInterval(beat));
       sessions.set(job.task.id, session);
       const emit = (line: string): void => {
-        session.lastActivityAt = Date.now();
+        const at = Date.now();
+        session.lastActivityAt = at;
         session.log.push(line);
-        if (session.log.length > MAX_LOG_LINES) session.log.shift();
+        session.logAt.push(at);
+        if (session.log.length > MAX_LOG_LINES) {
+          session.log.shift();
+          session.logAt.shift();
+        }
         log(`${job.role} ${job.task.id} │ ${line}`);
       };
       emit(`model: ${label}`);
@@ -1101,7 +1110,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
           const secs = Math.max(1, Math.round((Date.now() - session.startedAt) / 1000));
           const header = `${authorForRole(job.role)} · ${label} · ${new Date(session.startedAt).toLocaleString()} · ${secs}s`;
           try {
-            db.attach(job.task.id, "session", `${header}\n${session.log.join("\n")}`, "autoreview");
+            db.attach(job.task.id, "session", `${header}\n${stampSessionLog(session.log, session.logAt)}`, "autoreview");
           } catch (err) {
             log(`${job.role} ${job.task.id}: could not save the session log (${(err as Error).message})`);
           }
