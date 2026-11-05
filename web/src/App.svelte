@@ -356,7 +356,7 @@
                 {#each liveSessions as s (s.taskId)}
                   {@const card = board.taskById(s.taskId)}
                   {@const quiet = Date.now() - s.lastActivityAt > QUIET_AFTER_MS}
-                  <div class="agents-row" role="menuitem" title={card?.title ?? s.taskId}>
+                  <div class="agents-row" title={card?.title ?? s.taskId}>
                     <button
                       class="agents-main"
                       onclick={() => {
