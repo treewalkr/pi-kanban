@@ -42,7 +42,7 @@ describe("tag-lite UI rendering and wiring (AC2, AC3)", () => {
   });
 
   test("App.svelte header renders one toggle chip per derived tag with active state", () => {
-    const chipsIdx = appSource.indexOf('<div class="chips">');
+    const chipsIdx = appSource.indexOf('<div class="chips"');
     expect(chipsIdx).toBeGreaterThan(-1);
 
     const tagsBlock = appSource.indexOf("{#if board.tags.length > 0}", chipsIdx);

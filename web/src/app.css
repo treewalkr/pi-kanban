@@ -3421,9 +3421,7 @@ a.dep-chip.gh-link .gh-state {
 }
 
 .agents-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
   z-index: 40;
   display: flex;
   flex-direction: column;
@@ -3506,9 +3504,7 @@ a.dep-chip.gh-link .gh-state {
 }
 
 .tag-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
+  position: fixed;
   z-index: 40;
   display: flex;
   flex-wrap: wrap;

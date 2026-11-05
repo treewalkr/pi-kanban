@@ -25,6 +25,7 @@
   import { files } from "./lib/files.svelte";
   import { Settings, Sun, Moon, CircleSlash, PanelLeft, Menu, Hash, MessagesSquare, Eye, EyeOff, Square } from "@lucide/svelte";
   import { wheelPan } from "./lib/wheel";
+  import { popoverBelow, type PopoverPos } from "./lib/popover";
   import { service, pollServe, restartService } from "./lib/service.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
   import { QUIET_AFTER_MS, roleVerb, timeAgo } from "./lib/util";
@@ -35,6 +36,9 @@
   let tagWrap = $state<HTMLElement | null>(null);
   let agentsMenu = $state(false);
   let agentsWrap = $state<HTMLElement | null>(null);
+  // fixed coords for the header popovers (48wdj): they must escape the .chips scroll clip
+  let tagPos = $state<PopoverPos | null>(null);
+  let agentsPos = $state<PopoverPos | null>(null);
   // the session a stop confirm is pending on (header popover only; TaskDetail confirms in place)
   let stopTarget = $state<AgentSessionInfo | null>(null);
 
@@ -200,9 +204,15 @@
     if (tagWrap && !tagWrap.contains(e.target as Node)) tagMenu = false;
     if (agentsWrap && !agentsWrap.contains(e.target as Node)) agentsMenu = false;
   }
+
+  /** the chips row scrolls and the window resizes under a fixed popover — close instead of tracking (48wdj) */
+  function closeMenus(): void {
+    tagMenu = false;
+    agentsMenu = false;
+  }
 </script>
 
-<svelte:window onkeydown={onWindowEvent} onclick={onWindowEvent} />
+<svelte:window onkeydown={onWindowEvent} onclick={onWindowEvent} onresize={closeMenus} />
 
 <div class="app" class:resizing>
   <aside
@@ -277,7 +287,7 @@
         <span class="view-chat-label">chat</span>
       </button>
       <SearchBox />
-      <div class="chips">
+      <div class="chips" onscroll={closeMenus}>
         <button
           class:active={board.prioFilter === "high"}
           onclick={() => (board.prioFilter = board.prioFilter === "high" ? "" : "high")}
@@ -315,13 +325,16 @@
           <div class="tag-filter" bind:this={tagWrap}>
             <button
               class:active={board.tagFilter.length > 0 || tagMenu}
-              onclick={() => (tagMenu = !tagMenu)}
+              onclick={(e) => {
+                tagMenu = !tagMenu;
+                if (tagMenu) tagPos = popoverBelow(e.currentTarget.getBoundingClientRect(), window.innerWidth, "left");
+              }}
               title="filter by tag (AND)"
             >
               <Hash size={12} strokeWidth={1.75} /> tags{board.tagFilter.length > 0 ? ` ${board.tagFilter.length}` : ""}
             </button>
-            {#if tagMenu}
-              <div class="tag-menu" role="menu">
+            {#if tagMenu && tagPos}
+              <div class="tag-menu" role="menu" style:top="{tagPos.top}px" style:left="{tagPos.left}px">
                 {#each board.tags as tag (tag)}
                   <button
                     class="tag"
@@ -343,7 +356,10 @@
           <div class="agents-filter" bind:this={agentsWrap}>
             <button
               class:active={agentsMenu}
-              onclick={() => (agentsMenu = !agentsMenu)}
+              onclick={(e) => {
+                agentsMenu = !agentsMenu;
+                if (agentsMenu) agentsPos = popoverBelow(e.currentTarget.getBoundingClientRect(), window.innerWidth, "right");
+              }}
               title="live agent sessions — open the list to watch or stop one"
               aria-haspopup="menu"
               aria-expanded={agentsMenu}
@@ -351,8 +367,8 @@
               <span class="agents-dot" aria-hidden="true"></span>
               {liveSessions.length} agent{liveSessions.length === 1 ? "" : "s"}
             </button>
-            {#if agentsMenu}
-              <div class="agents-menu" role="menu" aria-label="live agent sessions">
+            {#if agentsMenu && agentsPos}
+              <div class="agents-menu" role="menu" aria-label="live agent sessions" style:top="{agentsPos.top}px" style:right="{agentsPos.right}px">
                 {#each liveSessions as s (s.taskId)}
                   {@const card = board.taskById(s.taskId)}
                   {@const quiet = Date.now() - s.lastActivityAt > QUIET_AFTER_MS}
