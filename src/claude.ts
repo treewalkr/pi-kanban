@@ -149,6 +149,8 @@ export interface SpawnClaudeInput {
   log: (message: string) => void;
   emit: (line: string) => void;
   track: (kill: () => void) => () => void;
+  /** Signals raw child output — bytes count even when the formatter drops them, proving a quiet session alive. */
+  touch?: () => void;
 }
 
 /**
@@ -159,7 +161,7 @@ export interface SpawnClaudeInput {
  * shared context) instead of failing the spawn.
  */
 export function spawnClaude(input: SpawnClaudeInput): Promise<SpawnResult> {
-  const { cwd, prompt, args, timeoutMs, stallMs, log, emit, track } = input;
+  const { cwd, prompt, args, timeoutMs, stallMs, log, emit, track, touch } = input;
   let sid = input.sessionId;
   let resume = input.resume === true;
   if (!isClaudeSessionId(sid)) {
@@ -176,6 +178,7 @@ export function spawnClaude(input: SpawnClaudeInput): Promise<SpawnResult> {
     log,
     emit,
     track,
+    touch,
     formatEvent: formatClaudeEvent,
   });
 }

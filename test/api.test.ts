@@ -807,14 +807,57 @@ test("/activity carries the engine and resolved model per session", async () => 
 
   const res = await app.handle(new Request("http://localhost/activity"));
   expect(res.status).toBe(200);
-  const data = (await res.json()) as { sessions: Array<{ taskId: string; model?: string; modelLabel?: string; engine?: string }> };
+  const data = (await res.json()) as { sessions: Array<{ taskId: string; model?: string; modelLabel?: string; engine?: string; lastActivityAt?: number; startedAt?: number }> };
   expect(data.sessions.length).toBe(2);
   // one seat each: the second review falls back to the lineup's second engine
   expect(data.sessions.map((s) => s.engine).sort()).toEqual(["gpt engine", "sonnet engine"]);
   expect(data.sessions.map((s) => s.modelLabel).sort()).toEqual(["anthropic · claude-3-5-sonnet · max", "openai · gpt-4o · max"]);
+  // liveness rides along: activity starts at birth even for a silent stub session
+  for (const s of data.sessions) expect(s.lastActivityAt).toBe(s.startedAt);
 
   handle.stop();
   for (const f of finishes) f();
+});
+
+test("DELETE /sessions/:taskId stops one session; unknown ids 404", async () => {
+  const app = createApp(db);
+  const card = db.createTask({ title: "stoppable", lane: "review" });
+  db.createComment(card.id, { author: "pi-builder", kind: "handoff", body: "done" });
+
+  let killed = false;
+  let resolveSpawn!: (r: { code: number }) => void;
+  const handle = startAutoReview({
+    db,
+    cwd: dir,
+    spawnFn: (_job, ctx) => {
+      ctx.track(() => {
+        killed = true;
+        resolveSpawn({ code: 143 });
+      });
+      return new Promise((resolve) => (resolveSpawn = resolve));
+    },
+    watchIntervalMs: 50,
+    gate: null,
+  });
+  for (let i = 0; i < 20 && !killed && resolveSpawn === undefined; i++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await new Promise((r) => setTimeout(r, 50)); // session is in flight
+
+  const miss = await app.handle(new Request("http://localhost/sessions/nope", { method: "DELETE" }));
+  expect(miss.status).toBe(404);
+
+  const stop = await app.handle(new Request(`http://localhost/sessions/${card.id}`, { method: "DELETE" }));
+  expect(stop.status).toBe(200);
+  expect(((await stop.json()) as { ok: boolean }).ok).toBe(true);
+  expect(killed).toBe(true);
+  await new Promise((r) => setTimeout(r, 50));
+  // the death flows through the loop's normal path: a re-trigger comment on the card
+  const last = db.comments(card.id).at(-1)!;
+  expect(last.body).toContain("session died");
+
+  handle.stop();
+  await new Promise((r) => setTimeout(r, 20));
 });
 
 test("PATCH /lanes/:id wipLimit roundtrip; shape violations 422, null clears", async () => {

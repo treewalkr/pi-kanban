@@ -690,6 +690,14 @@ class BoardStore {
     await this.#actionSync();
   }
 
+  /** Kill one live agent session (the per-session stop); the death comment and resume offer land via the normal loop path. */
+  async stopSession(id: string): Promise<void> {
+    const { error } = await api.sessions({ taskId: id }).delete();
+    if (error) return this.fail(error);
+    await this.pollActivity();
+    await this.refresh();
+  }
+
   async elaborate(id: string): Promise<void> {
     const { error } = await api.tasks({ id }).elaborate.post({});
     if (error) return this.fail(error);
