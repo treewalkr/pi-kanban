@@ -1,0 +1,81 @@
+/* narrow viewports: two compact rows — toggle + search + actions on row 1,
+   view switch + filter chips on row 2. Search is the control you reach for,
+   so it gets the prime spot instead of a full row of its own.
+   The .top-scoped selectors outrank the base .chips/.search-box rules below
+   (which would otherwise win the cascade and re-break the rows). */
+@media (max-width: 640px) {
+  .top {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    row-gap: 8px;
+  }
+
+  .sidebar-toggle {
+    order: 0;
+  }
+
+  .view-toggle {
+    order: 1;
+    flex: 0 0 auto;
+  }
+
+  .top .search-box {
+    order: 2;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .search {
+    width: 100%;
+  }
+
+  /* settings + theme both carry .theme-toggle — they close row 1 together */
+  .top .theme-toggle {
+    order: 3;
+  }
+
+  .top .chips {
+    order: 4;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+  }
+
+  /* the stale chip is a direct .top child — it joins the chips row instead of
+     wedging into row 1 and re-wrapping the header (board-collapse AC2) */
+  .stale-chip {
+    order: 4;
+  }
+
+  /* the eye toggle sits out the phone header: the chips row is already at its
+     wrap threshold (stale chip + tags join mid-development and re-wrap), and
+     its persisted state still applies to visibleLanes (board-collapse AC2) */
+  .top .chips button[aria-label="show empty lanes"] {
+    display: none;
+  }
+
+  /* task count lives in the sidebar and lane headers at phone widths */
+  .meta {
+    display: none;
+  }
+}
+
+/* phone widths: search would get crushed next to the view tabs — it takes
+   its own row; the icon actions join hamburger + tabs on row 1 */
+@media (max-width: 420px) {
+  .top .theme-toggle {
+    order: 2;
+  }
+
+  .top .search-box {
+    order: 3;
+    flex: 1 1 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .top .chips button,
+  .view-toggle button {
+    padding: 3px 7px;
+    font-size: 12px;
+  }
+}

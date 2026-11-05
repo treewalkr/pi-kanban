@@ -1130,12 +1130,29 @@ button {
 
 .top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 0 10px;
   min-height: 40px;
   padding: 0 12px 0 14px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
+}
+
+/* the filter chips + trailing actions travel as one unit: when the header row
+   runs out of room the whole unit drops to a second row (48wdj) — the chips
+   line itself never wraps, it scrolls sideways */
+.top-rest {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding-block: 4px;
+}
+
+.top-rest > :not(.chips) {
+  flex: none;
 }
 
 /* narrow viewports: two compact rows — toggle + search + actions on row 1,
@@ -1220,6 +1237,23 @@ button {
   }
 }
 
+/* phone header (48wdj): the .top-rest wrapper dissolves so the phone rows above
+   lay out exactly as before; an overflowing chips row scrolls from its start
+   instead of pushing chips off the unreachable left edge */
+@media (max-width: 640px) {
+  .top-rest {
+    display: contents;
+  }
+
+  .top .search-box {
+    max-width: none;
+  }
+
+  .top .chips {
+    justify-content: safe flex-end;
+  }
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -1267,8 +1301,9 @@ button {
 
 .search-box {
   position: relative;
-  flex: 0 1 200px;
+  flex: 1 1 120px;
   min-width: 120px;
+  max-width: 200px;
 }
 
 .search-results {
@@ -1354,12 +1389,23 @@ button {
   visibility: visible;
 }
 
+/* one line at every width (48wdj): overflow scrolls sideways, never wraps;
+   the padding + negative margin keep focus rings inside the scroll clip
+   without moving anything */
 .chips {
   display: flex;
   gap: 6px;
-  flex-wrap: wrap;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  padding: 4px;
+  margin: -4px;
+}
+
+.chips > * {
+  flex-shrink: 0;
 }
 
 .chips button {

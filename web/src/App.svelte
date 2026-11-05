@@ -287,7 +287,8 @@
         <span class="view-chat-label">chat</span>
       </button>
       <SearchBox />
-      <div class="chips" onscroll={closeMenus}>
+      <div class="top-rest">
+        <div class="chips" onscroll={closeMenus}>
         <button
           class:active={board.prioFilter === "high"}
           onclick={() => (board.prioFilter = board.prioFilter === "high" ? "" : "high")}
@@ -444,6 +445,7 @@
           <Moon size={14} strokeWidth={1.75} />
         {/if}
       </button>
+      </div>
     </header>
 
     {#if board.loading}
