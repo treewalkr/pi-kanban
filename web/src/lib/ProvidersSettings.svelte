@@ -389,7 +389,7 @@
     overflow: hidden;
     color: var(--text-dim);
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: 10px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -397,7 +397,7 @@
   .provider-row-status {
     overflow: hidden;
     color: var(--text-dim);
-    font-size: 11.5px;
+    font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -431,7 +431,7 @@
     overflow-y: auto;
   }
 
-  /* t3code's editor header: logo + name + version chip + switch, then divided sections */
+  /* t3code's editor header: logo + name + version chip, then divided sections */
   .provider-header {
     display: flex;
     flex: none;
@@ -487,7 +487,7 @@
   .provider-title {
     margin: 0;
     color: var(--text);
-    font-size: 13.5px;
+    font-size: 13px;
     font-weight: 600;
   }
 
@@ -512,7 +512,7 @@
 
   .provider-status-word {
     color: var(--text);
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 600;
   }
 
@@ -530,7 +530,7 @@
     margin: 0;
     max-width: 60ch;
     color: var(--text-dim);
-    font-size: 11.5px;
+    font-size: 11px;
     line-height: 1.5;
   }
 
@@ -634,7 +634,7 @@
   .provider-backend-hint {
     margin: 0;
     color: var(--text-dim);
-    font-size: 11.5px;
+    font-size: 11px;
   }
 
   .provider-backend-hint code {
@@ -669,7 +669,7 @@
     overflow: hidden;
     color: var(--text);
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -684,7 +684,7 @@
   .badge {
     padding: 1px 6px;
     border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-    border-radius: 4px;
+    border-radius: var(--radius-small);
     color: var(--text-dim);
     font-family: var(--font-mono);
     font-size: 10px;
@@ -700,7 +700,8 @@
     line-height: 1.5;
   }
 
-  /* one pane at a time on a phone: the rail becomes a scrolling strip above */
+  /* one pane at a time on a phone: the rail becomes a scrolling strip above,
+     the detail keeps its own scroll — no ancestor scrolls, so it must */
   @media (max-width: 640px) {
     .provider-split {
       grid-template-columns: minmax(0, 1fr);
@@ -730,10 +731,6 @@
 
     .provider-row .switch {
       align-self: flex-end;
-    }
-
-    .provider-detail {
-      overflow-y: visible;
     }
   }
 </style>
