@@ -37,6 +37,8 @@ export interface HarnessView {
   status: HarnessStatusKey;
   /** Version or install hint from the probe. */
   detail: string;
+  /** Short chip form of the probe's version ("v2.1.318"), when it has one. */
+  version: string | null;
   /** Enabled engines that run on this harness. */
   engines: string[];
   /** Live cooldowns on this harness's accounts (`<harness>:<account>`). */
@@ -157,6 +159,7 @@ export function deriveHarnesses(
       // claude has one ambient account: a cooldown on it throttles the whole harness
       status: probe.status === "missing" ? "missing" : probe.id !== "pi" && cooling.length > 0 ? "cooling" : "ready",
       detail: probe.detail,
+      version: versionLabel(probe.detail),
       engines: own.map((e) => e.name),
       cooling,
       backends: probe.id === "pi" ? deriveProviders(piModels, chatModels, engines, activity, now) : [],
@@ -195,6 +198,12 @@ export interface DetailSegment {
 
 function timeOf(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** t3code's version chip: `v`-prefixed when the detail leads with a digit, first word only. */
+export function versionLabel(detail: string): string | null {
+  if (!/^\d/.test(detail)) return null;
+  return `v${detail.split(/\s/)[0]}`;
 }
 
 /**

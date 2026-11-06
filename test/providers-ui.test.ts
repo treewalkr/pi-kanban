@@ -9,6 +9,7 @@ import {
   type HarnessProbeRef,
   type ProviderEngineRef,
   type ProviderHealthRef,
+  versionLabel,
 } from "../web/src/lib/harnesses.svelte";
 import type { CatalogModel } from "../src/models";
 
@@ -155,5 +156,22 @@ describe("backendHint", () => {
     const line = segs.map((s) => s.text).join("");
     expect(line).toContain("provider quota");
     expect(line).toContain("engines on it wait");
+  });
+});
+
+describe("versionLabel", () => {
+  it("v-prefixes a version-leading detail, first word only", () => {
+    expect(versionLabel("2.1.318 (Claude Code)")).toBe("v2.1.318");
+  });
+  it("prose details carry no version chip", () => {
+    expect(versionLabel("the board's own agent runtime")).toBeNull();
+    expect(versionLabel("claude binary not on PATH — install with npm i -g @anthropic-ai/claude-code")).toBeNull();
+  });
+  it("views carry the chip: claude yes, pi no", () => {
+    const views = deriveHarnesses(PROBES, PI, CHAT, [], [], NOW);
+    expect(views[0].version).toBeNull();
+    expect(views[1].version).toBe("v2.1.105");
+    const versioned = deriveHarnesses([{ ...PROBES[1], detail: "2.1.105 (Claude Code)" }], [], [], [], [], NOW);
+    expect(versioned[0].version).toBe("v2.1.105");
   });
 });

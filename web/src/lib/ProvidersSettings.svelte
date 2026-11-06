@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RefreshCw } from "@lucide/svelte";
+  import { CodeXml, Layers, RefreshCw, Terminal } from "@lucide/svelte";
   import {
     backendHint,
     checkedAgo,
@@ -31,13 +31,23 @@
   const STATUS: Record<HarnessView["status"], string> = {
     ready: "ready",
     cooling: "cooling",
-    missing: "not installed",
+    missing: "not found",
   };
   const BACKEND_STATUS: Record<ProviderView["status"], string> = {
     ok: "signed in",
     unsigned: "not signed in",
     cooling: "cooling",
   };
+
+  const ICONS: Record<string, typeof Terminal> = { pi: Terminal, claude: CodeXml };
+
+  // the rail's second line — the status word plus the one qualifier that identifies it
+  function headline(h: HarnessView): string {
+    if (h.status === "missing") return "not found · CLI not detected";
+    if (h.status === "cooling") return "cooling · quota";
+    if (h.id === "pi") return `ready · ${h.backends.length} backend${h.backends.length === 1 ? "" : "s"}`;
+    return "ready · ambient auth";
+  }
 </script>
 
 <div class="settings-general providers-settings">
@@ -68,17 +78,24 @@
   <div class="provider-split">
     <nav class="provider-rail" aria-label="harness providers">
       {#each harnesses.list as h (h.id)}
+        {@const Icon = ICONS[h.id] ?? Layers}
         <button
           type="button"
           class="provider-row"
           data-harness={h.id}
           aria-current={h.id === harnesses.selected ? "true" : undefined}
-          aria-label={`${h.label}, ${STATUS[h.status]}, ${h.engines.length} engine${h.engines.length === 1 ? "" : "s"}`}
+          aria-label={`${h.label}, ${headline(h)}`}
           onclick={() => harnesses.select(h.id)}
         >
-          <span class="provider-dot" data-status={h.status} aria-hidden="true"></span>
-          <span class="provider-name" title={h.id}>{h.label}</span>
-          <span class="provider-count" aria-hidden="true">{h.engines.length}</span>
+          <span class="provider-row-line1">
+            <span class="provider-icon" aria-hidden="true"><Icon size={15} strokeWidth={1.8} /></span>
+            <span class="provider-name" title={h.id}>{h.label}</span>
+            {#if h.version}<code class="provider-version">{h.version}</code>{/if}
+          </span>
+          <span class="provider-row-line2">
+            <span class="provider-dot" data-status={h.status} aria-hidden="true"></span>
+            <span class="provider-row-status">{headline(h)}</span>
+          </span>
         </button>
       {/each}
       {#if harnesses.list.length === 0}
@@ -88,51 +105,58 @@
 
     <div class="provider-detail">
       {#if view}
-        <div class="provider-top">
-          <h4 class="provider-headline" data-status={view.status}>
+        {@const Icon = ICONS[view.id] ?? Layers}
+        <header class="provider-header">
+          <span class="provider-icon" aria-hidden="true"><Icon size={15} strokeWidth={1.8} /></span>
+          <h4 class="provider-title">{view.label}</h4>
+          {#if view.version}<code class="provider-version">{view.version}</code>{/if}
+        </header>
+
+        <section class="provider-section">
+          <div class="provider-statusline">
             <span class="provider-dot" data-status={view.status} aria-hidden="true"></span>
-            {STATUS[view.status]}
-          </h4>
-          <p class="provider-detail-line">{view.detail}</p>
+            <span class="provider-status-word" data-status={view.status}>{STATUS[view.status]}</span>
+            <span class="provider-status-detail">{view.detail}</span>
+          </div>
           {#if view.id === "claude" && view.status === "ready"}
-            <p class="provider-detail-line">Auth is ambient — the CLI's own login or <code>ANTHROPIC_API_KEY</code>.</p>
+            <p class="provider-note">Auth is ambient — the CLI's own login or <code>ANTHROPIC_API_KEY</code>.</p>
           {/if}
           <div class="provider-engines">
             <span class="provider-label">engines</span>
             {#each view.engines as name, i (i)}
               <span class="chip">{name}</span>
             {:else}
-              <span class="provider-none">no enabled engine runs on it — add one in Engines</span>
+              <span class="provider-none">none — add one in Engines</span>
             {/each}
           </div>
           {#each view.cooling as c (c.account)}
             <p class="provider-cooling" role="status">cooling · {c.account} until {new Date(c.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{#if c.cause} · {c.cause.replace(/-/g, " ")}{/if} — spawns on it wait</p>
           {/each}
-        </div>
+        </section>
 
         {#if view.id === "pi"}
           {#if backends.length > 0}
-            <div class="provider-models-head">
-              <span class="provider-label">backends · {backends.length} · {totalModels} models</span>
-              {#if totalModels > FILTER_THRESHOLD}
-                <input
-                  type="search"
-                  class="provider-filter"
-                  placeholder="filter models"
-                  aria-label="filter models"
-                  spellcheck="false"
-                  bind:value={harnesses.filter}
-                />
-              {/if}
-            </div>
-            <div class="provider-backends">
+            <section class="provider-section">
+              <div class="provider-models-head">
+                <span class="provider-label">backends · {backends.length} · {totalModels} models</span>
+                {#if totalModels > FILTER_THRESHOLD}
+                  <input
+                    type="search"
+                    class="provider-filter"
+                    placeholder="filter models"
+                    aria-label="filter models"
+                    spellcheck="false"
+                    bind:value={harnesses.filter}
+                  />
+                {/if}
+              </div>
               {#each shownBackends as { backend, models } (backend.id)}
-                <section class="provider-backend">
+                <div class="provider-backend">
                   <header class="provider-backend-head">
                     <span class="provider-dot" data-status={backend.status} aria-hidden="true"></span>
                     <span class="provider-backend-id" title={backend.id}>{backend.id}</span>
                     <span class="provider-backend-status" data-status={backend.status}>{BACKEND_STATUS[backend.status]}</span>
-                    <span class="provider-count" aria-hidden="true">{backend.models.length}</span>
+                    <code class="provider-version">{backend.models.length}</code>
                     {#each backend.engines as name, i (i)}
                       <span class="chip">{name}</span>
                     {/each}
@@ -147,37 +171,39 @@
                       <li class="provider-model" data-model={m.id}>
                         <span class="provider-model-id" title={m.id}>{m.id}</span>
                         <span class="provider-model-meta">
-                          <span>{m.context} ctx</span>
-                          <span>{m.maxOut} out</span>
-                          {#if m.thinking}<span>thinks</span>{/if}
-                          {#if m.images}<span>images</span>{/if}
+                          <span class="badge">{m.context} ctx</span>
+                          <span class="badge">{m.maxOut} out</span>
+                          {#if m.thinking}<span class="badge">thinks</span>{/if}
+                          {#if m.images}<span class="badge">images</span>{/if}
                         </span>
                       </li>
                     {/each}
                   </ul>
-                </section>
+                </div>
               {:else}
                 <p class="provider-empty">no model matches “{harnesses.filter.trim()}”</p>
               {/each}
-            </div>
+            </section>
           {:else}
             <p class="provider-empty">No LLM backends in pi's catalog.</p>
           {/if}
         {:else if view.models.length > 0}
-          <div class="provider-models-head">
-            <span class="provider-label">models · {view.models.length}</span>
-          </div>
-          <ul class="provider-models">
-            {#each view.models as m (m.id)}
-              <li class="provider-model">
-                <span class="provider-model-id" title={m.id}>{m.label}</span>
-                <span class="provider-model-meta">
-                  <span>{m.note}</span>
-                </span>
-              </li>
-            {/each}
-          </ul>
-          <p class="provider-detail-line">Aliases — the harness resolves them to the current concrete model at spawn.</p>
+          <section class="provider-section">
+            <div class="provider-models-head">
+              <span class="provider-label">models · {view.models.length}</span>
+            </div>
+            <ul class="provider-models">
+              {#each view.models as m (m.id)}
+                <li class="provider-model">
+                  <span class="provider-model-id" title={m.id}>{m.label}</span>
+                  <span class="provider-model-meta">
+                    <span class="badge">{m.note}</span>
+                  </span>
+                </li>
+              {/each}
+            </ul>
+            <p class="provider-note">Aliases — the harness resolves them to the current concrete model at spawn.</p>
+          </section>
         {/if}
       {:else}
         <p class="provider-empty">Pick a harness to see its status, engines, and models.</p>
@@ -241,7 +267,7 @@
   .provider-split {
     display: grid;
     flex: 1;
-    grid-template-columns: 172px minmax(0, 1fr);
+    grid-template-columns: 224px minmax(0, 1fr);
     min-height: 0;
     border: 1px solid var(--border);
     border-radius: var(--radius-panel);
@@ -249,25 +275,23 @@
     overflow: hidden;
   }
 
+  /* t3code's rail: divided two-line rows, fill selection, no gaps */
   .provider-rail {
     display: flex;
     flex-direction: column;
-    gap: 2px;
     min-height: 0;
-    padding: 6px;
     border-right: 1px solid var(--border);
     overflow-y: auto;
   }
 
   .provider-row {
-    display: grid;
+    display: flex;
     flex: none;
-    grid-template-columns: 8px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 7px;
-    padding: 6px 8px;
+    flex-direction: column;
+    gap: 3px;
+    padding: 11px 12px;
     border: 0;
-    border-radius: var(--radius-small);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
     background: transparent;
     color: var(--text-muted);
     text-align: left;
@@ -276,35 +300,77 @@
     transition: background 0.12s, color 0.12s;
   }
 
+  .provider-row:last-child {
+    border-bottom: 0;
+  }
+
   .provider-row:hover {
     background: var(--bg-hover);
     color: var(--text);
   }
 
-  /* selection is more than a hue shift: fill, accent bar, and weight */
   .provider-row[aria-current="true"] {
     background: var(--bg-selected);
-    box-shadow: inset 2px 0 0 var(--accent);
     color: var(--text);
-    font-weight: 600;
   }
 
   .provider-row:focus-visible {
     outline: 2px solid var(--accent);
-    outline-offset: -1px;
+    outline-offset: -2px;
+  }
+
+  .provider-row-line1 {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .provider-row-line2 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-left: 22px; /* lines up under the name, past icon + gap */
+  }
+
+  .provider-icon {
+    display: flex;
+    flex: none;
+    align-items: center;
+    color: var(--text-dim);
+  }
+
+  .provider-row[aria-current="true"] .provider-icon {
+    color: var(--text-muted);
   }
 
   .provider-name {
+    min-width: 0;
     overflow: hidden;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .provider-count {
+  .provider-version {
+    flex: none;
+    margin-left: auto;
+    overflow: hidden;
     color: var(--text-dim);
     font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 400;
+    font-size: 10.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .provider-row-status {
+    overflow: hidden;
+    color: var(--text-dim);
+    font-size: 11.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .provider-dot {
@@ -331,47 +397,71 @@
   .provider-detail {
     display: flex;
     flex-direction: column;
-    gap: 12px;
     min-width: 0;
     min-height: 0;
-    padding: 14px 16px 16px;
     overflow-y: auto;
   }
 
-  .provider-top {
+  /* t3code's editor header: icon + name + version chip, then divided sections */
+  .provider-header {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px 10px;
   }
 
-  .provider-headline {
-    display: flex;
-    align-items: center;
-    gap: 7px;
+  .provider-title {
     margin: 0;
     color: var(--text);
-    font-size: 13px;
+    font-size: 13.5px;
     font-weight: 600;
   }
 
-  .provider-headline .provider-dot {
-    width: 8px;
-    height: 8px;
+  .provider-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 16px 14px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
   }
 
-  .provider-headline[data-status="cooling"] {
+  .provider-statusline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 7px;
+  }
+
+  .provider-statusline .provider-dot {
+    align-self: center;
+  }
+
+  .provider-status-word {
+    color: var(--text);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  .provider-status-word[data-status="cooling"] {
     color: var(--error);
   }
 
-  .provider-detail-line {
+  .provider-status-detail {
+    min-width: 0;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  .provider-note {
     margin: 0;
     max-width: 60ch;
     color: var(--text-dim);
-    font-size: 12px;
+    font-size: 11.5px;
     line-height: 1.5;
   }
 
-  .provider-detail-line code {
+  .provider-note code {
     color: var(--text-muted);
     font-size: 11px;
     white-space: nowrap; /* a command never breaks mid-flag */
@@ -409,8 +499,6 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding-top: 2px;
-    border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
   }
 
   .provider-filter {
@@ -430,16 +518,17 @@
     outline: none;
   }
 
-  .provider-backends {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
   .provider-backend {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
+    padding-top: 4px;
+  }
+
+  .provider-backend + .provider-backend {
+    margin-top: 6px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+    padding-top: 10px;
   }
 
   .provider-backend-head {
@@ -484,7 +573,6 @@
   .provider-models {
     display: flex;
     flex-direction: column;
-    gap: 0;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -492,11 +580,11 @@
 
   .provider-model {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 5px 2px;
-    border-bottom: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
+    padding: 6px 2px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
   }
 
   .provider-model:last-child {
@@ -516,10 +604,19 @@
   .provider-model-meta {
     display: flex;
     flex: none;
-    gap: 7px;
+    gap: 5px;
+  }
+
+  /* t3code's capability badges: bordered chips, not bare meta text */
+  .badge {
+    padding: 1px 6px;
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: 4px;
     color: var(--text-dim);
     font-family: var(--font-mono);
     font-size: 10px;
+    line-height: 1.5;
+    white-space: nowrap;
   }
 
   .provider-empty {
@@ -539,24 +636,24 @@
 
     .provider-rail {
       flex-direction: row;
-      padding: 4px;
       border-right: 0;
       border-bottom: 1px solid var(--border);
       overflow-x: auto;
       overflow-y: hidden;
     }
 
-    /* a horizontal strip marks the selection along its bottom edge, not the side */
+    .provider-row {
+      min-width: 150px;
+      border-bottom: 0;
+      border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+    }
+
     .provider-row[aria-current="true"] {
       box-shadow: inset 0 -2px 0 var(--accent);
     }
 
-    .provider-row {
-      padding: 6px 9px;
-    }
-
     .provider-detail {
-      padding: 12px;
+      overflow-y: visible;
     }
   }
 </style>
