@@ -14,10 +14,13 @@ import type { CatalogModel } from "../../../src/models";
 
 export type ProviderStatusKey = "ok" | "unsigned" | "cooling";
 
+/** A catalog model with its picker-visibility flag (off = hidden from the chat model menu). */
+export type ModelRow = CatalogModel & { disabled?: boolean };
+
 export interface ProviderView {
   id: string;
   status: ProviderStatusKey;
-  models: CatalogModel[];
+  models: ModelRow[];
   /** Names of the enabled pi engines whose provider is this one. */
   engines: string[];
   coolingUntil?: number;
@@ -114,6 +117,7 @@ export function deriveProviders(
   engines: ProviderEngineRef[],
   activity: ProviderHealthRef[],
   now: number,
+  disabled: ReadonlySet<string> = new Set(),
 ): ProviderView[] {
   const chatProviders = providerIds(chatModels);
   const piOnly = providerIds(piModels)
@@ -128,7 +132,7 @@ export function deriveProviders(
     const view: ProviderView = {
       id,
       status: health ? "cooling" : chat.length > 0 ? "ok" : "unsigned",
-      models: [...chat, ...cli],
+      models: [...chat, ...cli].map((m) => ({ ...m, disabled: disabled.has(`${m.provider}:${m.id}`) || undefined })),
       // claude engines have no pi provider, and the built-in default engine has none at all
       engines: engines.filter((e) => e.enabled && e.harness === "pi" && e.provider === id).map((e) => e.name),
     };
@@ -153,6 +157,7 @@ export function deriveHarnesses(
   engines: ProviderEngineRef[],
   activity: ProviderHealthRef[],
   now: number,
+  disabled: ReadonlySet<string> = new Set(),
 ): HarnessView[] {
   return probes.map((probe) => {
     const own = engines.filter((e) => e.enabled && e.harness === probe.id);
@@ -172,14 +177,14 @@ export function deriveHarnesses(
       allEngines: all.map((e) => ({ name: e.name, enabled: e.enabled })),
       enabled: probe.enabled !== false,
       cooling,
-      backends: probe.id === "pi" ? deriveProviders(piModels, chatModels, engines, activity, now) : [],
+      backends: probe.id === "pi" ? deriveProviders(piModels, chatModels, engines, activity, now, disabled) : [],
       models: probe.models,
     };
   });
 }
 
 /** Filter box predicate: case-insensitive substring on the model id. */
-export function filterModels(models: CatalogModel[], query: string): CatalogModel[] {
+export function filterModels<T extends CatalogModel>(models: T[], query: string): T[] {
   const q = query.trim().toLowerCase();
   if (!q) return models;
   return models.filter((m) => m.id.toLowerCase().includes(q));
@@ -283,6 +288,7 @@ class HarnessStore {
         eng.error ? [] : eng.data.engines,
         act.error ? [] : act.data.engines,
         Date.now(),
+        new Set(eng.error ? [] : (eng.data.settings.disabledModels ?? [])),
       );
       this.list = list;
       this.checkedAt = Date.now();
@@ -305,6 +311,29 @@ class HarnessStore {
   /** Truth changed elsewhere; the next tab visit refetches instead of trusting this cache. */
   invalidate(): void {
     this.loaded = false;
+  }
+
+  /** The last per-model switch write failed — the banner points at retry/refresh. */
+  modelToggleFailed = $state(false);
+
+  /**
+   * A per-model picker switch (t3code's "Show X in the model picker"): flips
+   * optimistically in the list, PUTs the key, and re-reads truth on failure.
+   */
+  async toggleModel(provider: string, id: string, disabled: boolean): Promise<void> {
+    const mark = (views: HarnessView[]): void => {
+      for (const b of views.find((v) => v.id === "pi")?.backends ?? [])
+        for (const m of b.models) if (m.provider === provider && m.id === id) m.disabled = disabled || undefined;
+    };
+    mark(this.list);
+    const { error } = await api.models.disabled.put({ provider, id, disabled });
+    if (error) {
+      this.modelToggleFailed = true;
+      await this.refresh();
+      return;
+    }
+    this.modelToggleFailed = false;
+    engines.invalidate(); // the Engines tab's settings copy carries the list
   }
 
   /**

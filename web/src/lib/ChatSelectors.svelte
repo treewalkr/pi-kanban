@@ -14,14 +14,18 @@
   let open = $state<null | "model" | "thinking">(null); // one dropdown at a time
   let filter = $state("");
   let catalog = $state<CatalogModel[]>([]);
-  let catalogFetched = false;
 
-  $effect(() => {
-    if (catalogFetched) return;
-    catalogFetched = true;
+  // the catalog is re-read every time the menu opens: auth changes and the
+  // Providers panel's per-model switches (hidden models never arrive) both
+  // surface without a reload
+  function readCatalog(): void {
     void api["chat-models"].get().then((res) => {
       if (!res.error) catalog = res.data.models;
     });
+  }
+
+  $effect(() => {
+    if (open === "model") readCatalog();
   });
 
   // outside click closes (mousedown so it beats the chip's own click toggling)

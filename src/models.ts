@@ -72,8 +72,8 @@ export async function listPiModels(): Promise<CatalogModel[]> {
  * `noExtensions` — can never resolve, so the picker must not offer them.
  * Filters the runtime catalog to providers with configured auth.
  */
-export async function listChatModels(): Promise<CatalogModel[]> {
-  if (chatCache && Date.now() - chatCache.at < TTL_MS) return chatCache.models;
+export async function listChatModels(disabled: ReadonlySet<string> = new Set()): Promise<CatalogModel[]> {
+  if (chatCache && Date.now() - chatCache.at < TTL_MS) return chatCache.models.filter((m) => !disabled.has(`${m.provider}:${m.id}`));
   let models: CatalogModel[] = [];
   try {
     // same runtime construction chat sessions use (sdk.js: authPath + modelsPath
@@ -89,7 +89,7 @@ export async function listChatModels(): Promise<CatalogModel[]> {
     models = []; // a failed runtime must not break the picker (chip still shows the live model)
   }
   chatCache = { at: Date.now(), models };
-  return models;
+  return models.filter((m) => !disabled.has(`${m.provider}:${m.id}`));
 }
 
 type RuntimeModelLike = {

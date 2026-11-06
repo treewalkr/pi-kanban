@@ -1105,8 +1105,17 @@ export const createApp = (
     // chat sessions run noExtensions: the picker must offer the runtime's authed
     // catalog, not the CLI's (extension providers like antigravity can't resolve)
     .get("/chat-models", async (): Promise<{ models: Awaited<ReturnType<typeof listChatModels>> }> => ({
-      models: await listChatModels(),
+      models: await listChatModels(new Set(db.disabledModels())),
     }))
+    // the Providers panel's per-model switch: off = hidden from pickers (chat
+    // model menu); engine rows referencing the model keep working
+    .put(
+      "/models/disabled",
+      ({ body }): { disabledModels: string[] } => ({
+        disabledModels: db.setModelDisabled(`${body.provider}:${body.id}`, body.disabled),
+      }),
+      { body: t.Object({ provider: t.String(), id: t.String(), disabled: t.Boolean() }) },
+    )
     .get("/pi-skills", (): { skills: CatalogSkill[] } => ({
       skills: listPiSkills(),
     }))
@@ -1153,14 +1162,21 @@ export const createApp = (
       },
       { body: t.Object({ enabled: t.Boolean() }) },
     )
-    .get("/engines", (): { engines: Engine[]; settings: { maxWorkers: number; defaultEngine: string | null; harnesses: Record<string, boolean> } } => ({
-      engines: db.engines(),
-      settings: {
-        maxWorkers: db.maxWorkers(),
-        defaultEngine: db.defaultEngineId(),
-        harnesses: { pi: db.harnessEnabled("pi"), claude: db.harnessEnabled("claude") },
-      },
-    }))
+    .get(
+      "/engines",
+      (): {
+        engines: Engine[];
+        settings: { maxWorkers: number; defaultEngine: string | null; harnesses: Record<string, boolean>; disabledModels: string[] };
+      } => ({
+        engines: db.engines(),
+        settings: {
+          maxWorkers: db.maxWorkers(),
+          defaultEngine: db.defaultEngineId(),
+          harnesses: { pi: db.harnessEnabled("pi"), claude: db.harnessEnabled("claude") },
+          disabledModels: db.disabledModels(),
+        },
+      }),
+    )
     .put(
       "/engines/settings",
       ({ body, status }): { maxWorkers: number; defaultEngine: string | null } | unknown => {

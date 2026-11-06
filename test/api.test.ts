@@ -712,7 +712,10 @@ test("GET/PUT/DELETE /engines roundtrip; order; settings; schema 422, semantic 4
   const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
 
   const empty = await app.handle(new Request("http://localhost/engines"));
-  expect(await empty.json()).toEqual({ engines: [], settings: { maxWorkers: 12, defaultEngine: null, harnesses: { pi: true, claude: true } } });
+  expect(await empty.json()).toEqual({
+    engines: [],
+    settings: { maxWorkers: 12, defaultEngine: null, harnesses: { pi: true, claude: true }, disabledModels: [] },
+  });
 
   const put = await app.handle(
     new Request("http://localhost/engines/glm", { method: "PUT", ...putBody({ name: "GLM", harness: "pi", provider: "zai", model: "glm-5.3", thinking: "max", seats: 3 }) }),
@@ -1967,5 +1970,33 @@ test("PUT /harnesses/:id/enabled flips the master switch without touching engine
   const unknown = await app.handle(new Request("http://localhost/harnesses/codex/enabled", { method: "PUT", ...json, body: JSON.stringify({ enabled: true }) }));
   expect(unknown.status).toBe(404);
   const bad = await app.handle(new Request("http://localhost/harnesses/claude/enabled", { method: "PUT", ...json, body: JSON.stringify({ enabled: "yes" }) }));
+  expect(bad.status).toBe(422);
+});
+
+test("PUT /models/disabled hides the model from /chat-models; list rides /engines settings; 422 on bad body", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+
+  const off = await app.handle(
+    new Request("http://localhost/models/disabled", { method: "PUT", ...json, body: JSON.stringify({ provider: "zai", id: "glm-5.3", disabled: true }) }),
+  );
+  expect(await off.json()).toEqual({ disabledModels: ["zai:glm-5.3"] });
+
+  const settings = (await (await app.handle(new Request("http://localhost/engines"))).json()) as {
+    settings: { disabledModels: string[] };
+  };
+  expect(settings.settings.disabledModels).toEqual(["zai:glm-5.3"]);
+
+  const chat = (await (await app.handle(new Request("http://localhost/chat-models"))).json()) as {
+    models: Array<{ provider: string; id: string }>;
+  };
+  expect(chat.models.some((m) => m.provider === "zai" && m.id === "glm-5.3")).toBe(false);
+
+  const backOn = await app.handle(
+    new Request("http://localhost/models/disabled", { method: "PUT", ...json, body: JSON.stringify({ provider: "zai", id: "glm-5.3", disabled: false }) }),
+  );
+  expect(await backOn.json()).toEqual({ disabledModels: [] });
+
+  const bad = await app.handle(new Request("http://localhost/models/disabled", { method: "PUT", ...json, body: JSON.stringify({ provider: "zai" }) }));
   expect(bad.status).toBe(422);
 });

@@ -3874,6 +3874,31 @@ export class KanbanDb {
     return this.maxWorkers();
   }
 
+  /** Models hidden from pickers (Providers panel toggles): `provider:id` keys, JSON array on board_state. */
+  disabledModels(): string[] {
+    const row = this.q("SELECT value FROM board_state WHERE key = 'disabled_models'").get() as
+      | { value: string }
+      | undefined;
+    if (!row) return [];
+    try {
+      const list = JSON.parse(row.value) as unknown;
+      return Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  setModelDisabled(key: string, disabled: boolean): string[] {
+    const next = new Set(this.disabledModels());
+    if (disabled) next.add(key);
+    else next.delete(key);
+    const list = [...next].sort();
+    this.q(
+      "INSERT INTO board_state (key, value) VALUES ('disabled_models', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(JSON.stringify(list));
+    return list;
+  }
+
   /** Harness master switch (Providers rail): an engine spawns only when its harness is enabled too. Absent row = enabled. */
   harnessEnabled(id: string): boolean {
     const row = this.q("SELECT value FROM board_state WHERE key = ?").get(`harness_off:${id}`) as
