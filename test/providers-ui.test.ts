@@ -82,6 +82,21 @@ describe("deriveHarnesses", () => {
     expect(views[1].engines).toEqual(["claude sonnet"]);
   });
 
+  it("the master switch rides the probe and defaults to on; engines keep their own flags", () => {
+    const engines = [engine("default", "pi"), engine("claude sonnet", "claude")];
+    const views = deriveHarnesses(
+      PROBES.map((p) => ({ ...p, ...(p.id === "claude" ? { enabled: false } : {}) })),
+      PI,
+      CHAT,
+      engines,
+      [],
+      NOW,
+    );
+    expect(views[0].enabled).toBe(true);
+    expect(views[1].enabled).toBe(false);
+    expect(views[1].allEngines[0].enabled).toBe(true); // engine rows untouched by the switch
+  });
+
   it("allEngines keeps disabled ones out of the chips but in the toggle's reach", () => {
     const engines = [engine("default", "pi"), engine("zai main", "pi", "zai"), engine("claude sonnet", "claude")];
     engines[1] = { ...engines[1], enabled: false };

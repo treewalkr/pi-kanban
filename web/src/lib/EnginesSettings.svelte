@@ -32,6 +32,11 @@
     return [...users];
   }
 
+  /** The Providers rail's master switch; engines spawn only when their harness is on. */
+  function harnessOn(harness: "pi" | "claude"): boolean {
+    return engines.settings.harnesses?.[harness] !== false;
+  }
+
   function setHarness(e: EngineDraft, harness: "pi" | "claude"): void {
     if (e.harness === harness) return;
     e.harness = harness;
@@ -142,10 +147,26 @@
           <div class="engine-field">
             <span class="engine-field-label" id={`engine-${e.id}-harness`}>harness</span>
             <div class="seg" role="group" aria-labelledby={`engine-${e.id}-harness`}>
-              <button type="button" class="seg-option" class:on={e.harness === "pi"} aria-pressed={e.harness === "pi"} onclick={() => setHarness(e, "pi")}>
+              <button
+                type="button"
+                class="seg-option"
+                class:on={e.harness === "pi"}
+                aria-pressed={e.harness === "pi"}
+                disabled={e.harness !== "pi" && !harnessOn("pi")}
+                title={e.harness !== "pi" && !harnessOn("pi") ? "pi is off — enable it in Providers" : undefined}
+                onclick={() => setHarness(e, "pi")}
+              >
                 <span class="seg-label">pi</span>
               </button>
-              <button type="button" class="seg-option" class:on={e.harness === "claude"} aria-pressed={e.harness === "claude"} onclick={() => setHarness(e, "claude")}>
+              <button
+                type="button"
+                class="seg-option"
+                class:on={e.harness === "claude"}
+                aria-pressed={e.harness === "claude"}
+                disabled={e.harness !== "claude" && !harnessOn("claude")}
+                title={e.harness !== "claude" && !harnessOn("claude") ? "Claude Code is off — enable it in Providers" : undefined}
+                onclick={() => setHarness(e, "claude")}
+              >
                 <span class="seg-label">claude code</span>
               </button>
             </div>
@@ -253,6 +274,7 @@
           <span class="chip mono" title={engineSummary(e)}>{engineSummary(e)}</span>
           {#if engines.settings.defaultEngine === e.id}<span class="chip">board default</span>{/if}
           {#if !e.enabled}<span class="chip">disabled</span>{/if}
+          {#if !harnessOn(e.harness)}<span class="chip">harness off</span>{/if}
           <span class="engine-users">{users.length > 0 ? `runs ${users.join(", ")}` : "in no lineup yet"}</span>
           <span class="spacer"></span>
           <button type="button" class="ghost danger" onclick={() => requestDelete(e)}>{draft ? "discard" : "delete"}</button>
@@ -439,5 +461,9 @@
     .engine-fields .engine-seats {
       flex: 0 0 96px;
     }
+  }
+  .seg-option:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
   }
 </style>

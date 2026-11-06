@@ -84,7 +84,10 @@ class EnginesStore {
   engines = $state<EngineDraft[]>([]);
   models = $state<CatalogModel[]>([]);
   claudeModels = $state<ClaudeModel[]>([]);
-  settings = $state<{ maxWorkers: number; defaultEngine: string | null }>({ maxWorkers: 12, defaultEngine: null });
+  settings = $state<{ maxWorkers: number; defaultEngine: string | null; harnesses?: Record<string, boolean> }>({
+    maxWorkers: 12,
+    defaultEngine: null,
+  });
   private saved = $state<EngineDraft[]>([]);
   private savedSettings = $state<{ maxWorkers: number; defaultEngine: string | null }>({ maxWorkers: 12, defaultEngine: null });
   /** Ids created locally and not yet PUT. */

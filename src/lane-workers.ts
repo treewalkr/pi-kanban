@@ -14,7 +14,7 @@
 import { DEFAULT_STALL_MS, deathReason, skillActivationPrompt, spawnPi, type SpawnPiInput, type SpawnResult } from "./autoreview";
 import { chatSkillPath } from "./skill-activation";
 import type { AgentConfig, Engine, KanbanDb, LaneWorkerRun, LaneSnapshot } from "./db";
-import { builtinDefaultEngine, resolveLineup } from "./engines";
+import { builtinDefaultEngine, engineRunnable, resolveLineup } from "./engines";
 import { registerShutdown } from "./shutdown";
 
 export const WORKER_AUTHOR_PREFIX = "pi-worker-";
@@ -147,12 +147,13 @@ export function formatSnapshot(snap: LaneSnapshot): string {
 }
 
 /**
- * The engine a worker run spawns on: the first enabled pi engine in the
- * worker's lineup (lane workers run pi only — a claude engine is skipped),
- * else pi's own default.
+ * The engine a worker run spawns on: the first runnable pi engine in the
+ * worker's lineup (lane workers run pi only — a claude engine is skipped).
+ * Null when the pi harness switch is off — the run fails with a pointer to Providers.
  */
-export function workerEngine(db: KanbanDb): Engine {
-  return resolveLineup(db, "worker").engines.find((e) => e.enabled && e.harness === "pi") ?? builtinDefaultEngine();
+export function workerEngine(db: KanbanDb): Engine | null {
+  const pi = resolveLineup(db, "worker").engines.find((e) => e.harness === "pi" && engineRunnable(db, e));
+  return pi ?? (db.harnessEnabled("pi") ? builtinDefaultEngine() : null);
 }
 
 /**
@@ -267,6 +268,16 @@ export function startWorkerRunner(opts: {
     const lines: string[] = [];
     let result: SpawnResult;
     const cfg = db.agentConfig("worker");
+    const engine = workerEngine(db);
+    if (!engine) {
+      db.finishLaneWorker(
+        run.id,
+        { status: "failed", exitInfo: "pi harness disabled — flip it back on in Settings → Providers", log: "" },
+        Date.now(),
+      );
+      log(`${run.laneId} run ${run.id}: pi harness off, nothing to run on`);
+      return;
+    }
     try {
       result = await spawn({
         cwd: opts.cwd,
@@ -276,7 +287,7 @@ export function startWorkerRunner(opts: {
           snapshot: formatSnapshot(db.laneSnapshot(run.laneId)),
           ...(run.focus ? { focus: run.focus } : {}),
         }),
-        args: workerArgs(cfg, workerEngine(db)),
+        args: workerArgs(cfg, engine),
         timeoutMs: timeoutFor(cfg),
         stallMs,
         log: (message) => log(`${run.laneId} run ${run.id}: ${message}`),

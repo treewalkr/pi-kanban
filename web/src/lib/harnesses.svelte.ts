@@ -44,6 +44,8 @@ export interface HarnessView {
   engines: string[];
   /** Every engine on this harness, enabled or not — the toggle flips them all. */
   allEngines: { name: string; enabled: boolean }[];
+  /** Master switch from board_state — gates spawning for every engine on the harness. */
+  enabled: boolean;
   /** Live cooldowns on this harness's accounts (`<harness>:<account>`). */
   cooling: Array<{ account: string; until: number; cause?: string }>;
   /** pi only: the LLM vendors its engines may run on, nested per backend. */
@@ -74,6 +76,8 @@ export interface HarnessProbeRef {
   status: "ready" | "missing";
   detail: string;
   models: HarnessModel[];
+  /** Master switch from board_state (absent = on). */
+  enabled?: boolean;
 }
 
 /** t3code's FILTER_THRESHOLD: a catalog longer than this gets the filter box. */
@@ -166,6 +170,7 @@ export function deriveHarnesses(
       version: versionLabel(probe.detail),
       engines: own.map((e) => e.name),
       allEngines: all.map((e) => ({ name: e.name, enabled: e.enabled })),
+      enabled: probe.enabled !== false,
       cooling,
       backends: probe.id === "pi" ? deriveProviders(piModels, chatModels, engines, activity, now) : [],
       models: probe.models,
@@ -236,7 +241,7 @@ class HarnessStore {
   checkedAt = $state<number | null>(null);
   selected = $state<string | null>(null);
   filter = $state("");
-  /** Harness id with a bulk toggle in flight (switch shows it, double-clickes are ignored). */
+  /** Harness id with a switch write in flight (the rail shows it, double-clicks are ignored). */
   toggling = $state<string | null>(null);
   /** Harness id whose last toggle failed, cleared by the next success or refresh. */
   toggleFailed = $state<string | null>(null);
@@ -297,50 +302,24 @@ class HarnessStore {
     this.filter = ""; // another harness's filter must not hide this catalog
   }
 
-  /** True when every engine on the harness is enabled — the switch's ON state. */
-  allEnabled(id: string): boolean {
-    const h = this.list.find((x) => x.id === id);
-    return !!h && h.allEngines.length > 0 && h.allEngines.every((e) => e.enabled);
-  }
-
-  /**
-   * Enable/disable every engine on a harness — the same power the Engines tab
-   * grants one engine at a time, reached from the harness row. The PUT is a full
-   * replace, so each engine travels with its whole shape and only `enabled` flips.
-   */
   /** Truth changed elsewhere; the next tab visit refetches instead of trusting this cache. */
   invalidate(): void {
     this.loaded = false;
   }
 
+  /**
+   * The harness master switch — one board_state flag, not a bulk engine flip:
+   * engine rows keep their own `enabled` untouched and re-appear exactly as
+   * they were when the harness comes back on.
+   */
   async toggle(id: string, enabled: boolean): Promise<void> {
     if (this.toggling !== null) return;
-    const fresh = await api.engines.get();
-    if (fresh.error) {
-      this.toggleFailed = id;
-      return;
-    }
-    const targets = fresh.data.engines.filter((e) => e.harness === id);
-    if (targets.length === 0) return; // nothing to flip — the switch renders disabled
     this.toggling = id;
     try {
-      let ok = true;
-      for (const e of targets) {
-        const { error } = await api.engines({ id: e.id }).put({
-          name: e.name,
-          harness: e.harness,
-          ...(e.harness === "pi" && e.provider ? { provider: e.provider } : {}),
-          ...(e.model ? { model: e.model } : {}),
-          ...(e.thinking ? { thinking: e.thinking } : {}),
-          flags: e.flags,
-          seats: e.seats,
-          enabled,
-        });
-        if (error) ok = false;
-      }
-      this.toggleFailed = ok ? null : id;
+      const { error } = await api.harnesses({ id }).enabled.put({ enabled });
+      this.toggleFailed = error ? id : null;
       await this.refresh();
-      engines.invalidate(); // the Engines tab's enabled toggles read the rows we just wrote
+      if (!error) engines.invalidate(); // the Engines tab gates its harness selector on the flag
     } finally {
       this.toggling = null;
     }

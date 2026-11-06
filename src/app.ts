@@ -4,7 +4,7 @@ import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneContext, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type Engine, type ProjectRoute } from "./db";
 import { CLAUDE_MODELS, type ClaudeModel } from "./claude";
-import { listHarnesses, type HarnessProbe } from "./harnesses";
+import { listHarnesses, PI_HARNESS, type HarnessProbe } from "./harnesses";
 import { explain, formatExplanation, type Explanation } from "./engines";import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSession, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
@@ -1138,11 +1138,28 @@ export const createApp = (
     )
     .get("/claude-models", (): { models: ClaudeModel[] } => ({ models: CLAUDE_MODELS }))
     .get("/harnesses", async (): Promise<{ harnesses: HarnessProbe[] }> => ({
-      harnesses: await listHarnesses(),
+      harnesses: (await listHarnesses()).map((h) => ({ ...h, enabled: db.harnessEnabled(h.id) })),
     }))
-    .get("/engines", (): { engines: Engine[]; settings: { maxWorkers: number; defaultEngine: string | null } } => ({
+    .put(
+      "/harnesses/:id/enabled",
+      ({ params, body, set }): { enabled: boolean } => {
+        const known = new Set([PI_HARNESS.id, "claude"]);
+        if (!known.has(params.id)) {
+          set.status = 404;
+          throw new Error(`unknown harness '${params.id}'`);
+        }
+        db.setHarnessEnabled(params.id, body.enabled);
+        return { enabled: db.harnessEnabled(params.id) };
+      },
+      { body: t.Object({ enabled: t.Boolean() }) },
+    )
+    .get("/engines", (): { engines: Engine[]; settings: { maxWorkers: number; defaultEngine: string | null; harnesses: Record<string, boolean> } } => ({
       engines: db.engines(),
-      settings: { maxWorkers: db.maxWorkers(), defaultEngine: db.defaultEngineId() },
+      settings: {
+        maxWorkers: db.maxWorkers(),
+        defaultEngine: db.defaultEngineId(),
+        harnesses: { pi: db.harnessEnabled("pi"), claude: db.harnessEnabled("claude") },
+      },
     }))
     .put(
       "/engines/settings",

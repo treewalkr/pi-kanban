@@ -712,7 +712,7 @@ test("GET/PUT/DELETE /engines roundtrip; order; settings; schema 422, semantic 4
   const putBody = (body: unknown) => ({ ...json, body: JSON.stringify(body) });
 
   const empty = await app.handle(new Request("http://localhost/engines"));
-  expect(await empty.json()).toEqual({ engines: [], settings: { maxWorkers: 12, defaultEngine: null } });
+  expect(await empty.json()).toEqual({ engines: [], settings: { maxWorkers: 12, defaultEngine: null, harnesses: { pi: true, claude: true } } });
 
   const put = await app.handle(
     new Request("http://localhost/engines/glm", { method: "PUT", ...putBody({ name: "GLM", harness: "pi", provider: "zai", model: "glm-5.3", thinking: "max", seats: 3 }) }),
@@ -1936,4 +1936,36 @@ test("GET /board lists registered projects that carry no cards", async () => {
   expect(updatedRes.status).toBe(200);
   const updated = (await updatedRes.json()) as any;
   expect(updated.projectNames).toEqual(["kanban-add", "tag-only"]);
+});
+
+test("PUT /harnesses/:id/enabled flips the master switch without touching engine rows; 404 unknown", async () => {
+  const app = createApp(db);
+  const json = { headers: { "content-type": "application/json" } };
+
+  await app.handle(
+    new Request("http://localhost/engines/sonnet", { method: "PUT", ...json, body: JSON.stringify({ name: "Sonnet", harness: "claude", model: "sonnet" }) }),
+  );
+
+  const off = await app.handle(new Request("http://localhost/harnesses/claude/enabled", { method: "PUT", ...json, body: JSON.stringify({ enabled: false }) }));
+  expect(await off.json()).toEqual({ enabled: false });
+
+  // the flag rides both reads: /engines settings and the engine rows stay untouched
+  const engines = (await (await app.handle(new Request("http://localhost/engines"))).json()) as {
+    engines: Array<{ enabled: boolean }>;
+    settings: { harnesses: Record<string, boolean> };
+  };
+  expect(engines.settings.harnesses).toEqual({ pi: true, claude: false });
+  expect(engines.engines[0].enabled).toBe(true);
+
+  const dbFlag = db.harnessEnabled("claude");
+  expect(dbFlag).toBe(false);
+
+  const backOn = await app.handle(new Request("http://localhost/harnesses/claude/enabled", { method: "PUT", ...json, body: JSON.stringify({ enabled: true }) }));
+  expect(await backOn.json()).toEqual({ enabled: true });
+  expect(db.harnessEnabled("claude")).toBe(true);
+
+  const unknown = await app.handle(new Request("http://localhost/harnesses/codex/enabled", { method: "PUT", ...json, body: JSON.stringify({ enabled: true }) }));
+  expect(unknown.status).toBe(404);
+  const bad = await app.handle(new Request("http://localhost/harnesses/claude/enabled", { method: "PUT", ...json, body: JSON.stringify({ enabled: "yes" }) }));
+  expect(bad.status).toBe(422);
 });

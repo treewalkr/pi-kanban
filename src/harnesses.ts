@@ -18,6 +18,8 @@ export interface HarnessProbe {
   detail: string;
   /** Model aliases the engine editor may reference (`claude` resolves them at spawn). */
   models: { id: string; label: string; note: string }[];
+  /** Master switch (app.ts merges it from board_state); the probe itself has no db access. */
+  enabled?: boolean;
 }
 
 /** The board's own runtime: agent children spawn as pi sessions by definition. */

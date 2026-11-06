@@ -177,14 +177,18 @@ describe("workerArgs and env knobs", () => {
     expect(args.at(-1)).toBe("--no-mcp");
   });
 
-  test("workerEngine: the worker lineup's first enabled pi engine, else pi default", () => {
+  test("workerEngine: the worker lineup's first enabled pi engine, else pi default; null when the pi harness is off", () => {
     const db = new KanbanDb(join(mkdtempSync(join(tmpdir(), "kanban-worker-eng-")), "t.db"));
-    expect(workerEngine(db).id).toBe("default");
+    expect(workerEngine(db)?.id).toBe("default");
     db.setEngine("sonnet", { name: "Sonnet", harness: "claude", model: "sonnet" });
     db.setEngine("off", { name: "Off", harness: "pi", model: "x", enabled: false });
     db.setEngine("flash", { name: "Flash", harness: "pi", provider: "zai", model: "glm-5.3-flash" });
     db.setAgentConfig("worker", { runsOn: ["sonnet", "off", "flash"] });
-    expect(workerEngine(db).id).toBe("flash");
+    expect(workerEngine(db)?.id).toBe("flash");
+    db.setHarnessEnabled("pi", false);
+    expect(workerEngine(db)).toBeNull();
+    db.setHarnessEnabled("pi", true);
+    expect(workerEngine(db)?.id).toBe("flash");
     db.close();
   });
 
