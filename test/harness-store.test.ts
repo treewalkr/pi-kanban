@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { join } from "node:path";
 
 /**
@@ -86,7 +86,18 @@ const api = {
   activity: { get: ok({ engines: [] }) },
 };
 
-mock.module(join(import.meta.dir, "../web/src/api"), () => ({ api }));
+// bun's mock.module is process-wide and outlives this file: the stubs answer
+// only while this file runs, then every key falls through to the real treaty
+// client so later suites (boardview's fetch-stubbed api) still work
+let stubbing = true;
+afterAll(() => {
+  stubbing = false;
+});
+const real = await import("../web/src/api");
+const passthrough = new Proxy(real.api as object, {
+  get: (target, key) => (stubbing && key in api ? (api as Record<PropertyKey, unknown>)[key] : Reflect.get(target, key)),
+});
+mock.module(join(import.meta.dir, "../web/src/api"), () => ({ ...real, api: passthrough }));
 
 const { HarnessStore } = await import("../web/src/lib/harnesses.svelte");
 
