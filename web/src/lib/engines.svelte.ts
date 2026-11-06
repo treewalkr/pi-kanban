@@ -1,4 +1,5 @@
 import { api } from "../api";
+import { harnesses } from "./harnesses.svelte";
 import type { Engine } from "../../../src/db";
 import type { CatalogModel } from "../../../src/models";
 import type { ClaudeModel } from "../../../src/claude";
@@ -196,11 +197,13 @@ class EnginesStore {
     if (idx !== -1) this.engines[idx] = saved;
     this.drafts.delete(e.id);
     this.settle(saved);
+    harnesses.invalidate(); // engine chips and toggles in Providers read this row
     return true;
   }
 
   async remove(id: string): Promise<boolean> {
-    if (!this.drafts.has(id)) {
+    const wasDraft = this.drafts.has(id);
+    if (!wasDraft) {
       const { error } = await api.engines({ id }).delete();
       if (error) {
         const e = this.engines.find((x) => x.id === id);
@@ -215,7 +218,13 @@ class EnginesStore {
     this.saved = this.saved.filter((e) => e.id !== id);
     if (this.settings.defaultEngine === id) this.settings.defaultEngine = null;
     if (this.savedSettings.defaultEngine === id) this.savedSettings = { ...this.savedSettings, defaultEngine: null };
+    if (!wasDraft) harnesses.invalidate(); // a real row vanished from Providers
     return true;
+  }
+
+  /** Truth changed elsewhere; the next tab visit refetches instead of trusting this cache. */
+  invalidate(): void {
+    this.loaded = false;
   }
 
   async saveSettings(): Promise<boolean> {

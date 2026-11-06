@@ -1,4 +1,5 @@
 import { api } from "../api";
+import { engines } from "./engines.svelte";
 import type { CatalogModel } from "../../../src/models";
 
 /**
@@ -307,6 +308,11 @@ class HarnessStore {
    * grants one engine at a time, reached from the harness row. The PUT is a full
    * replace, so each engine travels with its whole shape and only `enabled` flips.
    */
+  /** Truth changed elsewhere; the next tab visit refetches instead of trusting this cache. */
+  invalidate(): void {
+    this.loaded = false;
+  }
+
   async toggle(id: string, enabled: boolean): Promise<void> {
     if (this.toggling !== null) return;
     const fresh = await api.engines.get();
@@ -334,6 +340,7 @@ class HarnessStore {
       }
       this.toggleFailed = ok ? null : id;
       await this.refresh();
+      engines.invalidate(); // the Engines tab's enabled toggles read the rows we just wrote
     } finally {
       this.toggling = null;
     }
