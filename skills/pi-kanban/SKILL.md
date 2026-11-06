@@ -95,7 +95,10 @@ a passing card then parks in **Waiting on you** at the gate. **The human owns th
 
 - **Planning**: don't hand-write plans for Plan-lane cards in auto mode — the planner does it,
   using the shared template (`plan-template.md` next to this skill): every section filled or
-  `N/A — reason`, every acceptance criterion mapped to concrete tests at named seams. A card whose note doesn't state user-perspective behavior isn't
+  `N/A — reason`, every acceptance criterion mapped to concrete tests at named seams. Plans are
+  written for a literal executor, so a frontier planner can hand off to a smaller, faster builder:
+  a Step 0 baseline, then Files / Do / Check / Commit per step with paste-ready code and an
+  expected Check result, all verified by running. A card whose note doesn't state user-perspective behavior isn't
   planner-ready — the planner asks instead of planning, and grounding starts
   with a redundancy check against existing code (see **Backlog readiness**
   under Conventions). If an answer would
