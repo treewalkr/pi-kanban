@@ -151,11 +151,17 @@ const gateRun = async (cwd: string, timeoutMs: number, command?: string): Promis
   // tests (cli.ts subprocesses, repro server boots) legitimately exceed bun's 5s default
   // under full-suite parallel load and park cards on flakes (30s keeps genuinely red
   // tests failing fast while tolerating load)
-  const proc = Bun.spawn({ cmd: command ? ["sh", "-c", command] : ["bun", "test", "--timeout", "30000"], cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn({ cmd: command ? ["sh", "-c", command] : ["bun", "test", "--timeout", "30000"], cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
-    proc.kill();
+    // kill the whole process group: dash (Linux sh) forks rather than execs, so
+    // killing only sh leaves its child holding the output pipes open
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch {
+      proc.kill();
+    }
   }, timeoutMs);
   timer.unref?.();
   const [code, out, err] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
