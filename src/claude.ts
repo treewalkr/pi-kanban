@@ -33,12 +33,17 @@ export const CLAUDE_DEFAULT_MODEL = "sonnet";
  * tool is a denial and never hangs a headless spawn. Reading roles get
  * read-only git prefixes (`Bash(git:*)` would allow `git push`); everything
  * else builds, so it edits and runs commands — the same reach pi has.
+ * Readers still revise the artifacts they write ({tmpFile} plans, reviews) —
+ * the charters' self-check step — so Edit/MultiEdit ride with Write, which
+ * already overwrites anything in the working dirs; shell writes stay denied.
  */
 export const CLAUDE_READ_TOOLS = [
   "Read",
   "Glob",
   "Grep",
   "Write",
+  "Edit",
+  "MultiEdit",
   "Bash(kanban:*)",
   "Bash(rg:*)",
   "Bash(git log:*)",
