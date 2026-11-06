@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { RefreshCw } from "@lucide/svelte";
+  import { Plus, RefreshCw } from "@lucide/svelte";
+  import AddProviderModal from "./AddProviderModal.svelte";
   import ClaudeLogo from "./ClaudeLogo.svelte";
   import PiLogo from "./PiLogo.svelte";
   import {
@@ -21,6 +22,7 @@
   });
 
   let view = $derived(harnesses.list.find((h) => h.id === harnesses.selected) ?? null);
+  let adding = $state(false);
   // the pi filter runs per backend; sections with no match hide entirely
   let backends = $derived(view?.id === "pi" ? view.backends : []);
   let totalModels = $derived(backends.reduce((n, b) => n + b.models.length, 0));
@@ -82,6 +84,10 @@
     <p class="provider-failed" role="status">harness probes unreachable — showing the last check</p>
   {/if}
 
+  {#if adding}
+    {@const piView = harnesses.list.find((h) => h.id === "pi") ?? null}
+    {#if piView}<AddProviderModal view={piView} onclose={() => (adding = false)} />{/if}
+  {/if}
   <div class="provider-split">
     <nav class="provider-rail" aria-label="harness providers">
       {#each harnesses.list as h (h.id)}
@@ -123,6 +129,15 @@
       {#if harnesses.list.length === 0}
         <p class="provider-empty">no harnesses registered</p>
       {/if}
+      <button
+        type="button"
+        class="provider-add"
+        aria-haspopup="dialog"
+        onclick={() => (adding = true)}
+      >
+        <Plus size={13} strokeWidth={2} aria-hidden="true" />
+        <span>Add provider</span>
+      </button>
     </nav>
 
     <div class="provider-detail">
@@ -341,6 +356,35 @@
 
   .provider-row:last-child {
     border-bottom: 0;
+  }
+
+  /* t3code's rail footer: a quiet full-width add row under the providers */
+  .provider-add {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 7px;
+    margin-top: auto;
+    padding: 11px 8px 11px 12px;
+    border: 0;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s;
+  }
+
+  .provider-add:hover,
+  .provider-add:focus-visible {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .provider-add:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .provider-row:hover {
