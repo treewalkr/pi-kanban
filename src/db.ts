@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { newId, slugify } from "./ids";
@@ -941,6 +942,64 @@ export function defaultLaneContext(laneId: string): LaneContext | null {
   }
 }
 
+/**
+ * sha256 of every seed text a release has since replaced (qjbbn): the seeded
+ * lane template and actor instructions as they shipped before their current
+ * wording. A lane still holding one of these was never edited, so it adopts the
+ * current default on open (adoptRetiredSeeds); edited text never matches and is
+ * left alone. When you change a seeded text, append the old text's hash here.
+ */
+export const RETIRED_SEED_HASHES: ReadonlySet<string> = new Set([
+  // qjbbn — before plans were written for a literal (flash) builder
+  "041c2f962d37425351419b8045236e097c0cebfc7b58c746d9c9e887d70e06a4", // plan template
+  "b57e46c8cfcf365fae67e13e929fe7a635f2b1e848e1b3687e70430bc59801d0", // planner
+  "409957a5c84a87afdaef5b982e0a71f2f4315fd35e58f948cec691707ca4f7cb", // plan-reviewer
+  "4e503c25ff0680f345eba81711b6a5a3d014e6ffae718f95598e7a8e7b970488", // builder (plan-build)
+]);
+
+export function seedHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/**
+ * A seeded lane's context with every retired seed text swapped for the current
+ * default (qjbbn): the template and each seeded actor's instructions /
+ * approvalInstructions, matched by actor id. Returns null when nothing changed,
+ * so callers write only on a real upgrade. Configs, triggers, exits, gates,
+ * caps and custom actors are never touched.
+ */
+export function adoptRetiredSeeds(
+  laneId: string,
+  ctx: LaneContext,
+  retired: ReadonlySet<string> = RETIRED_SEED_HASHES,
+): LaneContext | null {
+  const seed = defaultLaneContext(laneId);
+  if (!seed) return null;
+  const stale = (value: string | undefined, current: string | undefined): value is string =>
+    value !== undefined && current !== undefined && value !== current && retired.has(seedHash(value));
+  let changed = false;
+  const next: LaneContext = { ...ctx };
+  if (stale(ctx.template, seed.template)) {
+    next.template = seed.template;
+    changed = true;
+  }
+  next.actors = ctx.actors.map((actor) => {
+    const def = seed.actors.find((a) => a.id === actor.id);
+    if (!def) return actor;
+    const out: LaneActor = { ...actor };
+    if (stale(actor.instructions, def.instructions)) {
+      out.instructions = def.instructions;
+      changed = true;
+    }
+    if (stale(actor.approvalInstructions, def.approvalInstructions)) {
+      out.approvalInstructions = def.approvalInstructions;
+      changed = true;
+    }
+    return out;
+  });
+  return changed ? next : null;
+}
+
 /** Fixed first lane: HITL tickets parked for a human answer (never proposed by next). */
 export const WAITING_LANE_ID = "waiting" as const;
 
@@ -1341,6 +1400,7 @@ export class KanbanDb {
     this.migratePlansTable();
     this.migrateProjectsSeed();
     this.migrateLaneContexts();
+    this.adoptSeedUpdates();
     this.migrateEngines();
     this.backfillLaneEvents();
   }
@@ -1543,6 +1603,26 @@ export class KanbanDb {
       }
       this.q("INSERT OR REPLACE INTO board_state (key, value) VALUES ('lane_contexts_seeded', '1')").run();
     });
+  }
+
+  /**
+   * Every open (qjbbn): seeded lanes still holding a retired default text adopt
+   * the current one (adoptRetiredSeeds). Writes only when a lane actually
+   * upgrades, so reads stay write-free once the board is current.
+   */
+  private adoptSeedUpdates(): void {
+    for (const laneId of ["plan", "implement", "review"]) {
+      const row = this.q("SELECT context FROM lanes WHERE id = ?").get(laneId) as { context: string | null } | undefined;
+      if (!row?.context) continue;
+      let ctx: LaneContext;
+      try {
+        ctx = JSON.parse(row.context) as LaneContext;
+      } catch {
+        continue; // a malformed context is the lane editor's problem, not the opener's
+      }
+      const next = adoptRetiredSeeds(laneId, ctx);
+      if (next) this.q("UPDATE lanes SET context = ? WHERE id = ?").run(JSON.stringify(next), laneId);
+    }
   }
 
   /**

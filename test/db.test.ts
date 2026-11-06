@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { DEFAULT_LANES, PLAN_REVIEWER_AUTHOR, BUILDER_AUTHOR, KanbanDb, KanbanError, defaultLaneContext, type LaneContext } from "../src/db";
+import { DEFAULT_LANES, PLAN_REVIEWER_AUTHOR, BUILDER_AUTHOR, KanbanDb, KanbanError, RETIRED_SEED_HASHES, adoptRetiredSeeds, defaultLaneContext, seedHash, type LaneContext } from "../src/db";
 
 let dir = "";
 let db: KanbanDb;
@@ -2654,6 +2654,67 @@ test("migrates a pre-context board: adds lanes.context, seeds defaults folding a
   const before = dataVersion();
   const reader = new KanbanDb(file);
   expect(reader.laneContext("plan")).not.toBeNull();
+  reader.close();
+  expect(dataVersion()).toBe(before);
+});
+
+// ---------- unedited seeds adopt new defaults (qjbbn) ----------
+
+test("adoptRetiredSeeds swaps retired seed texts for the current defaults and keeps everything else", () => {
+  const seed = defaultLaneContext("plan")!;
+  const retired = new Set([seedHash("old planner"), seedHash("old template")]);
+  const stale: LaneContext = {
+    ...seed,
+    template: "old template",
+    actors: [
+      { ...seed.actors[0]!, instructions: "old planner", config: { runsOn: ["opus"] } },
+      { ...seed.actors[1]!, instructions: "my own reviewer words" },
+      { id: "designer", author: "pi-designer", instructions: "old planner" },
+    ],
+  };
+  const next = adoptRetiredSeeds("plan", stale, retired)!;
+  expect(next.template).toBe(seed.template);
+  expect(next.actors[0]!.instructions).toBe(seed.actors[0]!.instructions);
+  expect(next.actors[0]!.config).toEqual({ runsOn: ["opus"] });
+  expect(next.actors[1]!.instructions).toBe("my own reviewer words");
+  expect(next.actors[2]!.instructions).toBe("old planner"); // custom actor id: never seeded, never swapped
+  expect(next.exits).toEqual(seed.exits);
+
+  const builder = defaultLaneContext("implement")!;
+  const staleBuild: LaneContext = { ...builder, actors: [{ ...builder.actors[0]!, approvalInstructions: "old planner" }] };
+  expect(adoptRetiredSeeds("implement", staleBuild, retired)!.actors[0]!.approvalInstructions).toBe(
+    builder.actors[0]!.approvalInstructions,
+  );
+
+  expect(adoptRetiredSeeds("plan", seed, retired)).toBeNull(); // current defaults: no write
+  expect(adoptRetiredSeeds("plan", { ...seed, template: "edited" }, retired)).toBeNull();
+  expect(adoptRetiredSeeds("design", stale, retired)).toBeNull(); // unseeded lane
+});
+
+test("retired seed hashes never name a current default", () => {
+  const current = ["plan", "implement", "review"].flatMap((id) => {
+    const ctx = defaultLaneContext(id)!;
+    return [ctx.template, ...ctx.actors.flatMap((a) => [a.instructions, a.approvalInstructions])];
+  });
+  for (const text of current) if (text !== undefined) expect(RETIRED_SEED_HASHES.has(seedHash(text))).toBe(false);
+  for (const h of RETIRED_SEED_HASHES) expect(h).toMatch(/^[0-9a-f]{64}$/);
+});
+
+test("opening a current board leaves edited lane text alone and writes nothing", () => {
+  const file = join(dir, "seeds.db");
+  const w = new KanbanDb(file);
+  const plan = w.laneContext("plan")!;
+  w.setLaneContext("plan", { ...plan, actors: [{ ...plan.actors[0]!, instructions: "hand-tuned planner" }, plan.actors[1]!] });
+  w.close();
+  const dataVersion = () => {
+    const d = new Database(file);
+    const v = (d.query("PRAGMA data_version").get() as { data_version: number }).data_version;
+    d.close();
+    return v;
+  };
+  const before = dataVersion();
+  const reader = new KanbanDb(file);
+  expect(reader.laneContext("plan")!.actors[0]!.instructions).toBe("hand-tuned planner");
   reader.close();
   expect(dataVersion()).toBe(before);
 });
