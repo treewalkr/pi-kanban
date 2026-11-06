@@ -6,6 +6,7 @@ Local-first Kanban board: Elysia API + Svelte 5 SPA + `kanban` CLI over one SQLi
 
 - `src/` — Bun/TS: `db.ts` (SQLite + all queries), `app.ts` (Elysia app, exports `type App`), `index.ts` (server entry), `cli.ts` + `render.ts` (CLI)
 - `src/chat.ts` + `src/chat-events.ts` — resident chat sessions over the pi SDK (per-card + the board manager on pseudo-card `board`); `/chat/:cardId`, `/chat/:cardId/events` (SSE) in `app.ts`; panel in `web/src/lib/ChatPanel.svelte`, drawer in `web/src/lib/ManagerChat.svelte`
+- `src/claude-chat.ts` — Claude Code as a chat backend: picking a `claude-code` model swaps the card's handle to one `claude -p` per turn (stream-json → pi events) writing the same pi session file; the choice rides a `kanban-chat-backend` custom entry; `/chat-models` lists the group while the harness is on
 - `src/lane-workers.ts` — lane worker charters/prompts + the serve-process runner that drains `lane_workers` rows (`kanban worker run`); workers act only via CLI verbs, `pi-worker-<lane>` authors, gates human-only
 - `web/` — Vite + Svelte 5 SPA (board UI), calls the API via Eden Treaty
 - `skills/` — repo skills: `pi-kanban` (board workflow) + one procedural skill per recurring procedure (`e2e-verify`, `repro`, `overnight`, `resume-build`, `release`); `scripts/install.sh` symlinks each into `~/.pi/agent/skills/` and `~/.agents/skills/`

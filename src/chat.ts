@@ -11,6 +11,8 @@
  * mutates the board directly.
  */
 import { resolveLineup } from "./engines";
+import { CLAUDE_CHAT_PROVIDER, ClaudeChatHandle, freshClaudeBackend, isClaudeAlias, readBackend, writeBackend, type ClaudeBackend, type ClaudeRunner } from "./claude-chat";
+import { CLAUDE_DEFAULT_MODEL } from "./claude";
 // harness gating lands in the loop below via db.harnessEnabled
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, type AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { skillActivationPrompt } from "./autoreview";
@@ -45,7 +47,7 @@ export function resolveChatIdleTimeoutMs(env: string | undefined = process.env.K
   return DEFAULT_CHAT_IDLE_TIMEOUT_MS;
 }
 
-export type ChatShutdownReason = "idle" | "server" | "dispose";
+export type ChatShutdownReason = "idle" | "server" | "dispose" | "switch";
 export type ChatShutdownEvent = { type: "shutdown"; reason: ChatShutdownReason };
 /** What handle listeners see: SDK session events, plus our in-band shutdown. */
 export type SdkChatEvent = AgentSessionEvent | ChatShutdownEvent;
@@ -329,12 +331,14 @@ interface HandleOpts {
 const IDLE_TICK_MS = 250;
 
 class ChatHandleImpl implements ChatHandle {
+  readonly harness = "pi" as const;
   readonly cardId: string;
   readonly sessionId: string;
+  readonly cwd: string;
   private readonly session: AgentSession;
-  private readonly sessionManager: import("@earendil-works/pi-coding-agent").SessionManager;
-  private readonly appendSystemPrompt: string;
-  private readonly firstSeed: () => string;
+  readonly sessionManager: import("@earendil-works/pi-coding-agent").SessionManager;
+  readonly appendSystemPrompt: string;
+  readonly firstSeed: () => string;
   private readonly idleTimeoutMs: number;
   private readonly now: () => number;
   private readonly log: (message: string) => void;
@@ -347,6 +351,7 @@ class ChatHandleImpl implements ChatHandle {
   private disposed = false;
 
   constructor(opts: HandleOpts) {
+    this.cwd = opts.cwd;
     this.cardId = opts.cardId;
     this.sessionId = opts.sessionId;
     this.session = opts.session;
@@ -546,6 +551,18 @@ class ChatHandleImpl implements ChatHandle {
   }
 }
 
+type AnyHandle = ChatHandleImpl | ClaudeChatHandle;
+
+interface HandleSpec {
+  key: string;
+  label: string;
+  sessionId: string;
+  appendSystemPrompt: string;
+  firstSeed: () => string;
+  cwd: string;
+  sessionManager: import("@earendil-works/pi-coding-agent").SessionManager;
+}
+
 export class ChatManager {
   private readonly cwd: string;
   private readonly db: KanbanDb;
@@ -554,8 +571,9 @@ export class ChatManager {
   private readonly createSession: ChatSessionFactory;
   private readonly idleTimeoutMs: number;
   private readonly now: () => number;
-  private readonly handles = new Map<string, ChatHandleImpl>();
-  private readonly inflight = new Map<string, Promise<ChatHandleImpl>>();
+  private readonly handles = new Map<string, AnyHandle>();
+  private readonly inflight = new Map<string, Promise<AnyHandle>>();
+  private readonly claudeRunner: ClaudeRunner | undefined;
   private shutdownRegistered = false;
 
   constructor(opts: {
@@ -566,7 +584,9 @@ export class ChatManager {
     createSession?: ChatSessionFactory; // test seam; default builds the real SDK session
     idleTimeoutMs?: number; // default from KANBAN_CHAT_IDLE_TIMEOUT_MS; 0 disables
     now?: () => number; // test seam for idle expiry
+    claudeRunner?: ClaudeRunner; // test seam; default spawns the real claude CLI
   }) {
+    this.claudeRunner = opts.claudeRunner;
     this.cwd = opts.cwd;
     this.db = opts.db;
     this.sessionDir = opts.sessionDir;
@@ -609,52 +629,150 @@ export class ChatManager {
     return { project, cwd: this.db.projectCwd(project) ?? this.cwd };
   }
 
-  private async buildHandle(key: string, label: string, sessionId: string, appendSystemPrompt: string, firstSeed: () => string, cwd: string): Promise<ChatHandleImpl> {
+  private async buildHandle(key: string, label: string, sessionId: string, appendSystemPrompt: string, firstSeed: () => string, cwd: string): Promise<AnyHandle> {
     const existingPath = SessionManager.findById(cwd, sessionId, this.sessionDir);
     const sessionManager = existingPath
       ? SessionManager.open(existingPath, this.sessionDir, cwd)
       : SessionManager.create(cwd, this.sessionDir, { id: sessionId });
     this.log(`${label} ${existingPath ? "resumed" : "created"}`);
+    const spec: HandleSpec = { key, label, sessionId, appendSystemPrompt, firstSeed, cwd, sessionManager };
+    const backend = readBackend(sessionManager);
+    // a chat parked on claude resumes there while the harness stays switched on
+    if (backend?.harness === "claude" && this.db.harnessEnabled("claude")) return this.claudeHandle(spec, backend);
     const session = await this.createSession({ cwd, sessionManager, appendSystemPrompt });
-    if (!existingPath) await this.seedEngine(label, session);
+    if (!existingPath) {
+      const claude = await this.seedEngine(label, session);
+      if (claude) {
+        try {
+          session.dispose();
+        } catch {
+          /* never prompted — nothing to release */
+        }
+        writeBackend(sessionManager, claude);
+        return this.claudeHandle(spec, claude);
+      }
+    }
+    return this.piHandle(spec, session);
+  }
+
+  private piHandle(spec: HandleSpec, session: AgentSession): ChatHandleImpl {
     return new ChatHandleImpl({
-      cwd,
-      cardId: label, // the log/display label; live-map identity is `key` (cwd for board handles)
-      sessionId,
+      cwd: spec.cwd,
+      cardId: spec.label, // the log/display label; live-map identity is `key` (cwd for board handles)
+      sessionId: spec.sessionId,
       session,
-      sessionManager,
-      appendSystemPrompt,
-      firstSeed,
+      sessionManager: spec.sessionManager,
+      appendSystemPrompt: spec.appendSystemPrompt,
+      firstSeed: spec.firstSeed,
       idleTimeoutMs: this.idleTimeoutMs,
       now: this.now,
       log: this.log,
       onDisposed: (handle) => {
-        if (this.handles.get(key) === handle) this.handles.delete(key);
+        if (this.handles.get(spec.key) === handle) this.handles.delete(spec.key);
+      },
+    });
+  }
+
+  private claudeHandle(spec: HandleSpec, backend: ClaudeBackend): ClaudeChatHandle {
+    return new ClaudeChatHandle({
+      cwd: spec.cwd,
+      cardId: spec.label,
+      sessionId: spec.sessionId,
+      sessionManager: spec.sessionManager,
+      appendSystemPrompt: spec.appendSystemPrompt,
+      firstSeed: spec.firstSeed,
+      backend,
+      idleTimeoutMs: this.idleTimeoutMs,
+      now: this.now,
+      log: this.log,
+      runner: this.claudeRunner,
+      onDisposed: (handle) => {
+        if (this.handles.get(spec.key) === handle) this.handles.delete(spec.key);
       },
     });
   }
 
   /**
    * A new chat (board manager or card) starts on the first engine in the
-   * manager's lineup the chat runtime can resolve: pi engines only, and only
-   * providers the in-process runtime has auth for (no extension providers).
-   * A resumed session keeps its saved model; the chips still switch live.
+   * manager's lineup the chat can run: a claude engine (harness switched on)
+   * answers with the backend to start on; a pi engine needs a provider the
+   * in-process runtime has auth for (no extension providers) and is applied to
+   * the session directly. A resumed session keeps its saved model; the chips
+   * still switch live.
    */
-  private async seedEngine(cardId: string, session: AgentSession): Promise<void> {
+  private async seedEngine(cardId: string, session: AgentSession): Promise<ClaudeBackend | null> {
     const lineup = resolveLineup(this.db, "manager").engines;
     for (const engine of lineup) {
-      if (!engine.enabled || !this.db.harnessEnabled(engine.harness) || engine.harness !== "pi" || !engine.provider || !engine.model) continue;
+      if (!engine.enabled || !this.db.harnessEnabled(engine.harness)) continue;
+      if (engine.harness === "claude") {
+        const model = engine.model?.trim() || CLAUDE_DEFAULT_MODEL;
+        if (!isClaudeAlias(model)) continue;
+        this.log(`${cardId} seeded on engine ${engine.name}`);
+        return freshClaudeBackend(model, engine.thinking ?? undefined);
+      }
+      if (engine.harness !== "pi" || !engine.provider || !engine.model) continue;
       try {
         const model = session.modelRuntime?.getModel(engine.provider, engine.model);
         if (!model) continue;
         await session.setModel(model);
         if (engine.thinking) session.setThinkingLevel(engine.thinking as never);
         this.log(`${cardId} seeded on engine ${engine.name}`);
-        return;
+        return null;
       } catch {
         /* no auth for this provider — try the next engine */
       }
     }
+    return null;
+  }
+
+  /**
+   * The model chip. Within a harness the live handle switches in place; across
+   * harnesses (pi ⇄ claude-code) the handle is swapped over the same session
+   * file — the old one shuts down (its SSE streams close, clients re-snapshot)
+   * and the new one picks up the transcript, which both backends write.
+   */
+  async setModel(cardId: string, provider: string, modelId: string): Promise<ChatState> {
+    const handle = (await this.get(cardId)) as AnyHandle;
+    const toClaude = provider === CLAUDE_CHAT_PROVIDER;
+    if (toClaude === (handle.harness === "claude")) return (await handle.send({ type: "setModel", provider, modelId })) as ChatState;
+    if (toClaude) {
+      if (!this.db.harnessEnabled("claude")) throw new KanbanError("the Claude Code harness is switched off in Providers", "conflict");
+      if (!isClaudeAlias(modelId)) throw new KanbanError(`unknown model '${provider}/${modelId}'`, "conflict");
+    }
+    if (handle.state().isStreaming) throw new KanbanError("chat is streaming — wait for the run to finish before switching harness", "conflict");
+    const key = [...this.handles.entries()].find(([, h]) => h === handle)?.[0];
+    if (key === undefined) throw new KanbanError(`chat session for '${cardId}' is not running`, "conflict");
+    const spec: HandleSpec = {
+      key,
+      label: handle.cardId,
+      sessionId: handle.sessionId,
+      appendSystemPrompt: handle.appendSystemPrompt,
+      firstSeed: handle.firstSeed,
+      cwd: handle.cwd,
+      sessionManager: handle.sessionManager,
+    };
+    const swap = (async (): Promise<AnyHandle> => {
+      await handle.dispose("switch");
+      if (toClaude) {
+        const backend = freshClaudeBackend(modelId);
+        writeBackend(spec.sessionManager, backend);
+        this.log(`${spec.label} switched to claude-code/${modelId}`);
+        return this.claudeHandle(spec, backend);
+      }
+      writeBackend(spec.sessionManager, { harness: "pi" });
+      const session = await this.createSession({ cwd: spec.cwd, sessionManager: spec.sessionManager, appendSystemPrompt: spec.appendSystemPrompt });
+      this.log(`${spec.label} switched to pi`);
+      return this.piHandle(spec, session);
+    })();
+    this.inflight.set(key, swap);
+    let next: AnyHandle;
+    try {
+      next = await swap;
+      this.handles.set(key, next);
+    } finally {
+      this.inflight.delete(key);
+    }
+    return (await next.send({ type: "setModel", provider, modelId })) as ChatState;
   }
 
   /** Resolve task → get-or-create one alive handle per card (concurrent gets share one creation). Board handles memoize by resolved cwd. */

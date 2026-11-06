@@ -8,7 +8,8 @@ import { listHarnesses, PI_HARNESS, type HarnessProbe } from "./harnesses";
 import { explain, formatExplanation, type Explanation } from "./engines";import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSession, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
-import { listChatModels, listPiModels } from "./models";
+import { listChatModels, listPiModels, type CatalogModel } from "./models";
+import { claudeChatModels } from "./claude-chat";
 import { listPiSkills, type CatalogSkill } from "./skills";
 import { consumeShareToken, devWatchRestart, serveRestart } from "./restart";
 import { gitCheckout, gitFileDiff, gitInfo, gitLineStats, gitStatusMap, resolveWorkspaces, type GitFileCode, type GitFileDiff, type GitInfo } from "./git";
@@ -724,6 +725,8 @@ export const createApp = (
       "/chat/:cardId",
       async ({ params, body, status }): Promise<ChatAccepted | ChatStopped | ChatState> => {
         try {
+          // the model chip may cross harnesses (pi ⇄ claude-code): the manager swaps handles
+          if (body.type === "setModel") return await chatManager.setModel(params.cardId, body.provider, body.modelId);
           const handle = await chatManager.get(params.cardId);
           if (body.type === "abort") return (await handle.send({ type: "abort" })) as ChatStopped;
           // setModel/setThinkingLevel answer with the fresh ChatState (the SDK's
@@ -1104,9 +1107,13 @@ export const createApp = (
     }))
     // chat sessions run noExtensions: the picker must offer the runtime's authed
     // catalog, not the CLI's (extension providers like antigravity can't resolve)
-    .get("/chat-models", async (): Promise<{ models: Awaited<ReturnType<typeof listChatModels>> }> => ({
-      models: await listChatModels(new Set(db.disabledModels())),
-    }))
+    .get("/chat-models", async (): Promise<{ models: CatalogModel[] }> => {
+      const disabled = new Set(db.disabledModels());
+      const claude = (await listHarnesses()).find((h) => h.id === "claude");
+      return {
+        models: [...(await listChatModels(disabled)), ...claudeChatModels(claude, db.harnessEnabled("claude"), disabled)],
+      };
+    })
     // the Providers panel's per-model switch: off = hidden from pickers (chat
     // model menu); engine rows referencing the model keep working
     .put(
