@@ -136,6 +136,9 @@
         {#if harnesses.toggleFailed === view.id}
           <p class="provider-failed" role="status">could not toggle every engine — retry, or flip them in Engines</p>
         {/if}
+        {#if harnesses.modelToggleFailed}
+          <p class="provider-failed" role="status">could not save the model switch — showing the saved state</p>
+        {/if}
 
         <section class="provider-section">
           <div class="provider-statusline">
@@ -196,7 +199,8 @@
                   {/if}
                   <ul class="provider-models">
                     {#each models as m (m.id)}
-                      <li class="provider-model" data-model={m.id}>
+                      {@const hidden = m.disabled === true}
+                      <li class="provider-model" data-model={m.id} data-off={hidden ? "true" : undefined}>
                         <span class="provider-model-id" title={m.id}>{m.id}</span>
                         <span class="provider-model-meta">
                           <span class="badge">{m.context} ctx</span>
@@ -204,6 +208,18 @@
                           {#if m.thinking}<span class="badge">thinks</span>{/if}
                           {#if m.images}<span class="badge">images</span>{/if}
                         </span>
+                        <button
+                          type="button"
+                          class="switch model-switch"
+                          role="switch"
+                          aria-checked={!hidden}
+                          title={hidden ? `Show ${m.id} in the model picker` : `Hide ${m.id} from the model picker`}
+                          aria-label={`Show ${m.id} in the model picker`}
+                          data-on={!hidden}
+                          onclick={() => void harnesses.toggleModel(m.provider, m.id, !hidden)}
+                        >
+                          <span class="switch-knob" aria-hidden="true"></span>
+                        </button>
                       </li>
                     {/each}
                   </ul>
@@ -658,7 +674,6 @@
   .provider-model {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 12px;
     padding: 6px 2px;
     border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
@@ -669,6 +684,7 @@
   }
 
   .provider-model-id {
+    flex: 1;
     min-width: 0;
     overflow: hidden;
     color: var(--text);
@@ -694,6 +710,24 @@
     font-size: 10px;
     line-height: 1.5;
     white-space: nowrap;
+  }
+
+  .provider-model[data-off="true"] .provider-model-id {
+    color: var(--text-dim);
+  }
+
+  .model-switch {
+    width: 26px;
+    height: 15px;
+  }
+
+  .model-switch .switch-knob {
+    width: 11px;
+    height: 11px;
+  }
+
+  .model-switch[data-on="true"] .switch-knob {
+    transform: translateX(11px);
   }
 
   .provider-empty {

@@ -82,6 +82,15 @@ describe("deriveHarnesses", () => {
     expect(views[1].engines).toEqual(["claude sonnet"]);
   });
 
+  it("a disabled model row is marked but stays listed; filter keeps the flag", () => {
+    const views = deriveProviders(PI, CHAT, [], [], NOW, new Set(["zai:glm-5.3"]));
+    const zai = views.find((v) => v.id === "zai")!;
+    expect(zai.models.find((m) => m.id === "glm-5.3")?.disabled).toBe(true);
+    expect(zai.models.find((m) => m.id === "glm-5.3-air")?.disabled).toBeUndefined();
+    const shown = filterModels(zai.models, "glm");
+    expect(shown.find((m) => m.id === "glm-5.3")?.disabled).toBe(true);
+  });
+
   it("the master switch rides the probe and defaults to on; engines keep their own flags", () => {
     const engines = [engine("default", "pi"), engine("claude sonnet", "claude")];
     const views = deriveHarnesses(
