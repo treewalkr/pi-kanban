@@ -127,24 +127,10 @@
     <div class="provider-detail">
       {#if view}
         {@const Logo = LOGOS[view.id]}
-        {@const on = harnesses.allEnabled(view.id)}
         <header class="provider-header">
           {#if Logo}<span class="provider-logo" aria-hidden="true"><Logo size={16} /></span>{/if}
           <h4 class="provider-title">{view.label}</h4>
           {#if view.version}<code class="provider-version">{view.version}</code>{/if}
-          <button
-            type="button"
-            class="switch header-switch"
-            role="switch"
-            aria-checked={on}
-            disabled={view.allEngines.length === 0 || harnesses.toggling !== null}
-            title={view.allEngines.length === 0 ? "no engines on this harness" : toggleLabel(view, on)}
-            aria-label={toggleLabel(view, on)}
-            data-on={on}
-            onclick={() => void harnesses.toggle(view.id, !on)}
-          >
-            <span class="switch-knob" aria-hidden="true"></span>
-          </button>
         </header>
         {#if harnesses.toggleFailed === view.id}
           <p class="provider-failed" role="status">could not toggle every engine — retry, or flip them in Engines</p>
@@ -496,10 +482,6 @@
   .switch:not(:disabled):focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
-  }
-
-  .header-switch {
-    margin-left: auto;
   }
 
   .provider-title {
