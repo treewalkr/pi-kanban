@@ -240,7 +240,7 @@ export function backendHint(view: ProviderView): DetailSegment[] | null {
   return [{ text: `cooling · ${cause} until ${timeOf(view.coolingUntil ?? 0)} — engines on it wait` }];
 }
 
-class HarnessStore {
+export class HarnessStore {
   loaded = $state(false);
   /** The last fetch failed: pre-load the panel shows a retry, post-load a banner. */
   loadFailed = $state(false);
@@ -255,21 +255,28 @@ class HarnessStore {
   toggleFailed = $state<string | null>(null);
 
   private inFlight: Promise<void> | null = null;
+  /** Monotonic fetch generation: only the newest fetch may write store state. */
+  private gen = 0;
 
   load(): Promise<void> {
     return this.refresh();
   }
 
-  /** Re-read every feed at once; concurrent calls share one request round. */
-  refresh(): Promise<void> {
-    if (this.inFlight) return this.inFlight;
-    this.inFlight = this.fetchAll().finally(() => {
-      this.inFlight = null;
+  /**
+   * Re-read every feed at once; concurrent calls share one request round.
+   * `force` starts a fresh round anyway — a write just landed, and a round that
+   * began reading before it must not answer with pre-write state.
+   */
+  refresh(force = false): Promise<void> {
+    if (!force && this.inFlight) return this.inFlight;
+    const gen = ++this.gen;
+    this.inFlight = this.fetchAll(gen).finally(() => {
+      if (this.gen === gen) this.inFlight = null;
     });
     return this.inFlight;
   }
 
-  private async fetchAll(): Promise<void> {
+  private async fetchAll(gen: number): Promise<void> {
     this.loading = true;
     try {
       const [h, pi, chat, eng, act] = await Promise.all([
@@ -279,6 +286,8 @@ class HarnessStore {
         api.engines.get(),
         api.activity.get(),
       ]);
+      // a newer round owns the store now — this data is already stale
+      if (gen !== this.gen) return;
       // the harness probes are the rail itself: without them there is nothing to show
       if (h.error) {
         this.loadFailed = true;
@@ -301,7 +310,7 @@ class HarnessStore {
       this.selected = kept ? this.selected : (list[0]?.id ?? null);
       if (this.selected !== null) this.filter = ""; // a stale filter must not hide the next harness's catalog
     } finally {
-      this.loading = false;
+      if (this.gen === gen) this.loading = false;
     }
   }
 
@@ -347,10 +356,14 @@ class HarnessStore {
   async toggle(id: string, enabled: boolean): Promise<void> {
     if (this.toggling !== null) return;
     this.toggling = id;
+    // flip immediately — the refresh round re-probes claude and can take seconds
+    const view = this.list.find((h) => h.id === id) ?? null;
+    if (view) view.enabled = enabled;
     try {
       const { error } = await api.harnesses({ id }).enabled.put({ enabled });
+      if (error && view) view.enabled = !enabled; // the write failed — undo the flip
       this.toggleFailed = error ? id : null;
-      await this.refresh();
+      await this.refresh(true);
       if (!error) engines.invalidate(); // the Engines tab gates its harness selector on the flag
     } finally {
       this.toggling = null;
