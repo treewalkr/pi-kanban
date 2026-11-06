@@ -82,6 +82,16 @@ describe("deriveHarnesses", () => {
     expect(views[1].engines).toEqual(["claude sonnet"]);
   });
 
+  it("a disabled claude alias is marked on the harness view's model list", () => {
+    const probes = PROBES.map((p) =>
+      p.id === "claude" ? { ...p, models: [...p.models, { id: "opus", label: "opus", note: "deep" }] } : p,
+    );
+    const views = deriveHarnesses(probes, PI, CHAT, [], [], NOW, new Set(["claude:opus"]));
+    const claude = views.find((v) => v.id === "claude")!;
+    expect(claude.models.find((m) => m.id === "opus")?.disabled).toBe(true);
+    expect(claude.models.find((m) => m.id === "sonnet")?.disabled).toBeUndefined();
+  });
+
   it("a disabled model row is marked but stays listed; filter keeps the flag", () => {
     const views = deriveProviders(PI, CHAT, [], [], NOW, new Set(["zai:glm-5.3"]));
     const zai = views.find((v) => v.id === "zai")!;

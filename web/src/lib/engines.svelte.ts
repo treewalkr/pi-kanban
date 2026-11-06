@@ -84,7 +84,7 @@ class EnginesStore {
   engines = $state<EngineDraft[]>([]);
   models = $state<CatalogModel[]>([]);
   claudeModels = $state<ClaudeModel[]>([]);
-  settings = $state<{ maxWorkers: number; defaultEngine: string | null; harnesses?: Record<string, boolean> }>({
+  settings = $state<{ maxWorkers: number; defaultEngine: string | null; harnesses?: Record<string, boolean>; disabledModels?: string[] }>({
     maxWorkers: 12,
     defaultEngine: null,
   });
