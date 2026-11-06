@@ -1,6 +1,6 @@
 <script lang="ts">
   import { RefreshCw } from "@lucide/svelte";
-  import { causeLabel, checkedAgo, FILTER_THRESHOLD, filterModels, providers, type ProviderView } from "./providers.svelte";
+  import { checkedAgo, FILTER_THRESHOLD, filterModels, providers, statusDetail, type ProviderView } from "./providers.svelte";
 
   // "checked N ago" ticks on its own — 10s keeps the label within 10s of the real
   // age; the button is the only thing that refetches
@@ -19,9 +19,6 @@
     cooling: "cooling",
   };
 
-  function timeOf(ms: number): string {
-    return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
 </script>
 
 <div class="settings-general providers-settings">
@@ -78,15 +75,7 @@
             {STATUS[view.status]}
           </h4>
           <p class="provider-detail-line">
-            {#if view.status === "ok"}
-              Signed in — available to chat sessions and engine spawns.
-            {:else if view.status === "unsigned"}
-              Not signed in — visible to the pi CLI only. Sign in with
-              <code>pi auth login --provider {view.id}</code>, then refresh.
-            {:else}
-              Cooling · {causeLabel(view.coolingCause)}
-              {#if view.coolingUntil}until {timeOf(view.coolingUntil)}{/if} — every engine on this account waits.
-            {/if}
+            {#each statusDetail(view) as seg, i (i)}{#if seg.code}<code>{seg.text}</code>{:else}{seg.text}{/if}{/each}
           </p>
           <div class="provider-engines">
             <span class="provider-label">engines</span>
