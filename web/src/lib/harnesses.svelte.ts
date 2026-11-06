@@ -2,10 +2,13 @@ import { api } from "../api";
 import type { CatalogModel } from "../../../src/models";
 
 /**
- * Read-only providers browser (Settings → Providers). A provider's status is
- * derived from three live feeds: pi's CLI catalog (`/pi-models`), the chat
- * runtime's authed catalog (`/chat-models`), and per-account engine health
- * (`/activity`). Nothing here writes: auth belongs to pi, model config to engines.
+ * Read-only harness browser (Settings → Providers). A provider is a harness
+ * runtime the board spawns agents on — pi, Claude Code, more later — never an
+ * LLM vendor. The rail lists harnesses from `/harnesses`; engine usage comes
+ * from `/engines`, per-account cooldowns from `/activity`, and the LLM vendors
+ * that back pi engines collapse into the pi harness's backends section (fed by
+ * `/pi-models` + `/chat-models`). Nothing here writes: auth belongs to each
+ * harness, model config to Engines.
  */
 
 export type ProviderStatusKey = "ok" | "unsigned" | "cooling";
@@ -18,6 +21,30 @@ export interface ProviderView {
   engines: string[];
   coolingUntil?: number;
   coolingCause?: string;
+}
+
+export type HarnessStatusKey = "ready" | "cooling" | "missing";
+
+export interface HarnessModel {
+  id: string;
+  label: string;
+  note: string;
+}
+
+export interface HarnessView {
+  id: string;
+  label: string;
+  status: HarnessStatusKey;
+  /** Version or install hint from the probe. */
+  detail: string;
+  /** Enabled engines that run on this harness. */
+  engines: string[];
+  /** Live cooldowns on this harness's accounts (`<harness>:<account>`). */
+  cooling: Array<{ account: string; until: number; cause?: string }>;
+  /** pi only: the LLM vendors its engines may run on, nested per backend. */
+  backends: ProviderView[];
+  /** claude only: the model aliases the engine editor may reference. */
+  models: HarnessModel[];
 }
 
 /** The engine fields the derivation reads (a saved engine satisfies this). */
@@ -33,6 +60,15 @@ export interface ProviderHealthRef {
   account: string;
   coolingUntil?: number;
   lastCause?: string;
+}
+
+/** The probe fields the derivation reads (`HarnessProbe` from `/harnesses`). */
+export interface HarnessProbeRef {
+  id: string;
+  label: string;
+  status: "ready" | "missing";
+  detail: string;
+  models: HarnessModel[];
 }
 
 /** t3code's FILTER_THRESHOLD: a catalog longer than this gets the filter box. */
@@ -57,12 +93,11 @@ function providerIds(models: CatalogModel[]): string[] {
 }
 
 /**
- * One row per provider the board can see. Chat-catalog providers come first (in
- * catalog order), then pi-only providers by name. Models merge chat-first, so a
- * model the chat runtime serves replaces the CLI's row for the same id. Status:
- * `ok` = the chat runtime has it authed, `unsigned` = only the pi CLI knows it,
- * `cooling` = a `pi:<provider>` account is cooling right now (wins over both).
- * Pure — the store and the unit suite share it.
+ * One row per LLM vendor the pi harness can see (pi's backends section). Chat-
+ * catalog providers come first (in catalog order), then pi-only providers by
+ * name. Models merge chat-first. Status: `ok` = the chat runtime has it authed,
+ * `unsigned` = only the pi CLI knows it, `cooling` = a `pi:<provider>` account
+ * is cooling right now (wins over both). Pure — the store and suite share it.
  */
 export function deriveProviders(
   piModels: CatalogModel[],
@@ -96,6 +131,40 @@ export function deriveProviders(
   });
 }
 
+/**
+ * The rail: one view per harness probe. Engine usage joins by `harness`; pi's
+ * backends nest the vendor derivation; a harness cools when an account on it
+ * cools and it has no fallback (claude has exactly one account — pi stays
+ * ready, its cooling shows per backend). Pure — the store and suite share it.
+ */
+export function deriveHarnesses(
+  probes: HarnessProbeRef[],
+  piModels: CatalogModel[],
+  chatModels: CatalogModel[],
+  engines: ProviderEngineRef[],
+  activity: ProviderHealthRef[],
+  now: number,
+): HarnessView[] {
+  return probes.map((probe) => {
+    const own = engines.filter((e) => e.enabled && e.harness === probe.id);
+    const prefix = `${probe.id}:`;
+    const cooling = activity
+      .filter((a) => a.account.startsWith(prefix) && a.coolingUntil !== undefined && now < a.coolingUntil)
+      .map((a) => ({ account: a.account, until: a.coolingUntil as number, ...(a.lastCause ? { cause: a.lastCause } : {}) }));
+    return {
+      id: probe.id,
+      label: probe.label,
+      // claude has one ambient account: a cooldown on it throttles the whole harness
+      status: probe.status === "missing" ? "missing" : probe.id !== "pi" && cooling.length > 0 ? "cooling" : "ready",
+      detail: probe.detail,
+      engines: own.map((e) => e.name),
+      cooling,
+      backends: probe.id === "pi" ? deriveProviders(piModels, chatModels, engines, activity, now) : [],
+      models: probe.models,
+    };
+  });
+}
+
 /** Filter box predicate: case-insensitive substring on the model id. */
 export function filterModels(models: CatalogModel[], query: string): CatalogModel[] {
   const q = query.trim().toLowerCase();
@@ -118,7 +187,7 @@ export function causeLabel(cause: string | undefined): string {
   return cause ? cause.replace(/-/g, " ") : "provider incident";
 }
 
-/** One span of the detail line; `code` renders as an inline command. */
+/** One span of a hint line; `code` renders as an inline command. */
 export interface DetailSegment {
   text: string;
   code?: boolean;
@@ -129,33 +198,27 @@ function timeOf(ms: number): string {
 }
 
 /**
- * The one-line detail under the status headline. The copy lives here rather than
- * in the component so the suite can pin the commands it tells users to run:
+ * The short line under a pi backend's header. The copy lives here rather than
+ * in the component so the suite can pin the command it tells users to run:
  * signing in is pi's `/login <provider>` slash command — the pi CLI has no
  * `auth login` verb (only `print-api-key`, `print-bearer-token`, `check`).
+ * Authed backends stay quiet; there is nothing to do.
  */
-export function statusDetail(view: ProviderView): DetailSegment[] {
-  if (view.status === "ok") {
-    return [{ text: "Signed in — available to chat sessions and engine spawns." }];
-  }
+export function backendHint(view: ProviderView): DetailSegment[] | null {
+  if (view.status === "ok") return null;
   if (view.status === "unsigned") {
-    return [
-      { text: "Not signed in — visible to the pi CLI only. Run " },
-      { text: `/login ${view.id}`, code: true },
-      { text: " in a pi session, then refresh." },
-    ];
+    return [{ text: "not signed in — run " }, { text: `/login ${view.id}`, code: true }, { text: " in a pi session, then refresh" }];
   }
   const cause = causeLabel(view.coolingCause);
-  const until = view.coolingUntil ? ` until ${timeOf(view.coolingUntil)}` : "";
-  return [{ text: `Cooling · ${cause}${until} — every engine on this account waits.` }];
+  return [{ text: `cooling · ${cause} until ${timeOf(view.coolingUntil ?? 0)} — engines on it wait` }];
 }
 
-class ProvidersStore {
+class HarnessStore {
   loaded = $state(false);
   /** The last fetch failed: pre-load the panel shows a retry, post-load a banner. */
   loadFailed = $state(false);
   loading = $state(false);
-  list = $state<ProviderView[]>([]);
+  list = $state<HarnessView[]>([]);
   checkedAt = $state<number | null>(null);
   selected = $state<string | null>(null);
   filter = $state("");
@@ -166,7 +229,7 @@ class ProvidersStore {
     return this.refresh();
   }
 
-  /** Re-read all four feeds at once; concurrent calls share one request round. */
+  /** Re-read every feed at once; concurrent calls share one request round. */
   refresh(): Promise<void> {
     if (this.inFlight) return this.inFlight;
     this.inFlight = this.fetchAll().finally(() => {
@@ -178,20 +241,22 @@ class ProvidersStore {
   private async fetchAll(): Promise<void> {
     this.loading = true;
     try {
-      const [pi, chat, eng, act] = await Promise.all([
+      const [h, pi, chat, eng, act] = await Promise.all([
+        api.harnesses.get(),
         api["pi-models"].get(),
         api["chat-models"].get(),
         api.engines.get(),
         api.activity.get(),
       ]);
-      // the two catalogs are the rail itself: without them there is nothing to show
-      if (pi.error || chat.error) {
+      // the harness probes are the rail itself: without them there is nothing to show
+      if (h.error) {
         this.loadFailed = true;
         return;
       }
-      const list = deriveProviders(
-        pi.data.models,
-        chat.data.models,
+      const list = deriveHarnesses(
+        h.data.harnesses,
+        pi.error ? [] : pi.data.models,
+        chat.error ? [] : chat.data.models,
         eng.error ? [] : eng.data.engines,
         act.error ? [] : act.data.engines,
         Date.now(),
@@ -200,8 +265,9 @@ class ProvidersStore {
       this.checkedAt = Date.now();
       this.loadFailed = false;
       this.loaded = true;
-      const kept = this.selected !== null && list.some((p) => p.id === this.selected);
+      const kept = this.selected !== null && list.some((x) => x.id === this.selected);
       this.selected = kept ? this.selected : (list[0]?.id ?? null);
+      if (this.selected !== null) this.filter = ""; // a stale filter must not hide the next harness's catalog
     } finally {
       this.loading = false;
     }
@@ -210,8 +276,8 @@ class ProvidersStore {
   select(id: string | null): void {
     if (id === this.selected) return;
     this.selected = id;
-    this.filter = ""; // another provider's filter must not hide this catalog
+    this.filter = ""; // another harness's filter must not hide this catalog
   }
 }
 
-export const providers = new ProvidersStore();
+export const harnesses = new HarnessStore();

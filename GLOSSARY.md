@@ -57,13 +57,15 @@ _Avoid_: folder browser, path chooser, add-project dialog
 
 **Providers pane**:
 The Settings → Providers tab (`ProvidersSettings.svelte`): a read-only two-pane
-browser of every provider the board can see — left rail of providers with
-status dots, right detail with that provider's model catalog and the **Engines**
-that run on it. Status is **signed in** (the chat runtime has it authed), **not
-signed in** (only pi's CLI catalog knows it), or **cooling** (a live `pi:<provider>`
-account is in **Cooldown**). Auth belongs to pi and model choice to engines, so
-nothing here writes.
-_Avoid_: Models tab, provider settings, model config, auth page
+browser of the **harness runtimes** the board spawns agents on — pi and Claude
+Code today, more later — never LLM vendors. The left rail lists harnesses with
+status dots (**ready**, **not installed**); the right detail shows the probe
+line (version or install hint), the **Engines** that run on it, live **Cooldown**
+accounts, and models. The pi harness nests its LLM **backends** (zai, deepseek,
+…) each with per-vendor status (**signed in**, **not signed in**, **cooling**);
+claude lists its model aliases. Auth belongs to each harness and model choice to
+engines, so nothing here writes.
+_Avoid_: Models tab, provider settings, model config, auth page, LLM provider list
 
 **Thread**:
 The chronological conversation on a card where humans and agents record questions, handoffs, reviews, and gate verdicts.

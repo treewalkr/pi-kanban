@@ -3,7 +3,7 @@
   import { agents, type SettingsSection } from "./agents.svelte";
   import { engines } from "./engines.svelte";
   import { projects } from "./projects.svelte";
-  import { providers } from "./providers.svelte";
+  import { harnesses } from "./harnesses.svelte";
   import GeneralSettings from "./GeneralSettings.svelte";
   import AgentsSettings from "./AgentsSettings.svelte";
   import ProvidersSettings from "./ProvidersSettings.svelte";
@@ -45,7 +45,7 @@
   // sections lazy-load their store on first view, including the section it opens on
   $effect(() => {
     if (section === "agents" && !agents.loaded) void agents.load();
-    if (section === "providers" && !providers.loaded) void providers.load();
+    if (section === "providers" && !harnesses.loaded) void harnesses.load();
     if (section === "engines" && !engines.loaded) void engines.load();
     // the Engines tab shows each engine's users, so it needs the agent configs too
     if (section === "engines" && !agents.loaded) void agents.load();
@@ -177,12 +177,12 @@
       {/if}
       {#if visited.has("providers")}
         <div class="settings-section-host" id="settings-panel-providers" role="tabpanel" aria-labelledby="settings-tab-providers" hidden={section !== "providers"}>
-          {#if providers.loaded}
+          {#if harnesses.loaded}
             <ProvidersSettings />
           {:else}
-            <p class="settings-loading" class:err={providers.loadFailed}>
-              {providers.loadFailed ? "could not read the model catalogs" : "reading model catalogs…"}
-              <button type="button" onclick={() => void providers.load()}>{providers.loadFailed ? "retry" : "reload"}</button>
+            <p class="settings-loading" class:err={harnesses.loadFailed}>
+              {harnesses.loadFailed ? "could not read the harness probes" : "probing harnesses…"}
+              <button type="button" onclick={() => void harnesses.load()}>{harnesses.loadFailed ? "retry" : "reload"}</button>
             </p>
           {/if}
         </div>

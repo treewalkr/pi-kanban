@@ -1,6 +1,14 @@
 <script lang="ts">
   import { RefreshCw } from "@lucide/svelte";
-  import { checkedAgo, FILTER_THRESHOLD, filterModels, providers, statusDetail, type ProviderView } from "./providers.svelte";
+  import {
+    backendHint,
+    checkedAgo,
+    FILTER_THRESHOLD,
+    filterModels,
+    harnesses,
+    type HarnessView,
+    type ProviderView,
+  } from "./harnesses.svelte";
 
   // "checked N ago" ticks on its own — 10s keeps the label within 10s of the real
   // age; the button is the only thing that refetches
@@ -10,15 +18,26 @@
     return () => clearInterval(timer);
   });
 
-  let view = $derived(providers.list.find((p) => p.id === providers.selected) ?? null);
-  let shown = $derived(view ? filterModels(view.models, providers.filter) : []);
+  let view = $derived(harnesses.list.find((h) => h.id === harnesses.selected) ?? null);
+  // the pi filter runs per backend; sections with no match hide entirely
+  let backends = $derived(view?.id === "pi" ? view.backends : []);
+  let totalModels = $derived(backends.reduce((n, b) => n + b.models.length, 0));
+  let shownBackends = $derived(
+    backends
+      .map((b) => ({ backend: b, models: filterModels(b.models, harnesses.filter) }))
+      .filter((s) => s.models.length > 0),
+  );
 
-  const STATUS: Record<ProviderView["status"], string> = {
+  const STATUS: Record<HarnessView["status"], string> = {
+    ready: "ready",
+    cooling: "cooling",
+    missing: "not installed",
+  };
+  const BACKEND_STATUS: Record<ProviderView["status"], string> = {
     ok: "signed in",
     unsigned: "not signed in",
     cooling: "cooling",
   };
-
 </script>
 
 <div class="settings-general providers-settings">
@@ -26,44 +45,44 @@
     <div class="providers-head-text">
       <h3 class="settings-general-heading">Providers</h3>
       <p class="settings-general-description">
-        Who serves the models. <em>Signed in</em> means the chat runtime has the provider authed; <em>not signed in</em> means only the pi CLI
-        knows it — pi owns auth. Which model an actor runs, and how many sessions it may run, lives in Engines.
+        The harness runtimes the board spawns agents on. Backing LLMs, model choice, and concurrency live in Engines; auth belongs to each
+        harness.
       </p>
     </div>
     <button
       type="button"
       class="ghost provider-refresh"
-      disabled={providers.loading}
-      title="re-read the model catalogs and live engine health"
-      onclick={() => void providers.refresh()}
+      disabled={harnesses.loading}
+      title="re-read the harness probes, model catalogs, and live engine health"
+      onclick={() => void harnesses.refresh()}
     >
       <RefreshCw size={13} strokeWidth={1.9} />
-      {providers.loading ? "checking…" : checkedAgo(providers.checkedAt, now)}
+      {harnesses.loading ? "checking…" : checkedAgo(harnesses.checkedAt, now)}
     </button>
   </div>
 
-  {#if providers.loadFailed && providers.loaded}
-    <p class="provider-failed" role="status">catalogs unreachable — showing the last check</p>
+  {#if harnesses.loadFailed && harnesses.loaded}
+    <p class="provider-failed" role="status">harness probes unreachable — showing the last check</p>
   {/if}
 
   <div class="provider-split">
-    <nav class="provider-rail" aria-label="providers">
-      {#each providers.list as p (p.id)}
+    <nav class="provider-rail" aria-label="harness providers">
+      {#each harnesses.list as h (h.id)}
         <button
           type="button"
           class="provider-row"
-          data-provider={p.id}
-          aria-current={p.id === providers.selected ? "true" : undefined}
-          aria-label={`${p.id}, ${STATUS[p.status]}, ${p.models.length} model${p.models.length === 1 ? "" : "s"}`}
-          onclick={() => providers.select(p.id)}
+          data-harness={h.id}
+          aria-current={h.id === harnesses.selected ? "true" : undefined}
+          aria-label={`${h.label}, ${STATUS[h.status]}, ${h.engines.length} engine${h.engines.length === 1 ? "" : "s"}`}
+          onclick={() => harnesses.select(h.id)}
         >
-          <span class="provider-dot" data-status={p.status} aria-hidden="true"></span>
-          <span class="provider-name" title={p.id}>{p.id}</span>
-          <span class="provider-count" aria-hidden="true">{p.models.length}</span>
+          <span class="provider-dot" data-status={h.status} aria-hidden="true"></span>
+          <span class="provider-name" title={h.id}>{h.label}</span>
+          <span class="provider-count" aria-hidden="true">{h.engines.length}</span>
         </button>
       {/each}
-      {#if providers.list.length === 0}
-        <p class="provider-empty">no providers in the catalog</p>
+      {#if harnesses.list.length === 0}
+        <p class="provider-empty">no harnesses registered</p>
       {/if}
     </nav>
 
@@ -74,54 +93,94 @@
             <span class="provider-dot" data-status={view.status} aria-hidden="true"></span>
             {STATUS[view.status]}
           </h4>
-          <p class="provider-detail-line">
-            {#each statusDetail(view) as seg, i (i)}{#if seg.code}<code>{seg.text}</code>{:else}{seg.text}{/if}{/each}
-          </p>
+          <p class="provider-detail-line">{view.detail}</p>
+          {#if view.id === "claude" && view.status === "ready"}
+            <p class="provider-detail-line">Auth is ambient — the CLI's own login or <code>ANTHROPIC_API_KEY</code>.</p>
+          {/if}
           <div class="provider-engines">
             <span class="provider-label">engines</span>
             {#each view.engines as name, i (i)}
               <span class="chip">{name}</span>
             {:else}
-              <span class="provider-none">in no enabled engine lineup</span>
+              <span class="provider-none">no enabled engine runs on it — add one in Engines</span>
             {/each}
           </div>
+          {#each view.cooling as c (c.account)}
+            <p class="provider-cooling" role="status">cooling · {c.account} until {new Date(c.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{#if c.cause} · {c.cause.replace(/-/g, " ")}{/if} — spawns on it wait</p>
+          {/each}
         </div>
 
-        <div class="provider-models-head">
-          <span class="provider-label">models · {view.models.length}</span>
-          {#if view.models.length > FILTER_THRESHOLD}
-            <input
-              type="search"
-              class="provider-filter"
-              placeholder="filter models"
-              aria-label="filter models"
-              spellcheck="false"
-              bind:value={providers.filter}
-            />
+        {#if view.id === "pi"}
+          {#if backends.length > 0}
+            <div class="provider-models-head">
+              <span class="provider-label">backends · {backends.length} · {totalModels} models</span>
+              {#if totalModels > FILTER_THRESHOLD}
+                <input
+                  type="search"
+                  class="provider-filter"
+                  placeholder="filter models"
+                  aria-label="filter models"
+                  spellcheck="false"
+                  bind:value={harnesses.filter}
+                />
+              {/if}
+            </div>
+            <div class="provider-backends">
+              {#each shownBackends as { backend, models } (backend.id)}
+                <section class="provider-backend">
+                  <header class="provider-backend-head">
+                    <span class="provider-dot" data-status={backend.status} aria-hidden="true"></span>
+                    <span class="provider-backend-id" title={backend.id}>{backend.id}</span>
+                    <span class="provider-backend-status" data-status={backend.status}>{BACKEND_STATUS[backend.status]}</span>
+                    <span class="provider-count" aria-hidden="true">{backend.models.length}</span>
+                    {#each backend.engines as name, i (i)}
+                      <span class="chip">{name}</span>
+                    {/each}
+                  </header>
+                  {#if backendHint(backend)}
+                    <p class="provider-backend-hint">
+                      {#each backendHint(backend) ?? [] as seg, i (i)}{#if seg.code}<code>{seg.text}</code>{:else}{seg.text}{/if}{/each}
+                    </p>
+                  {/if}
+                  <ul class="provider-models">
+                    {#each models as m (m.id)}
+                      <li class="provider-model" data-model={m.id}>
+                        <span class="provider-model-id" title={m.id}>{m.id}</span>
+                        <span class="provider-model-meta">
+                          <span>{m.context} ctx</span>
+                          <span>{m.maxOut} out</span>
+                          {#if m.thinking}<span>thinks</span>{/if}
+                          {#if m.images}<span>images</span>{/if}
+                        </span>
+                      </li>
+                    {/each}
+                  </ul>
+                </section>
+              {:else}
+                <p class="provider-empty">no model matches “{harnesses.filter.trim()}”</p>
+              {/each}
+            </div>
+          {:else}
+            <p class="provider-empty">No LLM backends in pi's catalog.</p>
           {/if}
-        </div>
-
-        {#if view.models.length === 0}
-          <p class="provider-empty">No models in the catalog.</p>
-        {:else}
+        {:else if view.models.length > 0}
+          <div class="provider-models-head">
+            <span class="provider-label">models · {view.models.length}</span>
+          </div>
           <ul class="provider-models">
-            {#each shown as m (m.id)}
-              <li class="provider-model" data-model={m.id}>
-                <span class="provider-model-id" title={m.id}>{m.id}</span>
+            {#each view.models as m (m.id)}
+              <li class="provider-model">
+                <span class="provider-model-id" title={m.id}>{m.label}</span>
                 <span class="provider-model-meta">
-                  <span>{m.context} ctx</span>
-                  <span>{m.maxOut} out</span>
-                  {#if m.thinking}<span>thinks</span>{/if}
-                  {#if m.images}<span>images</span>{/if}
+                  <span>{m.note}</span>
                 </span>
               </li>
-            {:else}
-              <li class="provider-empty">no model matches “{providers.filter.trim()}”</li>
             {/each}
           </ul>
+          <p class="provider-detail-line">Aliases — the harness resolves them to the current concrete model at spawn.</p>
         {/if}
       {:else}
-        <p class="provider-empty">Pick a provider to see its models and engines.</p>
+        <p class="provider-empty">Pick a harness to see its status, engines, and models.</p>
       {/if}
     </div>
   </div>
@@ -255,11 +314,13 @@
     border-radius: 999px;
   }
 
-  .provider-dot[data-status="ok"] {
+  .provider-dot[data-status="ok"],
+  .provider-dot[data-status="ready"] {
     background: var(--ok);
   }
 
-  .provider-dot[data-status="unsigned"] {
+  .provider-dot[data-status="unsigned"],
+  .provider-dot[data-status="missing"] {
     background: var(--warn);
   }
 
@@ -323,6 +384,13 @@
     gap: 6px;
   }
 
+  .provider-cooling {
+    margin: 0;
+    color: var(--error);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
   .provider-label {
     color: var(--text-dim);
     font-family: var(--font-mono);
@@ -360,6 +428,57 @@
   .provider-filter:focus-visible {
     border-color: var(--accent);
     outline: none;
+  }
+
+  .provider-backends {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .provider-backend {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .provider-backend-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 7px;
+  }
+
+  .provider-backend-head .provider-dot {
+    align-self: center;
+  }
+
+  .provider-backend-id {
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .provider-backend-status {
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
+  .provider-backend-status[data-status="cooling"] {
+    color: var(--error);
+  }
+
+  .provider-backend-hint {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 11.5px;
+  }
+
+  .provider-backend-hint code {
+    color: var(--text-muted);
+    font-size: 11px;
+    white-space: nowrap;
   }
 
   .provider-models {

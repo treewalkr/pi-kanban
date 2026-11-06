@@ -4,6 +4,7 @@ import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { KanbanDb, KanbanError, defaultDbPath, RESERVED_FILE_NAMES, type AgentConfig, type AgentRole, type Attachment, type Board, type BoardPayload, type BoardStatsPayload, type CardWorkspace, type Comment, type GhLink, type GhStatus, type Lane, type LaneContext, type LaneEventFeedEntry, type LaneWorkerRun, type Task, type Engine, type ProjectRoute } from "./db";
 import { CLAUDE_MODELS, type ClaudeModel } from "./claude";
+import { listHarnesses, type HarnessProbe } from "./harnesses";
 import { explain, formatExplanation, type Explanation } from "./engines";import { parseGhRef, refreshGhUrl } from "./gh";
 import { cardFileDiff, type CardFileDiff } from "./diff";
 import { activitySnapshot, killAgentSession, killAgentSessions, LEASE_TTL_MS } from "./autoreview";
@@ -1136,6 +1137,9 @@ export const createApp = (
       },
     )
     .get("/claude-models", (): { models: ClaudeModel[] } => ({ models: CLAUDE_MODELS }))
+    .get("/harnesses", async (): Promise<{ harnesses: HarnessProbe[] }> => ({
+      harnesses: await listHarnesses(),
+    }))
     .get("/engines", (): { engines: Engine[]; settings: { maxWorkers: number; defaultEngine: string | null } } => ({
       engines: db.engines(),
       settings: { maxWorkers: db.maxWorkers(), defaultEngine: db.defaultEngineId() },
