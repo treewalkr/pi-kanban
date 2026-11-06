@@ -6,8 +6,10 @@ import {
   deriveProviders,
   FILTER_THRESHOLD,
   filterModels,
+  statusDetail,
   type ProviderEngineRef,
   type ProviderHealthRef,
+  type ProviderView,
 } from "../web/src/lib/providers.svelte";
 
 const model = (provider: string, id: string, extra: Partial<CatalogModel> = {}): CatalogModel => ({
@@ -136,5 +138,42 @@ describe("causeLabel", () => {
     expect(causeLabel("provider-quota")).toBe("provider quota");
     expect(causeLabel("auth")).toBe("auth");
     expect(causeLabel(undefined)).toBe("provider incident");
+  });
+});
+
+describe("statusDetail", () => {
+  const view = (status: ProviderView["status"], extra: Partial<ProviderView> = {}): ProviderView => ({
+    id: "zai",
+    status,
+    models: [model("zai", "glm-5")],
+    engines: [],
+    ...extra,
+  });
+  const flat = (segments: ReturnType<typeof statusDetail>) => segments.map((s) => s.text).join("");
+
+  test("unsigned providers are told to run pi's /login slash command, not a CLI auth verb", () => {
+    const hint = statusDetail(view("unsigned"));
+
+    expect(hint.find((s) => s.code)?.text).toBe("/login zai");
+    expect(flat(hint)).toContain("in a pi session, then refresh.");
+    // the pi CLI exposes print-api-key / print-bearer-token / check — an
+    // `auth login` hint would send users to a command that does not exist
+    expect(flat(hint)).not.toContain("pi auth login");
+  });
+
+  test("signed-in and cooling providers each get one plain line; the cause is humanized", () => {
+    expect(statusDetail(view("ok"))).toEqual([
+      { text: "Signed in — available to chat sessions and engine spawns." },
+    ]);
+
+    const cooling = statusDetail(
+      view("cooling", { coolingUntil: new Date(2026, 10, 6, 14, 30).getTime(), coolingCause: "provider-quota" }),
+    );
+    expect(cooling).toHaveLength(1);
+    // time-of-day is locale-formatted, so pin the shape around it
+    expect(cooling[0].text).toMatch(/^Cooling · provider quota until .+ — every engine on this account waits\.$/);
+
+    const noUntil = statusDetail(view("cooling"));
+    expect(noUntil[0].text).toBe("Cooling · provider incident — every engine on this account waits.");
   });
 });

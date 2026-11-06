@@ -118,6 +118,38 @@ export function causeLabel(cause: string | undefined): string {
   return cause ? cause.replace(/-/g, " ") : "provider incident";
 }
 
+/** One span of the detail line; `code` renders as an inline command. */
+export interface DetailSegment {
+  text: string;
+  code?: boolean;
+}
+
+function timeOf(ms: number): string {
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * The one-line detail under the status headline. The copy lives here rather than
+ * in the component so the suite can pin the commands it tells users to run:
+ * signing in is pi's `/login <provider>` slash command — the pi CLI has no
+ * `auth login` verb (only `print-api-key`, `print-bearer-token`, `check`).
+ */
+export function statusDetail(view: ProviderView): DetailSegment[] {
+  if (view.status === "ok") {
+    return [{ text: "Signed in — available to chat sessions and engine spawns." }];
+  }
+  if (view.status === "unsigned") {
+    return [
+      { text: "Not signed in — visible to the pi CLI only. Run " },
+      { text: `/login ${view.id}`, code: true },
+      { text: " in a pi session, then refresh." },
+    ];
+  }
+  const cause = causeLabel(view.coolingCause);
+  const until = view.coolingUntil ? ` until ${timeOf(view.coolingUntil)}` : "";
+  return [{ text: `Cooling · ${cause}${until} — every engine on this account waits.` }];
+}
+
 class ProvidersStore {
   loaded = $state(false);
   /** The last fetch failed: pre-load the panel shows a retry, post-load a banner. */
