@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { CodeXml, Layers, RefreshCw, Terminal } from "@lucide/svelte";
+  import { RefreshCw } from "@lucide/svelte";
+  import ClaudeLogo from "./ClaudeLogo.svelte";
+  import PiLogo from "./PiLogo.svelte";
   import {
     backendHint,
     checkedAgo,
@@ -39,7 +41,7 @@
     cooling: "cooling",
   };
 
-  const ICONS: Record<string, typeof Terminal> = { pi: Terminal, claude: CodeXml };
+  const LOGOS: Record<string, typeof PiLogo> = { pi: PiLogo, claude: ClaudeLogo };
 
   // the rail's second line — the status word plus the one qualifier that identifies it
   function headline(h: HarnessView): string {
@@ -47,6 +49,10 @@
     if (h.status === "cooling") return "cooling · quota";
     if (h.id === "pi") return `ready · ${h.backends.length} backend${h.backends.length === 1 ? "" : "s"}`;
     return "ready · ambient auth";
+  }
+
+  function toggleLabel(h: HarnessView, on: boolean): string {
+    return `${on ? "Disable" : "Enable"} every engine on ${h.label}`;
   }
 </script>
 
@@ -78,25 +84,40 @@
   <div class="provider-split">
     <nav class="provider-rail" aria-label="harness providers">
       {#each harnesses.list as h (h.id)}
-        {@const Icon = ICONS[h.id] ?? Layers}
-        <button
-          type="button"
-          class="provider-row"
-          data-harness={h.id}
-          aria-current={h.id === harnesses.selected ? "true" : undefined}
-          aria-label={`${h.label}, ${headline(h)}`}
-          onclick={() => harnesses.select(h.id)}
-        >
-          <span class="provider-row-line1">
-            <span class="provider-icon" aria-hidden="true"><Icon size={15} strokeWidth={1.8} /></span>
-            <span class="provider-name" title={h.id}>{h.label}</span>
-            {#if h.version}<code class="provider-version">{h.version}</code>{/if}
-          </span>
-          <span class="provider-row-line2">
-            <span class="provider-dot" data-status={h.status} aria-hidden="true"></span>
-            <span class="provider-row-status">{headline(h)}</span>
-          </span>
-        </button>
+        {@const Logo = LOGOS[h.id]}
+        {@const on = harnesses.allEnabled(h.id)}
+        <div class="provider-row" data-harness={h.id} data-selected={h.id === harnesses.selected ? "true" : undefined}>
+          <button
+            type="button"
+            class="provider-select"
+            aria-current={h.id === harnesses.selected ? "true" : undefined}
+            aria-label={`${h.label}, ${headline(h)}`}
+            onclick={() => harnesses.select(h.id)}
+          >
+            <span class="provider-row-line1">
+              {#if Logo}<span class="provider-logo" aria-hidden="true"><Logo size={15} /></span>{/if}
+              <span class="provider-name" title={h.id}>{h.label}</span>
+              {#if h.version}<code class="provider-version">{h.version}</code>{/if}
+            </span>
+            <span class="provider-row-line2">
+              <span class="provider-dot" data-status={h.status} aria-hidden="true"></span>
+              <span class="provider-row-status">{headline(h)}</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            class="switch"
+            role="switch"
+            aria-checked={on}
+            disabled={h.allEngines.length === 0 || harnesses.toggling !== null}
+            title={h.allEngines.length === 0 ? "no engines on this harness" : toggleLabel(h, on)}
+            aria-label={toggleLabel(h, on)}
+            data-on={on}
+            onclick={() => void harnesses.toggle(h.id, !on)}
+          >
+            <span class="switch-knob" aria-hidden="true"></span>
+          </button>
+        </div>
       {/each}
       {#if harnesses.list.length === 0}
         <p class="provider-empty">no harnesses registered</p>
@@ -105,12 +126,29 @@
 
     <div class="provider-detail">
       {#if view}
-        {@const Icon = ICONS[view.id] ?? Layers}
+        {@const Logo = LOGOS[view.id]}
+        {@const on = harnesses.allEnabled(view.id)}
         <header class="provider-header">
-          <span class="provider-icon" aria-hidden="true"><Icon size={15} strokeWidth={1.8} /></span>
+          {#if Logo}<span class="provider-logo" aria-hidden="true"><Logo size={16} /></span>{/if}
           <h4 class="provider-title">{view.label}</h4>
           {#if view.version}<code class="provider-version">{view.version}</code>{/if}
+          <button
+            type="button"
+            class="switch header-switch"
+            role="switch"
+            aria-checked={on}
+            disabled={view.allEngines.length === 0 || harnesses.toggling !== null}
+            title={view.allEngines.length === 0 ? "no engines on this harness" : toggleLabel(view, on)}
+            aria-label={toggleLabel(view, on)}
+            data-on={on}
+            onclick={() => void harnesses.toggle(view.id, !on)}
+          >
+            <span class="switch-knob" aria-hidden="true"></span>
+          </button>
         </header>
+        {#if harnesses.toggleFailed === view.id}
+          <p class="provider-failed" role="status">could not toggle every engine — retry, or flip them in Engines</p>
+        {/if}
 
         <section class="provider-section">
           <div class="provider-statusline">
@@ -284,20 +322,15 @@
     overflow-y: auto;
   }
 
+  /* the row is a wrapper so the switch never nests inside the select button */
   .provider-row {
     display: flex;
     flex: none;
-    flex-direction: column;
-    gap: 3px;
-    padding: 11px 12px;
-    border: 0;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 8px 10px 4px;
     border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-    background: transparent;
-    color: var(--text-muted);
-    text-align: left;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 0.12s, color 0.12s;
+    transition: background 0.12s;
   }
 
   .provider-row:last-child {
@@ -306,17 +339,31 @@
 
   .provider-row:hover {
     background: var(--bg-hover);
-    color: var(--text);
   }
 
-  .provider-row[aria-current="true"] {
+  .provider-row[data-selected="true"] {
     background: var(--bg-selected);
-    color: var(--text);
   }
 
-  .provider-row:focus-visible {
+  .provider-select {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    padding: 0 0 0 8px;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    text-align: left;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .provider-select:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
+    border-radius: var(--radius-small);
   }
 
   .provider-row-line1 {
@@ -330,17 +377,13 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding-left: 22px; /* lines up under the name, past icon + gap */
+    padding-left: 23px; /* lines up under the name, past logo + gap */
   }
 
-  .provider-icon {
+  .provider-logo {
     display: flex;
     flex: none;
     align-items: center;
-    color: var(--text-dim);
-  }
-
-  .provider-row[aria-current="true"] .provider-icon {
     color: var(--text-muted);
   }
 
@@ -402,13 +445,61 @@
     overflow-y: auto;
   }
 
-  /* t3code's editor header: icon + name + version chip, then divided sections */
+  /* t3code's editor header: logo + name + version chip + switch, then divided sections */
   .provider-header {
     display: flex;
     flex: none;
     align-items: center;
     gap: 8px;
     padding: 12px 16px 10px;
+  }
+  /* t3code's switch: 30×17 pill, 13px knob, accent when on */
+  .switch {
+    position: relative;
+    flex: none;
+    width: 30px;
+    height: 17px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  .switch-knob {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 13px;
+    height: 13px;
+    border-radius: 999px;
+    background: var(--text-dim);
+    transition: transform 0.15s, background 0.15s;
+  }
+
+  .switch[data-on="true"] {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+
+  .switch[data-on="true"] .switch-knob {
+    transform: translateX(13px);
+    background: var(--bg-panel);
+  }
+
+  .switch:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .switch:not(:disabled):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .header-switch {
+    margin-left: auto;
   }
 
   .provider-title {
@@ -643,13 +734,20 @@
     }
 
     .provider-row {
-      min-width: 150px;
+      min-width: 170px;
+      flex-direction: column;
+      align-items: stretch;
+      padding: 6px 8px;
       border-bottom: 0;
       border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
     }
 
-    .provider-row[aria-current="true"] {
-      box-shadow: inset 0 -2px 0 var(--accent);
+    .provider-select {
+      padding: 0 0 0 4px;
+    }
+
+    .provider-row .switch {
+      align-self: flex-end;
     }
 
     .provider-detail {
