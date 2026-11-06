@@ -253,11 +253,24 @@
             </div>
             <ul class="provider-models">
               {#each view.models as m (m.id)}
-                <li class="provider-model">
+                {@const hidden = m.disabled === true}
+                <li class="provider-model" data-off={hidden ? "true" : undefined}>
                   <span class="provider-model-id" title={m.id}>{m.label}</span>
                   <span class="provider-model-meta">
                     <span class="badge">{m.note}</span>
                   </span>
+                  <button
+                    type="button"
+                    class="switch model-switch"
+                    role="switch"
+                    aria-checked={!hidden}
+                    title={hidden ? `Show ${m.label} in the model select` : `Hide ${m.label} from the model select`}
+                    aria-label={`Show ${m.label} in the model select`}
+                    data-on={!hidden}
+                    onclick={() => void harnesses.toggleModel("claude", m.id, !hidden)}
+                  >
+                    <span class="switch-knob" aria-hidden="true"></span>
+                  </button>
                 </li>
               {/each}
             </ul>

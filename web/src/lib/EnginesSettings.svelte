@@ -32,6 +32,11 @@
     return [...users];
   }
 
+  /** A claude alias hidden via the Providers panel's model switch; an engine already on it keeps it. */
+  function modelHidden(id: string): boolean {
+    return engines.settings.disabledModels?.includes(`claude:${id}`) === true;
+  }
+
   /** The Providers rail's master switch; engines spawn only when their harness is on. */
   function harnessOn(harness: "pi" | "claude"): boolean {
     return engines.settings.harnesses?.[harness] !== false;
@@ -183,7 +188,7 @@
               model
               <select bind:value={e.model} aria-label={`${e.name} model`}>
                 <option value="">claude default (sonnet)</option>
-                {#each engines.claudeModels as m (m.id)}
+                {#each engines.claudeModels.filter((m) => m.id === e.model || !modelHidden(m.id)) as m (m.id)}
                   <option value={m.id}>{m.label} · {m.note}</option>
                 {/each}
                 {#if e.model && !engines.claudeModels.some((m) => m.id === e.model)}

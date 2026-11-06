@@ -35,6 +35,9 @@ export interface HarnessModel {
   note: string;
 }
 
+/** A claude alias with its picker-visibility flag (off = hidden from the engine editor's model select). */
+export type AliasRow = HarnessModel & { disabled?: boolean };
+
 export interface HarnessView {
   id: string;
   label: string;
@@ -54,7 +57,7 @@ export interface HarnessView {
   /** pi only: the LLM vendors its engines may run on, nested per backend. */
   backends: ProviderView[];
   /** claude only: the model aliases the engine editor may reference. */
-  models: HarnessModel[];
+  models: AliasRow[];
 }
 
 /** The engine fields the derivation reads (a saved engine satisfies this). */
@@ -178,7 +181,7 @@ export function deriveHarnesses(
       enabled: probe.enabled !== false,
       cooling,
       backends: probe.id === "pi" ? deriveProviders(piModels, chatModels, engines, activity, now, disabled) : [],
-      models: probe.models,
+      models: probe.models.map((m) => ({ ...m, disabled: disabled.has(`claude:${m.id}`) || undefined })),
     };
   });
 }
