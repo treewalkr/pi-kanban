@@ -567,31 +567,38 @@ describe("auto-plan", () => {
     expect(prompt).toContain("Seam (public interface — why)");
   });
 
-  test("plan template is written for a literal (flash) builder and the checklist enforces it (qjbbn)", () => {
+  test("plan template is lean and written for a literal (flash) builder; the checklist enforces both (qjbbn, lean-plans)", () => {
     const [templatePart, checklist] = PLAN_TEMPLATE.split(/^## Review checklist$/m) as [string, string];
-    expect(templatePart).toContain("Write for a literal executor");
+    expect(templatePart).toContain("Write a lean plan for a literal executor");
+    expect(templatePart).toContain("150–300 lines");
     for (const part of ["**Files**", "**Do**", "**Check**", "**Commit**"]) expect(templatePart).toContain(part);
     expect(templatePart).toContain("Step 0 is the baseline");
-    expect(templatePart).toContain("paste-ready code");
+    expect(templatePart).toContain("text only for contracts");
+    expect(templatePart).toContain("Every test is specified, not written");
     for (const field of ["**Verified at**", "**Baseline**", "**Guard tests**"]) expect(templatePart).toContain(field);
     expect(checklist).toContain("Step 0 baseline");
-    expect(checklist).toContain("leaves a decision to the builder");
+    expect(checklist).toContain("leaves a design decision to the builder");
+    expect(checklist).toContain("The plan is heavy");
     expect(checklist).toContain("its Check has no command or no expected result");
     expect(checklist).toContain("collides case-insensitively");
     expect(checklist).toContain("guard test the change would break");
   });
 
-  test("planner, plan reviewer and plan builder share the literal-executor contract (qjbbn)", () => {
+  test("planner, plan reviewer and plan builder share the lean literal-executor contract (qjbbn, lean-plans)", () => {
     const task = { id: "abc12", title: "plan me", laneId: "plan" } as never;
     const planner = plannerPrompt(task);
     expect(planner).toContain("literal executor");
     expect(planner).toContain("verified-at commit");
     expect(planner).toContain("never edit the checkout you plan in");
+    expect(planner).toContain("Do not build the change");
+    expect(planner).not.toContain("scratch checkout outside the working tree");
     expect(planner).toContain("propose the split as the default");
     expect(planReviewerPrompt(task)).toContain("executable by a literal builder");
+    expect(planReviewerPrompt(task)).toContain("Missing finished code is not a hit");
     const builder = builderPlanPrompt(task);
     expect(builder).toContain("run its Check and confirm the expected result before starting the next step");
     expect(builder).toContain("after two fix attempts");
+    expect(builder).toContain("write the bodies and tests it specifies");
   });
 
   test("planner prompt teaches the redundancy check and cites where it looked", () => {
