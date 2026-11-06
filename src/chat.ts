@@ -11,6 +11,7 @@
  * mutates the board directly.
  */
 import { resolveLineup } from "./engines";
+// harness gating lands in the loop below via db.harnessEnabled
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, type AgentSession, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { skillActivationPrompt } from "./autoreview";
 import { chatSkillPath } from "./skill-activation";
@@ -642,7 +643,7 @@ export class ChatManager {
   private async seedEngine(cardId: string, session: AgentSession): Promise<void> {
     const lineup = resolveLineup(this.db, "manager").engines;
     for (const engine of lineup) {
-      if (!engine.enabled || engine.harness !== "pi" || !engine.provider || !engine.model) continue;
+      if (!engine.enabled || !this.db.harnessEnabled(engine.harness) || engine.harness !== "pi" || !engine.provider || !engine.model) continue;
       try {
         const model = session.modelRuntime?.getModel(engine.provider, engine.model);
         if (!model) continue;

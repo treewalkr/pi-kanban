@@ -3874,6 +3874,22 @@ export class KanbanDb {
     return this.maxWorkers();
   }
 
+  /** Harness master switch (Providers rail): an engine spawns only when its harness is enabled too. Absent row = enabled. */
+  harnessEnabled(id: string): boolean {
+    const row = this.q("SELECT value FROM board_state WHERE key = ?").get(`harness_off:${id}`) as
+      | { value: string }
+      | undefined;
+    return row?.value !== "1";
+  }
+
+  setHarnessEnabled(id: string, enabled: boolean): void {
+    if (enabled) this.q("DELETE FROM board_state WHERE key = ?").run(`harness_off:${id}`);
+    else
+      this.q("INSERT INTO board_state (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = '1'").run(
+        `harness_off:${id}`,
+      );
+  }
+
   /** Days a card sits in Done before the sweep archives it; absent or corrupt row falls back to 7. 0 disables the sweep. */
   autoArchiveDays(): number {
     const row = this.q("SELECT value FROM board_state WHERE key = 'auto_archive_days'").get() as

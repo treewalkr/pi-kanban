@@ -47,12 +47,13 @@
   function headline(h: HarnessView): string {
     if (h.status === "missing") return "not found · CLI not detected";
     if (h.status === "cooling") return "cooling · quota";
+    if (!h.enabled) return "off · engines paused";
     if (h.id === "pi") return `ready · ${h.backends.length} backend${h.backends.length === 1 ? "" : "s"}`;
     return "ready · ambient auth";
   }
 
   function toggleLabel(h: HarnessView, on: boolean): string {
-    return `${on ? "Disable" : "Enable"} every engine on ${h.label}`;
+    return on ? `Disable ${h.label} — no engine on it can spawn` : `Enable ${h.label}`;
   }
 </script>
 
@@ -85,7 +86,7 @@
     <nav class="provider-rail" aria-label="harness providers">
       {#each harnesses.list as h (h.id)}
         {@const Logo = LOGOS[h.id]}
-        {@const on = harnesses.allEnabled(h.id)}
+        {@const on = h.enabled}
         <div class="provider-row" data-harness={h.id} data-selected={h.id === harnesses.selected ? "true" : undefined}>
           <button
             type="button"
@@ -109,8 +110,8 @@
             class="switch"
             role="switch"
             aria-checked={on}
-            disabled={h.allEngines.length === 0 || harnesses.toggling !== null}
-            title={h.allEngines.length === 0 ? "no engines on this harness" : toggleLabel(h, on)}
+            disabled={harnesses.toggling !== null}
+            title={toggleLabel(h, on)}
             aria-label={toggleLabel(h, on)}
             data-on={on}
             onclick={() => void harnesses.toggle(h.id, !on)}
@@ -142,6 +143,9 @@
             <span class="provider-status-word" data-status={view.status}>{STATUS[view.status]}</span>
             <span class="provider-status-detail">{view.detail}</span>
           </div>
+          {#if !view.enabled}
+            <p class="provider-note" role="status">Harness off — none of its engines can spawn; engine rows keep their own enabled state and return as they were when it comes back on.</p>
+          {/if}
           {#if view.id === "claude" && view.status === "ready"}
             <p class="provider-note">Auth is ambient — the CLI's own login or <code>ANTHROPIC_API_KEY</code>.</p>
           {/if}

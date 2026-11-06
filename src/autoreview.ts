@@ -6,7 +6,7 @@ import { stampSessionLog } from "./session-log";
 import { MAX_SKILL_CHARS, skillActivationPrompt } from "./skill-activation";
 import { BUILDER_AUTHOR, KanbanDb, PLAN_REVIEWER_AUTHOR, defaultLaneContext, epicPlanContext, epicPlanContextFor, PLAN_SECTIONS, PLAN_TEMPLATE, type AgentConfig, type AgentRole, type AgentThinking, type BuiltinAgentRole, type LaneActor, type LaneCapRule, type LaneContext, type Engine, type LeaseOwner, type Task } from "./db";
 import { claudeFlags, isClaudeSessionId, spawnClaude } from "./claude";
-import { DEFAULT_ENGINE_ID, effectiveThinking, engineLabel, resolveLineup } from "./engines";
+import { DEFAULT_ENGINE_ID, effectiveThinking, engineLabel, engineRunnable, resolveLineup } from "./engines";
 import {
   classifySpawnFailure,
   DEFAULT_COOLDOWN_MS,
@@ -1257,7 +1257,7 @@ export function startAutoReview(opts: AutoReviewOptions): { stop(): void } {
         break;
       }
 
-      const lineup = resolveLineup(db, job.role, task.project).engines.filter((e) => e.enabled);
+      const lineup = resolveLineup(db, job.role, task.project).engines.filter((e) => engineRunnable(db, e));
       const allCooling = lineup.length > 0 && lineup.every((e) => health.isCooling(e));
       const anyHealthy = lineup.length > 0 && !allCooling;
 

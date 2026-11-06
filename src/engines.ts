@@ -33,6 +33,11 @@ export function defaultEngine(db: KanbanDb): Engine {
   return (id && db.engine(id)) || builtinDefaultEngine();
 }
 
+/** Two-level gate: an engine spawns only when the engine row and its harness switch are both on. */
+export function engineRunnable(db: KanbanDb, engine: Engine): boolean {
+  return engine.enabled && db.harnessEnabled(engine.harness);
+}
+
 /** Look an engine up by id or (case-insensitive) name — the CLI and env pin accept either. */
 export function findEngine(db: KanbanDb, ref: string): Engine | null {
   const r = ref.trim();
@@ -138,6 +143,7 @@ export function explain(db: KanbanDb, actor: AgentRole, project?: string, view?:
     const until = view?.coolingUntil(engine) ?? null;
     const busy = view?.busy(engine) ?? 0;
     if (!engine.enabled) step = { engine, status: "disabled", detail: "disabled" };
+    else if (!db.harnessEnabled(engine.harness)) step = { engine, status: "disabled", detail: "harness off — Providers" };
     else if (until !== null && until > now) {
       step = { engine, status: "cooling", detail: `cooling ${Math.max(1, Math.round((until - now) / 60_000))} min (${accountKey(engine)})` };
     } else if (busy >= engine.seats) step = { engine, status: "full", detail: `${busy}/${engine.seats} seats busy` };
