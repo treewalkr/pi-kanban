@@ -1172,6 +1172,10 @@ describe("auto-review", () => {
     expect(args).toContain("--add-dir");
     expect(args[args.indexOf("--append-system-prompt") + 1]).toContain('<skill name="demo"');
     expect(args[args.indexOf("--allowedTools") + 1]).toBe(CLAUDE_READ_TOOLS.join(","));
+    // readers revise the artifacts they write ({tmpFile}) — the charter self-check
+    // step dies in dontAsk denials without Edit/MultiEdit alongside Write
+    expect(CLAUDE_READ_TOOLS).toContain("Edit");
+    expect(CLAUDE_READ_TOOLS).toContain("MultiEdit");
     expect(args).not.toContain("--effort"); // unset effort = claude's own default
     expect(args).not.toContain("--no-mcp"); // a pi flag never reaches claude
     expect(args).not.toContain("-edit");
