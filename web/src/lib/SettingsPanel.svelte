@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { Bot, Columns3, FolderGit2, Layers, Settings2, X } from "@lucide/svelte";
+  import { Bot, Columns3, FolderGit2, Layers, PlugZap, Settings2, X } from "@lucide/svelte";
   import { agents, type SettingsSection } from "./agents.svelte";
   import { engines } from "./engines.svelte";
   import { projects } from "./projects.svelte";
+  import { providers } from "./providers.svelte";
   import GeneralSettings from "./GeneralSettings.svelte";
   import AgentsSettings from "./AgentsSettings.svelte";
+  import ProvidersSettings from "./ProvidersSettings.svelte";
   import EnginesSettings from "./EnginesSettings.svelte";
   import ProjectsSettings from "./ProjectsSettings.svelte";
   import LanesSettings from "./LanesSettings.svelte";
@@ -15,6 +17,7 @@
   const TABS: Array<{ id: Section; label: string; icon: typeof Settings2 }> = [
     { id: "general", label: "General", icon: Settings2 },
     { id: "agents", label: "Agents", icon: Bot },
+    { id: "providers", label: "Providers", icon: PlugZap },
     { id: "engines", label: "Engines", icon: Layers },
     { id: "projects", label: "Projects", icon: FolderGit2 },
     { id: "lanes", label: "Lanes", icon: Columns3 },
@@ -42,6 +45,7 @@
   // sections lazy-load their store on first view, including the section it opens on
   $effect(() => {
     if (section === "agents" && !agents.loaded) void agents.load();
+    if (section === "providers" && !providers.loaded) void providers.load();
     if (section === "engines" && !engines.loaded) void engines.load();
     // the Engines tab shows each engine's users, so it needs the agent configs too
     if (section === "engines" && !agents.loaded) void agents.load();
@@ -167,6 +171,18 @@
             <p class="settings-loading" class:err={agents.loadFailed}>
               {agents.loadFailed ? "could not load agent settings" : "loading agent settings…"}
               <button type="button" onclick={() => void agents.load()}>{agents.loadFailed ? "retry" : "reload"}</button>
+            </p>
+          {/if}
+        </div>
+      {/if}
+      {#if visited.has("providers")}
+        <div class="settings-section-host" id="settings-panel-providers" role="tabpanel" aria-labelledby="settings-tab-providers" hidden={section !== "providers"}>
+          {#if providers.loaded}
+            <ProvidersSettings />
+          {:else}
+            <p class="settings-loading" class:err={providers.loadFailed}>
+              {providers.loadFailed ? "could not read the model catalogs" : "reading model catalogs…"}
+              <button type="button" onclick={() => void providers.load()}>{providers.loadFailed ? "retry" : "reload"}</button>
             </p>
           {/if}
         </div>

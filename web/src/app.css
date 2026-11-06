@@ -23,6 +23,7 @@
   --error: #f87171;
   --error-border: color-mix(in srgb, #f87171 35%, var(--border));
   --warn: #d29922; /* stale-serve chip — same amber as the CLI's ⚠ lines */
+  --ok: #3fb950; /* signed-in green: providers rail + anything healthy */
   /* lane accents: pi-web theme accents, pastel on dark */
   --lane-0: #a4a4a4;
   --lane-1: #a4c2f4;
@@ -52,6 +53,7 @@
   --error: #dc2626;
   --error-border: color-mix(in srgb, #dc2626 35%, var(--border));
   --warn: #9a6700;
+  --ok: #1a7f37;
   /* lane accents: pi-web light-theme accents, deeper for white surfaces */
   --lane-0: #6e7480;
   --lane-1: #245bce;
@@ -2845,11 +2847,11 @@ body.drag-live {
 .settings-tab {
   position: relative;
   display: flex;
-  flex: 0 0 96px;
+  flex: 0 0 88px;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  width: 96px;
+  width: 88px;
   height: 100%;
   padding: 0 2px;
   border: 0;
@@ -2884,12 +2886,12 @@ body.drag-live {
   transition: opacity 0.15s ease, transform 0.15s ease;
 }
 
-.settings-tab[aria-current="page"] {
+.settings-tab[aria-selected="true"] {
   color: var(--text);
   font-weight: 600;
 }
 
-.settings-tab[aria-current="page"]::after {
+.settings-tab[aria-selected="true"]::after {
   opacity: 1;
   transform: translateX(-50%) scaleX(1);
 }
@@ -2898,7 +2900,7 @@ body.drag-live {
   color: var(--text);
 }
 
-.settings-tab:focus-visible:not([aria-current="page"]) {
+.settings-tab:focus-visible:not([aria-selected="true"]) {
   border-radius: 4px;
   background: var(--bg-hover);
   color: var(--text);

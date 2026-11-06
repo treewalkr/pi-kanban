@@ -55,6 +55,16 @@ _Avoid_: board scope, manager handle, project chat, scoped session.
 The modal that browses directories under `$HOME` (`GET /fs/dirs`, `POST /fs/mkdir`) and registers the chosen folder as a **Project** with a **Project route**; opened from the **Project picker**'s `add project…` row, distinct from the settings Projects tab's inline browser.
 _Avoid_: folder browser, path chooser, add-project dialog
 
+**Providers pane**:
+The Settings → Providers tab (`ProvidersSettings.svelte`): a read-only two-pane
+browser of every provider the board can see — left rail of providers with
+status dots, right detail with that provider's model catalog and the **Engines**
+that run on it. Status is **signed in** (the chat runtime has it authed), **not
+signed in** (only pi's CLI catalog knows it), or **cooling** (a live `pi:<provider>`
+account is in **Cooldown**). Auth belongs to pi and model choice to engines, so
+nothing here writes.
+_Avoid_: Models tab, provider settings, model config, auth page
+
 **Thread**:
 The chronological conversation on a card where humans and agents record questions, handoffs, reviews, and gate verdicts.
 _Avoid_: Activity log, comment feed, discussion, chat history
