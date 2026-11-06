@@ -296,7 +296,8 @@ export class HarnessStore {
       const list = deriveHarnesses(
         h.data.harnesses,
         pi.error ? [] : pi.data.models,
-        chat.error ? [] : chat.data.models,
+        // the chat menu's Claude Code rows are not pi backends
+        chat.error ? [] : chat.data.models.filter((m) => m.harness !== "claude"),
         eng.error ? [] : eng.data.engines,
         act.error ? [] : act.data.engines,
         Date.now(),

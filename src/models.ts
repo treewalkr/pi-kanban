@@ -7,6 +7,8 @@ export interface CatalogModel {
   maxOut: string;
   thinking: boolean;
   images: boolean;
+  /** Set on rows a non-pi harness runs (the chat menu's Claude Code group); absent = pi. */
+  harness?: "claude";
 }
 
 /**
