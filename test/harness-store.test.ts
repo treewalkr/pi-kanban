@@ -19,10 +19,22 @@ type Probe = {
 
 const probes: Probe[] = [
   { id: "pi", label: "pi agent", status: "ready", detail: "runtime", models: [] },
-  { id: "claude", label: "Claude Code", status: "ready", detail: "2.1.318", models: [] },
+  {
+    id: "claude",
+    label: "Claude Code",
+    status: "ready",
+    detail: "2.1.318",
+    models: [
+      { id: "sonnet", label: "sonnet", note: "balanced" },
+      { id: "opus", label: "opus", note: "deep" },
+    ],
+  },
 ];
 
 let putCalls: Array<{ id: string; enabled: boolean }> = [];
+let modelPuts: Array<{ provider: string; id: string; disabled: boolean }> = [];
+let modelPutError = false;
+let disabledModels: string[] = [];
 let putError = false;
 /** One entry per /harnesses GET: "gate" parks the round on a hand-released promise. */
 let getModes: Array<"gate" | "now"> = [];
@@ -57,9 +69,20 @@ const api = {
       },
     },
   ),
+  models: {
+    disabled: {
+      put: async ({ provider, id, disabled }: { provider: string; id: string; disabled: boolean }) => {
+        modelPuts.push({ provider, id, disabled });
+        if (modelPutError) return { error: { message: "boom" } };
+        const key = `${provider}:${id}`;
+        disabledModels = disabled ? [...disabledModels, key] : disabledModels.filter((k) => k !== key);
+        return { data: { disabledModels }, error: null };
+      },
+    },
+  },
   "pi-models": { get: ok({ models: [] }) },
   "chat-models": { get: ok({ models: [] }) },
-  engines: { get: ok({ engines: [], settings: { maxWorkers: 12, defaultEngine: null, disabledModels: [] } }) },
+  engines: { get: () => Promise.resolve({ data: { engines: [], settings: { maxWorkers: 12, defaultEngine: null, disabledModels: [...disabledModels] } }, error: null }) },
   activity: { get: ok({ engines: [] }) },
 };
 
@@ -79,11 +102,19 @@ function switchState(store: InstanceType<typeof HarnessStore>): boolean | undefi
 describe("HarnessStore.toggle", () => {
   beforeEach(() => {
     putCalls = [];
+    modelPuts = [];
+    modelPutError = false;
+    disabledModels = [];
     putError = false;
     getModes = [];
     gates = [];
     probes[1].enabled = undefined;
   });
+
+  /** The claude view's alias row, straight from the store's list. */
+  function aliasRow(store: InstanceType<typeof HarnessStore>, id: string) {
+    return store.list.find((h) => h.id === "claude")!.models.find((m) => m.id === id)!;
+  }
 
   it("flips optimistically and a stale pre-write round never overwrites it", async () => {
     const store = new HarnessStore();
@@ -105,6 +136,38 @@ describe("HarnessStore.toggle", () => {
     releaseGate(); // round B answers with pre-write state — after the forced round
     await slowRound;
     expect(switchState(store)).toBe(false); // the guard must discard it
+  });
+
+  it("flips a claude alias row in realtime; a stale pre-write round never overwrites it", async () => {
+    const store = new HarnessStore();
+    getModes = ["now"];
+    await store.load();
+    expect(aliasRow(store, "opus").disabled).toBeUndefined();
+
+    getModes = ["gate"]; // a refresh is already in flight when the switch is clicked
+    const slowRound = store.refresh();
+
+    const flip = store.toggleModel("claude", "opus", true);
+    expect(aliasRow(store, "opus").disabled).toBe(true); // realtime, before any network answer
+
+    await flip;
+    expect(modelPuts).toEqual([{ provider: "claude", id: "opus", disabled: true }]);
+    expect(aliasRow(store, "opus").disabled).toBe(true); // the confirm round keeps it
+
+    releaseGate(); // the pre-write round answers after — the guard must discard it
+    await slowRound;
+    expect(aliasRow(store, "opus").disabled).toBe(true);
+  });
+
+  it("reverts a failed model write", async () => {
+    const store = new HarnessStore();
+    modelPutError = true;
+    getModes = ["now", "now"];
+    await store.load();
+    await store.toggleModel("claude", "sonnet", true);
+    expect(aliasRow(store, "sonnet").disabled).toBeUndefined();
+    expect(store.modelToggleFailed).toBe(true);
+    expect(modelPuts).toHaveLength(1);
   });
 
   it("reverts the flip when the write fails and raises the banner flag", async () => {

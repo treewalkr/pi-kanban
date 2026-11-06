@@ -327,25 +327,39 @@ export class HarnessStore {
 
   /** The last per-model switch write failed — the banner points at retry/refresh. */
   modelToggleFailed = $state(false);
+  /** `provider:id` of a per-model switch write in flight; double-clicks are ignored. */
+  modelToggling = $state<string | null>(null);
 
   /**
    * A per-model picker switch (t3code's "Show X in the model picker"): flips
    * optimistically in the list, PUTs the key, and re-reads truth on failure.
    */
   async toggleModel(provider: string, id: string, disabled: boolean): Promise<void> {
-    const mark = (views: HarnessView[]): void => {
+    const key = `${provider}:${id}`;
+    if (this.modelToggling !== null) return;
+    this.modelToggling = key;
+    /** Flip the row everywhere it renders — claude aliases on the harness, pi rows on its backends. */
+    const mark = (views: HarnessView[], value: boolean): void => {
+      for (const m of views.find((v) => v.id === provider)?.models ?? [])
+        if (m.id === id) m.disabled = value || undefined;
       for (const b of views.find((v) => v.id === "pi")?.backends ?? [])
-        for (const m of b.models) if (m.provider === provider && m.id === id) m.disabled = disabled || undefined;
+        for (const m of b.models) if (m.provider === provider && m.id === id) m.disabled = value || undefined;
     };
-    mark(this.list);
-    const { error } = await api.models.disabled.put({ provider, id, disabled });
-    if (error) {
-      this.modelToggleFailed = true;
-      await this.refresh();
-      return;
+    mark(this.list, disabled);
+    try {
+      const { error } = await api.models.disabled.put({ provider, id, disabled });
+      if (error) {
+        this.modelToggleFailed = true;
+        mark(this.list, !disabled); // the write failed — undo the flip
+        await this.refresh(true);
+        return;
+      }
+      this.modelToggleFailed = false;
+      await this.refresh(true); // confirm read; the gen guard keeps a stale pre-write round from answering instead
+      engines.invalidate(); // the Engines tab's settings copy carries the list
+    } finally {
+      this.modelToggling = null;
     }
-    this.modelToggleFailed = false;
-    engines.invalidate(); // the Engines tab's settings copy carries the list
   }
 
   /**
