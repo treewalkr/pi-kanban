@@ -82,6 +82,17 @@ describe("deriveHarnesses", () => {
     expect(views[1].engines).toEqual(["claude sonnet"]);
   });
 
+  it("allEngines keeps disabled ones out of the chips but in the toggle's reach", () => {
+    const engines = [engine("default", "pi"), engine("zai main", "pi", "zai"), engine("claude sonnet", "claude")];
+    engines[1] = { ...engines[1], enabled: false };
+    const views = deriveHarnesses(PROBES, PI, CHAT, engines, [], NOW);
+    expect(views[0].engines).toEqual(["default"]);
+    expect(views[0].allEngines).toEqual([
+      { name: "default", enabled: true },
+      { name: "zai main", enabled: false },
+    ]);
+  });
+
   it("pi nests the LLM vendors as backends; claude carries aliases instead", () => {
     const views = deriveHarnesses(PROBES, PI, CHAT, [], [], NOW);
     expect(views[0].backends.map((b) => b.id)).toEqual(["zai", "deepseek", "antigravity"]);

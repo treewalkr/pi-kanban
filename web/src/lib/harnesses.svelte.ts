@@ -41,6 +41,8 @@ export interface HarnessView {
   version: string | null;
   /** Enabled engines that run on this harness. */
   engines: string[];
+  /** Every engine on this harness, enabled or not — the toggle flips them all. */
+  allEngines: { name: string; enabled: boolean }[];
   /** Live cooldowns on this harness's accounts (`<harness>:<account>`). */
   cooling: Array<{ account: string; until: number; cause?: string }>;
   /** pi only: the LLM vendors its engines may run on, nested per backend. */
@@ -149,6 +151,7 @@ export function deriveHarnesses(
 ): HarnessView[] {
   return probes.map((probe) => {
     const own = engines.filter((e) => e.enabled && e.harness === probe.id);
+    const all = engines.filter((e) => e.harness === probe.id);
     const prefix = `${probe.id}:`;
     const cooling = activity
       .filter((a) => a.account.startsWith(prefix) && a.coolingUntil !== undefined && now < a.coolingUntil)
@@ -161,6 +164,7 @@ export function deriveHarnesses(
       detail: probe.detail,
       version: versionLabel(probe.detail),
       engines: own.map((e) => e.name),
+      allEngines: all.map((e) => ({ name: e.name, enabled: e.enabled })),
       cooling,
       backends: probe.id === "pi" ? deriveProviders(piModels, chatModels, engines, activity, now) : [],
       models: probe.models,
@@ -231,6 +235,10 @@ class HarnessStore {
   checkedAt = $state<number | null>(null);
   selected = $state<string | null>(null);
   filter = $state("");
+  /** Harness id with a bulk toggle in flight (switch shows it, double-clickes are ignored). */
+  toggling = $state<string | null>(null);
+  /** Harness id whose last toggle failed, cleared by the next success or refresh. */
+  toggleFailed = $state<string | null>(null);
 
   private inFlight: Promise<void> | null = null;
 
@@ -286,6 +294,49 @@ class HarnessStore {
     if (id === this.selected) return;
     this.selected = id;
     this.filter = ""; // another harness's filter must not hide this catalog
+  }
+
+  /** True when every engine on the harness is enabled — the switch's ON state. */
+  allEnabled(id: string): boolean {
+    const h = this.list.find((x) => x.id === id);
+    return !!h && h.allEngines.length > 0 && h.allEngines.every((e) => e.enabled);
+  }
+
+  /**
+   * Enable/disable every engine on a harness — the same power the Engines tab
+   * grants one engine at a time, reached from the harness row. The PUT is a full
+   * replace, so each engine travels with its whole shape and only `enabled` flips.
+   */
+  async toggle(id: string, enabled: boolean): Promise<void> {
+    if (this.toggling !== null) return;
+    const fresh = await api.engines.get();
+    if (fresh.error) {
+      this.toggleFailed = id;
+      return;
+    }
+    const targets = fresh.data.engines.filter((e) => e.harness === id);
+    if (targets.length === 0) return; // nothing to flip — the switch renders disabled
+    this.toggling = id;
+    try {
+      let ok = true;
+      for (const e of targets) {
+        const { error } = await api.engines({ id: e.id }).put({
+          name: e.name,
+          harness: e.harness,
+          ...(e.harness === "pi" && e.provider ? { provider: e.provider } : {}),
+          ...(e.model ? { model: e.model } : {}),
+          ...(e.thinking ? { thinking: e.thinking } : {}),
+          flags: e.flags,
+          seats: e.seats,
+          enabled,
+        });
+        if (error) ok = false;
+      }
+      this.toggleFailed = ok ? null : id;
+      await this.refresh();
+    } finally {
+      this.toggling = null;
+    }
   }
 }
 

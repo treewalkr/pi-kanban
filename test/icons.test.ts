@@ -22,13 +22,15 @@ function walkSvelteFiles(dir: string): string[] {
   return files;
 }
 
-test("only the brand mark hand-draws svg markup", () => {
+test("only brand marks hand-draw svg markup", () => {
+  // Mark.svelte is kanban's own mark; the provider logos are third-party brand
+  // marks (pi, Anthropic) with no lucide equivalent — everything else uses lucide
   const filesWithSvg = walkSvelteFiles(webSrc)
     .filter((file) => /<svg[\s>]/.test(readFileSync(file, "utf-8")))
     .map((file) => relative(webSrc, file))
     .sort();
 
-  expect(filesWithSvg).toEqual(["lib/Mark.svelte"]);
+  expect(filesWithSvg).toEqual(["lib/ClaudeLogo.svelte", "lib/Mark.svelte", "lib/PiLogo.svelte"]);
 });
 
 test("settings tabs and sidebar foot use the lucide section icons", () => {
